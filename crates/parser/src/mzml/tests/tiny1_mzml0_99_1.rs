@@ -6,7 +6,7 @@ use helpers::utilities::{
     CvRefMode, assert_cv, assert_cv_f64, assert_software, mzml, spectrum_by_id,
     spectrum_description, spectrum_precursor_list, spectrum_scan_list,
 };
-use octo::utilities::mzml::MzML;
+use ionic::utilities::mzml::MzML;
 
 const PATH: &str = "data/mzml/tiny1.mzML0.99.1.mzML";
 const CV_REF_MODE: CvRefMode = CvRefMode::AllowMissingMs;

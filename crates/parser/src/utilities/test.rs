@@ -2,7 +2,7 @@ use core::str::FromStr;
 use std::{fs, path::PathBuf, sync::OnceLock};
 
 use crate::{
-    b64::decoder::decode,
+    ion::decoder::decode,
     mzml::{
         parse_mzml::parse_mzml,
         structs::{

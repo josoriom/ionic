@@ -1,4 +1,4 @@
-CARGO_BIN         := octo
+CARGO_BIN         := ionic
 CLI_MANIFEST      := Cargo.toml
 ARTIFACTS         := artifacts
 

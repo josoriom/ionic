@@ -53,7 +53,7 @@ pub(crate) fn parse_bda<R: BufRead>(
         data_processing_ref: attr(start, b"dataProcessingRef"),
         ..Default::default()
     };
-    let mut raw_b64: Vec<u8> = Vec::new();
+    let mut raw_ion: Vec<u8> = Vec::new();
 
     ws.for_each_child(start, |ws, event| {
         let (tag, element, _) = event.into_parts();
@@ -72,10 +72,10 @@ pub(crate) fn parse_bda<R: BufRead>(
             }
             TagId::Binary => {
                 if let Some(len) = bda.encoded_length {
-                    raw_b64.reserve(len);
+                    raw_ion.reserve(len);
                 }
                 let closing = element.name().as_ref().to_vec();
-                read_base64_binary(ws, &closing, &mut raw_b64)?;
+                read_base64_binary(ws, &closing, &mut raw_ion)?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -85,9 +85,9 @@ pub(crate) fn parse_bda<R: BufRead>(
     let encoding = encoding_for_array(&bda);
     bda.numeric_type = Some(encoding.numeric_type);
 
-    if !raw_b64.is_empty() {
-        let mut decoded = Vec::with_capacity(raw_b64.len() * 3 / 4 + 8);
-        STANDARD.decode_vec(&raw_b64, &mut decoded)?;
+    if !raw_ion.is_empty() {
+        let mut decoded = Vec::with_capacity(raw_ion.len() * 3 / 4 + 8);
+        STANDARD.decode_vec(&raw_ion, &mut decoded)?;
         if encoding.is_zlib_compressed {
             decoded = decompress_to_vec_zlib(&decoded)
                 .map_err(|e| ParseError::Decompress(format!("{e:?}")))?;

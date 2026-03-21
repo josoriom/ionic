@@ -3,16 +3,16 @@
 This CLI has **two subcommands**:
 
 - `convert` — batch convert folders (recursive)
-- `cat` — print JSON metadata for a single file (`.mzML`, `.b64`, or `.b32`)
+- `cat` — print JSON metadata for a single file (`.mzML`, `.ion`, or `.b32`)
 
 Examples below use:
 
 - `tiny.msdata.mzML0.99.9.mzML`
-- `tiny.msdata.mzML0.99.9.b64`
+- `tiny.msdata.mzML0.99.9.ion`
 
 ---
 
-## 1) `octo cat`
+## 1) `ionic cat`
 
 Prints JSON to stdout for a **single file**.
 
@@ -20,17 +20,17 @@ Prints JSON to stdout for a **single file**.
 
 - `--file-path <PATH>`
   - Path to the file you want to inspect.
-  - Supported file types: `.b64`, `.b32`.
+  - Supported file types: `.ion`, `.b32`.
 
 ### Example:
 
 ```bash
-octo cat --file-path crates/parser/data/b64/tiny.msdata.mzML0.99.9.b64
+ionic cat --file-path crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 ```
 
 ---
 
-## 2) `octo convert`
+## 2) `ionic convert`
 
 Batch converts files under a folder **recursively**, preserving the relative folder structure under `--output-path`.
 
@@ -44,7 +44,7 @@ Batch converts files under a folder **recursively**, preserving the relative fol
 
 - `--level <0..22>`
   - Default: `12`
-  - Compression level (only relevant for mzML → b64/b32)
+  - Compression level (only relevant for mzML → ion/b32)
 
 - `--overwrite`
   - If set, overwrites output files even if they already exist.
@@ -56,18 +56,18 @@ Batch converts files under a folder **recursively**, preserving the relative fol
 
 ### Conversion mode (optional)
 
-If you don’t pass any mode flag, the default is `--mzml-to-b64`.
+If you don’t pass any mode flag, the default is `--mzml-to-ion`.
 
-- `--mzml-to-b64`
-  - Converts `.mzML` → `.b64`
+- `--mzml-to-ion`
+  - Converts `.mzML` → `.ion`
   - Uses `encode(mzml, level, f32_compress=false)`
 
 - `--mzml-to-b32`
   - Converts `.mzML` → `.b32`
   - Uses `encode(mzml, level, f32_compress=true)`
 
-- `--b64-to-mzml`
-  - Converts `.b64` and `.b32` → `.mzML`
+- `--ion-to-mzml`
+  - Converts `.ion` and `.b32` → `.mzML`
   - Uses `decode(...)` into `MzML`, then `bin_to_mzml(&mzml)` to produce mzML XML
 
 ### Filtering flags (optional)
@@ -85,7 +85,7 @@ You may pass **at most one** of the following:
 
 ---
 
-### 2.1) Convert `.mzML` → `.b64/.b32`
+### 2.1) Convert `.mzML` → `.ion/.b32`
 
 Defaults:
 
@@ -94,29 +94,29 @@ Defaults:
 Run (defaults):
 
 ```bash
-octo convert -i crates/parser/data/mzml -o crates/parser/data/b64
+ionic convert -i crates/parser/data/mzml -o crates/parser/data/ion
 ```
 
 or
 
 ```bash
-octo convert --mzml-to-b64 --input-path crates/parser/data/mzml --output-path crates/parser/data/b64
+ionic convert --mzml-to-ion --input-path crates/parser/data/mzml --output-path crates/parser/data/ion
 ```
 
 Custom compression level:
 
 ```bash
-octo convert --mzml-to-b64 --input-path crates/parser/data/mzml --output-path crates/parser/data/b64 --level 12
+ionic convert --mzml-to-ion --input-path crates/parser/data/mzml --output-path crates/parser/data/ion --level 12
 ```
 
 ---
 
-### 2.2) Convert `.b64/.b32` → `.mzML`
+### 2.2) Convert `.ion/.b32` → `.mzML`
 
 ### Example:
 
 ```bash
-octo convert --b64-to-mzml --input-path crates/parser/data/b64 --output-path crates/parser/data/mzml_out
+ionic convert --ion-to-mzml --input-path crates/parser/data/ion --output-path crates/parser/data/mzml_out
 ```
 
 (If the input tree contains `.b32` too, it is also converted by this mode.)
