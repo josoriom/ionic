@@ -21,7 +21,7 @@ fn check_header() {
     assert_eq!(header.spectrum_count, 2);
     assert_eq!(header.chrom_count, 2);
 
-    assert_eq!(header.spec_meta_count, 69);
+    assert_eq!(header.spec_meta_count, 71);
     assert_eq!(header.spec_meta_num_count, 34);
     assert_eq!(header.spec_meta_str_count, 3);
 
@@ -108,10 +108,10 @@ fn check_header() {
     );
     assert!(
         header
-            .off_global_meta
-            .checked_add(header.len_global_meta)
+            .off_container_chrom
+            .checked_add(header.len_container_chrom)
             .unwrap_or(u64::MAX)
-            <= header.off_container_spect
+            <= header.off_spec_entries
     );
     assert!(
         header
