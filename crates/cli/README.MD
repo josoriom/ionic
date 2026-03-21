@@ -1,4 +1,4 @@
-# Install `octo`
+# Install `ionic`
 
 ## 0) Choose install directory
 
@@ -16,36 +16,36 @@ mkdir -p "$INSTALL_DIR"
 ### macOS — arm64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/octo/main/crates/cli/artifacts/macos-arm64/octo" -o "$INSTALL_DIR/octo"
-chmod +x "$INSTALL_DIR/octo"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/crates/cli/artifacts/macos-arm64/ionic" -o "$INSTALL_DIR/ionic"
+chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ### macOS — x86_64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/octo/main/crates/cli/artifacts/macos-x86_64/octo" -o "$INSTALL_DIR/octo"
-chmod +x "$INSTALL_DIR/octo"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/crates/cli/artifacts/macos-x86_64/ionic" -o "$INSTALL_DIR/ionic"
+chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ### Linux — x86_64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/octo/main/crates/cli/artifacts/linux-x86_64/octo" -o "$INSTALL_DIR/octo"
-chmod +x "$INSTALL_DIR/octo"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/crates/cli/artifacts/linux-x86_64/ionic" -o "$INSTALL_DIR/ionic"
+chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ### Linux — arm64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/octo/main/crates/cli/artifacts/linux-arm64/octo" -o "$INSTALL_DIR/octo"
-chmod +x "$INSTALL_DIR/octo"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/crates/cli/artifacts/linux-arm64/ionic" -o "$INSTALL_DIR/ionic"
+chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ---
 
 ## 2) Add `INSTALL_DIR` to `PATH` (shell environment)
 
-This appends an `export PATH=...` line to your shell, so your `PATH` environment variable includes `INSTALL_DIR` and `octo` is runnable from any directory.
+This appends an `export PATH=...` line to your shell, so your `PATH` environment variable includes `INSTALL_DIR` and `ionic` is runnable from any directory.
 `source` reloads the shell file in the current terminal session (otherwise open a new terminal).
 
 ### macOS (zsh)
@@ -67,7 +67,7 @@ source "$HOME/.bashrc"
 ## 3) Test
 
 ```bash
-octo --help
+ionic --help
 ```
 
 ## 4) [DOCS](./src/README.MD)

@@ -18,8 +18,8 @@ use mimalloc::MiMalloc;
 use regex::Regex;
 use serde::Serialize;
 
-use octo::{
-    b64::{decoder::decode, encoder::encode::encode, FileEncoderOutput}, mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*}
+use ionic::{
+    ion::{decoder::decode, encoder::encode::encode, FileEncoderOutput}, mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*}
 };
 
 #[global_allocator]
@@ -35,23 +35,23 @@ const ANSI_RED: &str = "\x1b[1;31m";
 const ANSI_BLUE: &str = "\x1b[1;34m";
 
 const AFTER_HELP: &str = "
-\x1b[1;33mQUICK REFERENCE\x1b[0m (full flags are in `octo convert --help` / `octo cat --help`)
+\x1b[1;33mQUICK REFERENCE\x1b[0m (full flags are in `ionic convert --help` / `ionic cat --help`)
 
 \x1b[1;32mUSAGE:\x1b[0m
-  \x1b[96mocto convert\x1b[0m [--mzml-to-b64 | --mzml-to-b32 | --b64-to-mzml]
+  \x1b[96mionic convert\x1b[0m [--mzml-to-ion | --mzml-to-b32 | --ion-to-mzml]
                -i, --input-path DIR
                -o, --output-path DIR
 
-  \x1b[96mocto cat\x1b[0m PATH
+  \x1b[96mionic cat\x1b[0m PATH
 
 \x1b[1;32mOPTIONS:\x1b[0m
   \x1b[96m-h\x1b[0m, \x1b[96m--help\x1b[0m
   \x1b[96m-v\x1b[0m, \x1b[96m--version\x1b[0m
 
 \x1b[1;32mEXAMPLES:\x1b[0m
-  \x1b[96mocto convert\x1b[0m -i crates/parser/data/mzml -o crates/parser/data/b64
-  \x1b[96mocto convert\x1b[0m --b64-to-mzml -i crates/parser/data/b64 -o crates/parser/data/mzml_out
-  \x1b[96mocto cat\x1b[0m crates/parser/data/b64/tiny.msdata.mzML0.99.9.b64
+  \x1b[96mionic convert\x1b[0m -i crates/parser/data/mzml -o crates/parser/data/ion
+  \x1b[96mionic convert\x1b[0m --ion-to-mzml -i crates/parser/data/ion -o crates/parser/data/mzml_out
+  \x1b[96mionic cat\x1b[0m crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 ";
 
 fn cli_styles() -> Styles {
@@ -60,7 +60,7 @@ fn cli_styles() -> Styles {
 
 #[derive(Parser)]
 #[command(
-    name = "octo",
+    name = "ionic",
     version = VERSION,
     arg_required_else_help = true,
     disable_help_subcommand = true,
@@ -84,7 +84,7 @@ enum Cmd {
 #[command(
     group(
         ArgGroup::new("convert_mode")
-            .args(["mzml_to_b64", "mzml_to_b32", "b64_to_mzml"])
+            .args(["mzml_to_ion", "mzml_to_b32", "ion_to_mzml"])
             .multiple(false)
     ),
     group(
@@ -132,14 +132,14 @@ struct ConvertArgs {
 
 #[derive(Args)]
 struct ConvertWhich {
-    #[arg(long = "mzml-to-b64")]
-    mzml_to_b64: bool,
+    #[arg(long = "mzml-to-ion")]
+    mzml_to_ion: bool,
 
     #[arg(long = "mzml-to-b32")]
     mzml_to_b32: bool,
 
-    #[arg(long = "b64-to-mzml")]
-    b64_to_mzml: bool,
+    #[arg(long = "ion-to-mzml")]
+    ion_to_mzml: bool,
 }
 
 #[derive(Args)]
@@ -182,7 +182,7 @@ fn print_json_full<T: Serialize>(v: &T) -> Result<(), String> {
 fn cat(cmd: CatArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
     let file_path = resolve_user_path(&cwd, &cmd.file_path);
-    let mut mzml = read_mzml_or_b64(&file_path)?;
+    let mut mzml = read_mzml_or_ion(&file_path)?;
     if !cmd.full {
         trim_mzml_for_cat(&mut mzml);
     }
@@ -206,18 +206,18 @@ fn out_name_for_mzml_file(path: &Path, out_ext: &str) -> Option<String> {
 
 fn out_name_for_bin_file_as_mzml(path: &Path) -> Option<String> {
     let ext = file_ext_lower(path);
-    if ext != "b64" && ext != "b32" {
+    if ext != "ion" {
         return None;
     }
     let stem = path.file_stem()?.to_string_lossy();
     Some(format!("{stem}.mzML"))
 }
 
-fn read_mzml_or_b64(file_path: &Path) -> Result<MzML, String> {
+fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     let bytes = fs::read(file_path).map_err(|e| format!("read failed: {e}"))?;
     let ext = file_ext_lower(file_path);
 
-    if ext == "b64" || ext == "b32" {
+    if ext == "ion" {
         return decode(&bytes).map_err(|e| format!("decode failed: {e}"));
     }
     if ext == "mzml" {
@@ -225,7 +225,7 @@ fn read_mzml_or_b64(file_path: &Path) -> Result<MzML, String> {
     }
 
     Err(format!(
-        "unsupported file extension: {ext:?} (expected .mzML or .b64/.b32)"
+        "unsupported file extension: {ext:?} (expected .mzML or .ion/.b32)"
     ))
 }
 
@@ -384,12 +384,12 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     let t_all = Instant::now();
 
-    let default_mzml_to_b64 =
-        !cmd.which.mzml_to_b64 && !cmd.which.mzml_to_b32 && !cmd.which.b64_to_mzml;
+    let default_mzml_to_ion =
+        !cmd.which.mzml_to_ion && !cmd.which.mzml_to_b32 && !cmd.which.ion_to_mzml;
 
-    let mzml_to_b64 = cmd.which.mzml_to_b64 || default_mzml_to_b64;
+    let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let mzml_to_b32 = cmd.which.mzml_to_b32;
-    let b64_to_mzml = cmd.which.b64_to_mzml;
+    let ion_to_mzml = cmd.which.ion_to_mzml;
 
     let print_lock = Arc::new(Mutex::new(()));
     let done = Arc::new(AtomicUsize::new(0));
@@ -399,8 +399,8 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let fixed_bad_total = Arc::new(AtomicU32::new(0));
     let had_failed = Arc::new(AtomicBool::new(false));
 
-    if mzml_to_b64 || mzml_to_b32 {
-        let out_ext = if mzml_to_b32 { "b32" } else { "b64" };
+    if mzml_to_ion || mzml_to_b32 {
+        let out_ext = "ion";
         let f32_compress = mzml_to_b32;
 
         let files = collect_files_with_exts(&input_root, &["mzml"], filter.as_deref())?;
@@ -550,7 +550,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     }
                 };
 
-                if let Err(e) = encode(&mzml, cmd.compression_level, f32_compress, octo::encoder::encode::WritingMode::Streaming, &mut file_output) {
+                if let Err(e) = encode(&mzml, cmd.compression_level, f32_compress, ionic::encoder::encode::WritingMode::Streaming, &mut file_output) {
                     had_failed.store(true, Ordering::Relaxed);
                     failed.fetch_add(1, Ordering::Relaxed);
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -616,11 +616,11 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         return Ok(());
     }
 
-    if b64_to_mzml {
-        let files = collect_files_with_exts(&input_root, &["b64", "b32"], filter.as_deref())?;
+    if ion_to_mzml {
+        let files = collect_files_with_exts(&input_root, &["ion"], filter.as_deref())?;
         if files.is_empty() {
             return Err(format!(
-                "no matching .b64/.b32 files found under {}",
+                "no matching .ion files found under {}",
                 input_root.display()
             ));
         }
@@ -719,7 +719,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     }
                 };
 
-                let mzml = match read_mzml_or_b64_from_bytes(in_path, &in_bytes) {
+                let mzml = match read_mzml_or_ion_from_bytes(in_path, &in_bytes) {
                     Ok(v) => v,
                     Err(e) => {
                         had_failed.store(true, Ordering::Relaxed);
@@ -812,10 +812,10 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     Err("no convert mode selected".to_string())
 }
 
-fn read_mzml_or_b64_from_bytes(file_path: &Path, bytes: &[u8]) -> Result<MzML, String> {
+fn read_mzml_or_ion_from_bytes(file_path: &Path, bytes: &[u8]) -> Result<MzML, String> {
     let ext = file_ext_lower(file_path);
 
-    if ext == "b64" || ext == "b32" {
+    if ext == "ion" {
         return decode(bytes).map_err(|e| format!("decode failed: {e}"));
     }
     if ext == "mzml" {
@@ -823,7 +823,7 @@ fn read_mzml_or_b64_from_bytes(file_path: &Path, bytes: &[u8]) -> Result<MzML, S
     }
 
     Err(format!(
-        "unsupported file extension: {ext:?} (expected .mzML or .b64/.b32)"
+        "unsupported file extension: {ext:?} (expected .mzML or .ion/.b32)"
     ))
 }
 
