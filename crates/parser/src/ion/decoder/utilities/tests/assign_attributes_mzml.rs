@@ -63,7 +63,7 @@ fn schema_attrs_for_tag(tag: TagId) -> &'static HashMap<String, Vec<String>> {
     &node.attributes
 }
 
-fn parse_b000_tail(accession: &str) -> Option<AccessionTail> {
+fn parse_tail(accession: &str) -> Option<AccessionTail> {
     let (cv, tail) = accession.split_once(':')?;
     if cv != CV_REF_ATTR {
         return None;
@@ -109,7 +109,7 @@ fn find_by_tail<'a>(meta: &'a [Metadatum], tail: AccessionTail) -> Option<&'a Me
     meta.iter().find(|m| {
         m.accession
             .as_deref()
-            .and_then(parse_b000_tail)
+            .and_then(parse_tail)
             .is_some_and(|t| t == tail)
     })
 }
@@ -146,7 +146,7 @@ fn candidate_schema_attr_tails_for_owner(
         let Some(acc) = m.accession.as_deref() else {
             continue;
         };
-        let Some(tail) = parse_b000_tail(acc) else {
+        let Some(tail) = parse_tail(acc) else {
             continue;
         };
         let Some(k) = tail_to_field_key(tail) else {
@@ -165,7 +165,7 @@ fn find_id_by_tail_text(meta: &[Metadatum], tag: TagId, tail: AccessionTail, tex
     meta.iter()
         .find(|m| {
             m.tag_id == tag
-                && m.accession.as_deref().and_then(parse_b000_tail) == Some(tail)
+                && m.accession.as_deref().and_then(parse_tail) == Some(tail)
                 && matches!(&m.value, MetadatumValue::Text(t) if t == text)
         })
         .unwrap_or_else(|| panic!("cannot find id for {tag:?} tail={tail:?} text={text:?}"))
@@ -202,13 +202,13 @@ fn assign_attrs_spectrum_list_ion_equiv_schema_subset() {
     let tails = candidate_schema_attr_tails_for_owner(&ion_meta, id, schema_attrs);
     assert!(
         !tails.is_empty(),
-        "no schema-listed B000 attrs found for SpectrumList id={id}"
+        "no schema-listed ATTR attrs found for SpectrumList id={id}"
     );
 
     for tail in tails {
         let b = ion_meta
             .iter()
-            .find(|m| m.id == id && m.accession.as_deref().and_then(parse_b000_tail) == Some(tail))
+            .find(|m| m.id == id && m.accession.as_deref().and_then(parse_tail) == Some(tail))
             .unwrap_or_else(|| panic!("ion missing tail={tail} for id={id}"));
 
         let g = find_by_tail(&generated, tail)
@@ -254,13 +254,13 @@ fn assign_attrs_spectrum_first_ion_equiv_schema_subset() {
     let tails = candidate_schema_attr_tails_for_owner(&ion_meta, id, schema_attrs);
     assert!(
         !tails.is_empty(),
-        "no schema-listed B000 attrs found for Spectrum id={id}"
+        "no schema-listed ATTR attrs found for Spectrum id={id}"
     );
 
     for tail in tails {
         let b = ion_meta
             .iter()
-            .find(|m| m.id == id && m.accession.as_deref().and_then(parse_b000_tail) == Some(tail))
+            .find(|m| m.id == id && m.accession.as_deref().and_then(parse_tail) == Some(tail))
             .unwrap_or_else(|| panic!("ion missing tail={tail} for id={id}"));
 
         let g = find_by_tail(&generated, tail)
@@ -296,13 +296,13 @@ fn assign_attrs_spectrum_last_ion_equiv_schema_subset() {
     let tails = candidate_schema_attr_tails_for_owner(&ion_meta, id, schema_attrs);
     assert!(
         !tails.is_empty(),
-        "no schema-listed B000 attrs found for Spectrum id={id}"
+        "no schema-listed ATTR attrs found for Spectrum id={id}"
     );
 
     for tail in tails {
         let b = ion_meta
             .iter()
-            .find(|m| m.id == id && m.accession.as_deref().and_then(parse_b000_tail) == Some(tail))
+            .find(|m| m.id == id && m.accession.as_deref().and_then(parse_tail) == Some(tail))
             .unwrap_or_else(|| panic!("ion missing tail={tail} for id={id}"));
 
         let g = find_by_tail(&generated, tail)

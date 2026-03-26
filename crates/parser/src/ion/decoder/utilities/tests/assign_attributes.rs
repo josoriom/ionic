@@ -3,18 +3,18 @@ use crate::ion::{attr_meta::*, utilities::assign_attributes};
 use crate::mzml::schema::TagId;
 use crate::mzml::structs::{Chromatogram, Spectrum};
 
-fn b000_accession(tail: AccessionTail) -> String {
+fn parse_accession(tail: AccessionTail) -> String {
     format!("{CV_REF_ATTR}:{:07}", tail.raw())
 }
 
 fn find_by_tail<'a>(xs: &'a [Metadatum], tail: AccessionTail) -> Option<&'a Metadatum> {
-    let acc = b000_accession(tail);
+    let acc = parse_accession(tail);
     xs.iter()
         .find(|m| m.accession.as_deref() == Some(acc.as_str()))
 }
 
-fn assert_has_b000_tail(xs: &[Metadatum], tail: AccessionTail) {
-    let acc = b000_accession(tail);
+fn assert_has_attr_tail(xs: &[Metadatum], tail: AccessionTail) {
+    let acc = parse_accession(tail);
     assert!(
         xs.iter()
             .any(|m| m.accession.as_deref() == Some(acc.as_str())),
@@ -22,8 +22,8 @@ fn assert_has_b000_tail(xs: &[Metadatum], tail: AccessionTail) {
     );
 }
 
-fn assert_missing_b000_tail(xs: &[Metadatum], tail: AccessionTail) {
-    let acc = b000_accession(tail);
+fn assert_missing_attr_tail(xs: &[Metadatum], tail: AccessionTail) {
+    let acc = parse_accession(tail);
     assert!(
         xs.iter()
             .all(|m| m.accession.as_deref() != Some(acc.as_str())),
@@ -42,7 +42,7 @@ fn assert_num(xs: &[Metadatum], tail: AccessionTail, n: f64) {
 }
 
 #[test]
-fn assign_attrs_spectrum_emits_schema_b000_only() {
+fn assign_attrs_spectrum_emits_schema_only() {
     let mut s = Spectrum::default();
 
     s.id = "scan=1".to_string();
@@ -59,13 +59,13 @@ fn assign_attrs_spectrum_emits_schema_b000_only() {
 
     let out = assign_attributes(&s, TagId::Spectrum, id, parent_index);
 
-    assert_has_b000_tail(&out, ACC_ATTR_ID);
-    assert_has_b000_tail(&out, ACC_ATTR_INDEX);
-    assert_has_b000_tail(&out, ACC_ATTR_DEFAULT_ARRAY_LENGTH);
-    assert_has_b000_tail(&out, ACC_ATTR_NATIVE_ID);
-    assert_has_b000_tail(&out, ACC_ATTR_DATA_PROCESSING_REF);
-    assert_has_b000_tail(&out, ACC_ATTR_SOURCE_FILE_REF);
-    assert_has_b000_tail(&out, ACC_ATTR_SPOT_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_INDEX);
+    assert_has_attr_tail(&out, ACC_ATTR_DEFAULT_ARRAY_LENGTH);
+    assert_has_attr_tail(&out, ACC_ATTR_NATIVE_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_DATA_PROCESSING_REF);
+    assert_has_attr_tail(&out, ACC_ATTR_SOURCE_FILE_REF);
+    assert_has_attr_tail(&out, ACC_ATTR_SPOT_ID);
 
     assert_text(&out, ACC_ATTR_ID, "scan=1");
     assert_num(&out, ACC_ATTR_INDEX, 0.0);
@@ -79,23 +79,23 @@ fn assign_attrs_spectrum_emits_schema_b000_only() {
     assert_text(&out, ACC_ATTR_SOURCE_FILE_REF, "sf1");
     assert_text(&out, ACC_ATTR_SPOT_ID, "spotA");
 
-    assert_missing_b000_tail(&out, ACC_ATTR_MS_LEVEL);
-    assert_missing_b000_tail(&out, ACC_ATTR_SCAN_NUMBER);
+    assert_missing_attr_tail(&out, ACC_ATTR_MS_LEVEL);
+    assert_missing_attr_tail(&out, ACC_ATTR_SCAN_NUMBER);
 }
 
 #[test]
-fn assign_attrs_emits_only_b000_accessions() {
+fn assign_attrs_emits_only_parse_accessions() {
     let s = Spectrum::default();
 
     let id = 1u32;
     let parent_index = 0u32;
 
     let out = assign_attributes(&s, TagId::Spectrum, id, parent_index);
-    assert_has_b000_tail(&out, ACC_ATTR_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_ID);
     assert_text(&out, ACC_ATTR_ID, "");
-    assert_missing_b000_tail(&out, ACC_ATTR_INDEX);
-    assert_missing_b000_tail(&out, ACC_ATTR_DEFAULT_ARRAY_LENGTH);
-    assert_missing_b000_tail(&out, ACC_ATTR_NATIVE_ID);
+    assert_missing_attr_tail(&out, ACC_ATTR_INDEX);
+    assert_missing_attr_tail(&out, ACC_ATTR_DEFAULT_ARRAY_LENGTH);
+    assert_missing_attr_tail(&out, ACC_ATTR_NATIVE_ID);
     assert!(out.iter().all(|m| {
         m.accession
             .as_deref()
@@ -114,12 +114,12 @@ fn assign_attrs_spectrum_id_is_preserved() {
 
     let out = assign_attributes(&s, TagId::Spectrum, id, parent_index);
 
-    assert_has_b000_tail(&out, ACC_ATTR_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_ID);
     assert_text(&out, ACC_ATTR_ID, "ok");
 }
 
 #[test]
-fn assign_attrs_chromatogram_emits_schema_b000_only() {
+fn assign_attrs_chromatogram_emits_schema_attr_only() {
     let mut c = Chromatogram::default();
 
     c.id = "TIC".to_string();
@@ -133,11 +133,11 @@ fn assign_attrs_chromatogram_emits_schema_b000_only() {
 
     let out = assign_attributes(&c, TagId::Chromatogram, id, parent_index);
 
-    assert_has_b000_tail(&out, ACC_ATTR_ID);
-    assert_has_b000_tail(&out, ACC_ATTR_INDEX);
-    assert_has_b000_tail(&out, ACC_ATTR_DEFAULT_ARRAY_LENGTH);
-    assert_has_b000_tail(&out, ACC_ATTR_NATIVE_ID);
-    assert_has_b000_tail(&out, ACC_ATTR_DATA_PROCESSING_REF);
+    assert_has_attr_tail(&out, ACC_ATTR_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_INDEX);
+    assert_has_attr_tail(&out, ACC_ATTR_DEFAULT_ARRAY_LENGTH);
+    assert_has_attr_tail(&out, ACC_ATTR_NATIVE_ID);
+    assert_has_attr_tail(&out, ACC_ATTR_DATA_PROCESSING_REF);
 
     assert_text(&out, ACC_ATTR_ID, "TIC");
     assert_num(&out, ACC_ATTR_INDEX, 0.0);

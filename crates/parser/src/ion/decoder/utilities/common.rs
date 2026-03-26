@@ -32,6 +32,16 @@ pub(crate) fn take<'a>(
 }
 
 #[inline]
+pub(crate) fn read_u16_le_at(bytes: &[u8], pos: &mut usize, ctx: &str) -> Result<u16, String> {
+    if *pos + 2 > bytes.len() {
+        return Err(format!("{ctx}: not enough bytes for u16 at offset {pos}"));
+    }
+    let v = u16::from_le_bytes(bytes[*pos..*pos + 2].try_into().unwrap());
+    *pos += 2;
+    Ok(v)
+}
+
+#[inline]
 pub(crate) fn read_u32_le_at(
     bytes: &[u8],
     pos: &mut usize,

@@ -1,5 +1,6 @@
 use crate::{
     Spectrum, SpectrumDescription, SpectrumList,
+    decoder::decode::Metadatum,
     ion::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF, ACC_ATTR_DEFAULT_ARRAY_LENGTH,
@@ -13,7 +14,6 @@ use crate::{
             parse_product_list, parse_scan_list,
         },
     },
-    decoder::decode::Metadatum,
     mzml::schema::TagId,
 };
 

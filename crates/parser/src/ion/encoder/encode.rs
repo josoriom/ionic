@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    BinaryData, NumericType,
+    BinaryData, FilterRecord, NumericType,
     encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
     ion::encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor, FilterType},
     mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
@@ -20,9 +20,10 @@ use crate::encoder::utilities::{
     },
 };
 
-pub const HEADER_SIZE: usize = 512;
+pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+pub const FILTER_INDEX_RECORD_SIZE: usize = 48;
 
 const ARRAY_FILTER_NONE: u8 = 0;
 const ARRAY_FILTER_BYTE_SHUFFLE: u8 = 1;
@@ -34,10 +35,107 @@ const FILE_DTYPE_I16: u8 = 4;
 const FILE_DTYPE_I32: u8 = 5;
 const FILE_DTYPE_I64: u8 = 6;
 
+const ACC_SCAN_START_TIME: u32 = 1_000_016;
+const ACC_BASE_PEAK_MZ: u32 = 1_000_504;
+const ACC_BASE_PEAK_INTENSITY: u32 = 1_000_505;
+const ACC_TOTAL_ION_CURRENT: u32 = 1_000_285;
+const ACC_MS_LEVEL: u32 = 1_000_511;
+const ACC_POSITIVE_SCAN: u32 = 1_000_130;
+const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
+const ACC_UNIT_MINUTE: u32 = 31;
+
+const POLARITY_UNKNOWN: u8 = 0;
+const POLARITY_POSITIVE: u8 = 1;
+const POLARITY_NEGATIVE: u8 = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WritingMode {
     Memory,
     Streaming,
+}
+
+impl FilterRecord {
+    fn unknown() -> Self {
+        Self {
+            rt_seconds: f64::NAN,
+            base_peak_mz: f64::NAN,
+            base_peak_int: f64::NAN,
+            total_ion_current: f64::NAN,
+            ms_level: 0,
+            polarity: POLARITY_UNKNOWN,
+        }
+    }
+
+    fn write_into(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.rt_seconds.to_le_bytes());
+        buf.extend_from_slice(&self.base_peak_mz.to_le_bytes());
+        buf.extend_from_slice(&self.base_peak_int.to_le_bytes());
+        buf.extend_from_slice(&self.total_ion_current.to_le_bytes());
+        buf.push(self.ms_level);
+        buf.push(self.polarity);
+        buf.extend_from_slice(&[0u8; 14]);
+    }
+}
+
+fn extract_filter_record(spectrum: &Spectrum) -> FilterRecord {
+    let mut record = FilterRecord::unknown();
+
+    if let Some(sl) = &spectrum.scan_list {
+        if let Some(scan) = sl.scans.first() {
+            for cv in &scan.cv_params {
+                let tail = parse_accession_tail_raw(cv.accession.as_deref());
+                if tail == ACC_SCAN_START_TIME {
+                    if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
+                        let unit = parse_accession_tail_raw(cv.unit_accession.as_deref());
+                        record.rt_seconds = if unit == ACC_UNIT_MINUTE {
+                            val * 60.0
+                        } else {
+                            val
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    for cv in &spectrum.cv_params {
+        let tail = parse_accession_tail_raw(cv.accession.as_deref());
+        match tail {
+            ACC_BASE_PEAK_MZ => {
+                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
+                    record.base_peak_mz = val;
+                }
+            }
+            ACC_BASE_PEAK_INTENSITY => {
+                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
+                    record.base_peak_int = val;
+                }
+            }
+            ACC_TOTAL_ION_CURRENT => {
+                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
+                    record.total_ion_current = val;
+                }
+            }
+            ACC_MS_LEVEL => {
+                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<u8>().ok()) {
+                    record.ms_level = val;
+                }
+            }
+            ACC_POSITIVE_SCAN => record.polarity = POLARITY_POSITIVE,
+            ACC_NEGATIVE_SCAN => record.polarity = POLARITY_NEGATIVE,
+            _ => {}
+        }
+    }
+
+    record
+}
+
+fn build_filter_index(spectra: &[Spectrum]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(spectra.len() * FILTER_INDEX_RECORD_SIZE);
+    for spectrum in spectra {
+        extract_filter_record(spectrum).write_into(&mut buf);
+    }
+    buf
 }
 
 pub struct Encoder<'o> {
@@ -92,6 +190,12 @@ impl<'o> Encoder<'o> {
             self.config.compression_level,
         );
 
+        let spec_meta_crc32 = crc32fast::hash(&compressed.spectrum_bytes);
+        let chrom_meta_crc32 = crc32fast::hash(&compressed.chromatogram_bytes);
+        let global_meta_crc32 = crc32fast::hash(&compressed.global_bytes);
+
+        let filter_index_bytes = build_filter_index(spectra);
+
         self.output.write_bytes(&[0u8; HEADER_SIZE])?;
 
         let (spec_arrays, chrom_arrays) = match self.config.writing_mode {
@@ -106,7 +210,11 @@ impl<'o> Encoder<'o> {
         };
 
         let offsets = self.write_all_sections(&spec_arrays, &chrom_arrays, &compressed)?;
+        let off_filter_index = write_aligned_section(self.output, &filter_index_bytes)?;
+        let len_filter_index = filter_index_bytes.len() as u64;
+
         self.output.write_bytes(&FILE_TRAILER)?;
+        let total_file_size = self.output.current_byte_position()?;
 
         let header = Self::build_header(
             &self.config,
@@ -118,11 +226,22 @@ impl<'o> Encoder<'o> {
             &global_meta,
             &compressed,
             &global_counts,
-            spectra.len() as u32,
-            chroms.len() as u32,
+            spectra.len() as u64,
+            chroms.len() as u64,
+            total_file_size,
+            spec_meta_crc32,
+            chrom_meta_crc32,
+            global_meta_crc32,
+            off_filter_index,
+            len_filter_index,
         );
+
         let mut header_bytes = [0u8; HEADER_SIZE];
         header.write_into(&mut header_bytes);
+
+        let header_crc = crc32fast::hash(&header_bytes[0..1020]);
+        header_bytes[1020..1024].copy_from_slice(&header_crc.to_le_bytes());
+
         self.output.patch_bytes_at(0, &header_bytes)
     }
 
@@ -159,6 +278,7 @@ impl<'o> Encoder<'o> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_header(
         config: &EncodingConfig,
         offsets: &SectionOffsets,
@@ -169,10 +289,21 @@ impl<'o> Encoder<'o> {
         global_meta: &PackedMeta,
         compressed: &CompressedMetaSections,
         _global_counts: &GlobalCounts,
-        spectrum_count: u32,
-        chrom_count: u32,
+        spectrum_count: u64,
+        chrom_count: u64,
+        total_file_size: u64,
+        spec_meta_crc32: u32,
+        chrom_meta_crc32: u32,
+        global_meta_crc32: u32,
+        off_filter_index: u64,
+        len_filter_index: u64,
     ) -> FileHeader {
         FileHeader {
+            compression_codec: config.codec_id(),
+            compression_level: config.compression_level,
+            array_filter_id: config.array_filter_id(),
+            target_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES as u64,
+
             offset_spec_entries: offsets.offset_spec_entries,
             len_spec_entries: spec_arrays.index_entries_bytes.len() as u64,
             offset_spec_arrayrefs: offsets.offset_spec_arrayrefs,
@@ -191,28 +322,37 @@ impl<'o> Encoder<'o> {
             len_packed_spectra: spec_arrays.container_total_bytes,
             offset_packed_chroms: offsets.offset_packed_chroms,
             len_packed_chroms: chrom_arrays.container_total_bytes,
+
             spectrum_block_count: spec_arrays.block_count,
             chrom_block_count: chrom_arrays.block_count,
             spectrum_count,
             chrom_count,
-            spec_meta_row_count: spectrum_meta.ref_codes.len() as u32,
-            spec_meta_numeric_count: spectrum_meta.numeric_values.len() as u32,
-            spec_meta_string_count: spectrum_meta.string_offsets.len() as u32,
-            chrom_meta_row_count: chrom_meta.ref_codes.len() as u32,
-            chrom_meta_numeric_count: chrom_meta.numeric_values.len() as u32,
-            chrom_meta_string_count: chrom_meta.string_offsets.len() as u32,
-            global_meta_row_count: global_meta.ref_codes.len() as u32,
-            global_meta_numeric_count: global_meta.numeric_values.len() as u32,
-            global_meta_string_count: global_meta.string_offsets.len() as u32,
-            spec_array_type_count: spec_arrays.seen_array_type_accessions.len() as u32,
-            chrom_array_type_count: chrom_arrays.seen_array_type_accessions.len() as u32,
-            target_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES as u64,
-            codec_id: config.codec_id(),
-            compression_level: config.compression_level,
-            array_filter_id: config.array_filter_id(),
+
+            spec_meta_row_count: spectrum_meta.ref_codes.len() as u64,
+            spec_meta_numeric_count: spectrum_meta.numeric_values.len() as u64,
+            spec_meta_string_count: spectrum_meta.string_offsets.len() as u64,
+            chrom_meta_row_count: chrom_meta.ref_codes.len() as u64,
+            chrom_meta_numeric_count: chrom_meta.numeric_values.len() as u64,
+            chrom_meta_string_count: chrom_meta.string_offsets.len() as u64,
+            global_meta_row_count: global_meta.ref_codes.len() as u64,
+            global_meta_numeric_count: global_meta.numeric_values.len() as u64,
+            global_meta_string_count: global_meta.string_offsets.len() as u64,
+            spec_array_type_count: spec_arrays.seen_array_type_accessions.len() as u64,
+            chrom_array_type_count: chrom_arrays.seen_array_type_accessions.len() as u64,
+
             spec_meta_uncompressed_size: compressed.spectrum_uncompressed_size,
             chrom_meta_uncompressed_size: compressed.chromatogram_uncompressed_size,
             global_meta_uncompressed_size: compressed.global_uncompressed_size,
+
+            off_filter_index,
+            len_filter_index,
+
+            total_file_size,
+
+            spec_meta_crc32,
+            chrom_meta_crc32,
+            global_meta_crc32,
+            header_crc32: 0,
         }
     }
 }
@@ -328,6 +468,7 @@ impl<'a> ArrayData<'a> {
             Self::I64(e) => e.len(),
         }
     }
+
     fn is_empty(self) -> bool {
         self.element_count() == 0
     }
@@ -455,7 +596,7 @@ fn write_arrayref_entry(
 }
 
 struct PackedArraySection {
-    block_count: u32,
+    block_count: u64,
     container_offset: u64,
     container_total_bytes: u64,
     index_entries_bytes: Vec<u8>,
@@ -466,11 +607,13 @@ struct PackedArraySection {
 trait HasBinaryDataArrayList {
     fn binary_data_array_list(&self) -> Option<&BinaryDataArrayList>;
 }
+
 impl HasBinaryDataArrayList for Spectrum {
     fn binary_data_array_list(&self) -> Option<&BinaryDataArrayList> {
         self.binary_data_array_list.as_ref()
     }
 }
+
 impl HasBinaryDataArrayList for Chromatogram {
     fn binary_data_array_list(&self) -> Option<&BinaryDataArrayList> {
         self.binary_data_array_list.as_ref()
@@ -539,7 +682,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
     let container_offset = write_aligned_section(output, &container_bytes)?;
 
     Ok(PackedArraySection {
-        block_count,
+        block_count: block_count as u64,
         container_offset,
         container_total_bytes,
         index_entries_bytes,
@@ -610,7 +753,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
     let (block_count, container_total_bytes) = container_builder.finish()?;
 
     Ok(PackedArraySection {
-        block_count,
+        block_count: block_count as u64,
         container_offset,
         container_total_bytes,
         index_entries_bytes,
@@ -683,8 +826,61 @@ mod tests {
         .unwrap();
 
         assert!(buf.len() >= HEADER_SIZE + FILE_TRAILER.len());
-        assert_eq!(&buf[0..4], b"B000");
+        assert_eq!(&buf[0..8], b"START\0\0\0");
         assert_eq!(&buf[buf.len() - 8..], &FILE_TRAILER);
+    }
+
+    #[test]
+    fn encoder_output_total_file_size_is_correct() {
+        let mzml = MzML::default();
+        let mut buf = Vec::new();
+        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+
+        let total_file_size = u64::from_le_bytes(
+            buf[crate::ion::utilities::parse_header::HEADER_TOTAL_FILE_SIZE
+                ..crate::ion::utilities::parse_header::HEADER_TOTAL_FILE_SIZE + 8]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(total_file_size, buf.len() as u64);
+    }
+
+    #[test]
+    fn encoder_header_crc32_is_valid() {
+        let mzml = MzML::default();
+        let mut buf = Vec::new();
+        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+
+        let stored_crc = u32::from_le_bytes(buf[1020..1024].try_into().unwrap());
+        let computed_crc = crc32fast::hash(&buf[0..1020]);
+        assert_eq!(stored_crc, computed_crc);
+    }
+
+    #[test]
+    fn filter_index_record_size_is_correct() {
+        let mut buf = Vec::new();
+        FilterRecord::unknown().write_into(&mut buf);
+        assert_eq!(buf.len(), FILTER_INDEX_RECORD_SIZE);
+    }
+
+    #[test]
+    fn filter_index_unknown_record_is_all_nan_and_zero() {
+        let mut buf = Vec::new();
+        FilterRecord::unknown().write_into(&mut buf);
+        for i in (0..32).step_by(8) {
+            let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
+            assert!(v.is_nan());
+        }
+        assert_eq!(buf[32], 0);
+        assert_eq!(buf[33], 0);
+    }
+
+    #[test]
+    fn filter_index_len_matches_spectrum_count() {
+        let mzml = MzML::default();
+        let spectra = Encoder::spectra(&mzml);
+        let index = build_filter_index(spectra);
+        assert_eq!(index.len(), spectra.len() * FILTER_INDEX_RECORD_SIZE);
     }
 
     #[test]
@@ -745,13 +941,13 @@ mod tests {
         .encode(&mzml)
         .unwrap();
 
-        let spec_blocks = u32::from_le_bytes(
-            buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 4]
+        let spec_blocks = u64::from_le_bytes(
+            buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 8]
                 .try_into()
                 .unwrap(),
         );
-        let chrom_blocks = u32::from_le_bytes(
-            buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 4]
+        let chrom_blocks = u64::from_le_bytes(
+            buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 8]
                 .try_into()
                 .unwrap(),
         );
@@ -794,33 +990,33 @@ mod tests {
     fn file_header_starts_with_magic_bytes() {
         let mut buf = [0u8; HEADER_SIZE];
         FileHeader::default().write_into(&mut buf);
-        assert_eq!(&buf[0..4], b"B000");
+        assert_eq!(&buf[0..8], b"START\0\0\0");
     }
 
     #[test]
     fn file_header_block_counts_at_correct_offsets() {
         let mut buf = [0u8; HEADER_SIZE];
         FileHeader {
-            spectrum_block_count: 7,
-            chrom_block_count: 13,
+            spectrum_block_count: 7u64,
+            chrom_block_count: 13u64,
             ..FileHeader::default()
         }
         .write_into(&mut buf);
         assert_eq!(
-            u32::from_le_bytes(
-                buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 4]
+            u64::from_le_bytes(
+                buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 8]
                     .try_into()
                     .unwrap()
             ),
-            7
+            7u64
         );
         assert_eq!(
-            u32::from_le_bytes(
-                buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 4]
+            u64::from_le_bytes(
+                buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 8]
                     .try_into()
                     .unwrap()
             ),
-            13
+            13u64
         );
     }
 

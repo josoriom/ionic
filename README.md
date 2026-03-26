@@ -6,6 +6,6 @@
 cargo add ionic --git https://github.com/josoriom/ionic --branch main
 ```
 
-- [**B000**](crates/parser/src/B000.MD)
+- [**Description**](crates/parser/src/description.MD)
 
 [CLI](crates/cli/README.MD)

@@ -64,7 +64,7 @@ pub(crate) struct ContainerView<'a, P: BlockProcessor> {
 impl<'a, P: BlockProcessor> ContainerView<'a, P> {
     pub(crate) fn new(
         raw_data: &'a [u8],
-        block_count: u32,
+        block_count: u64,
         compression_level: u8,
         filter: FilterType,
         ctx: &'static str,
@@ -88,11 +88,13 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             let payload_offset = read_u64_le_at(directory_bytes, &mut read_position, ctx)?;
             let payload_size = read_u64_le_at(directory_bytes, &mut read_position, ctx)?;
             let uncompressed_len_bytes = read_u64_le_at(directory_bytes, &mut read_position, ctx)?;
-            let _reserved_padding = take(directory_bytes, &mut read_position, 8, ctx)?;
+            let checksum = read_u32_le_at(directory_bytes, &mut read_position, ctx)?;
+            let _reserved_padding = take(directory_bytes, &mut read_position, 4, ctx)?;
             entries.push(BlockDirEntry {
                 payload_offset,
                 payload_size,
                 uncompressed_len_bytes,
+                checksum,
             });
         }
 
@@ -167,11 +169,20 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             ));
         }
 
-        let decoded = self.run_decode_pipeline(
-            &self.raw_data[payload_start..payload_end],
-            entry.uncompressed_len_bytes as usize,
-            stride,
-        )?;
+        let payload = &self.raw_data[payload_start..payload_end];
+
+        if entry.checksum != 0 {
+            let computed = crc32fast::hash(payload);
+            if computed != entry.checksum {
+                return Err(format!(
+                    "{ctx}: block {block_index} checksum mismatch (stored={:#010x}, computed={:#010x})",
+                    entry.checksum, computed
+                ));
+            }
+        }
+
+        let decoded =
+            self.run_decode_pipeline(payload, entry.uncompressed_len_bytes as usize, stride)?;
         self.cache[block_index] = Some(decoded);
         Ok(())
     }
@@ -303,8 +314,8 @@ fn unshuffle_any(source: &[u8], target: &mut [u8], stride: usize) {
 }
 
 pub(crate) struct BinaryStoreConfig {
-    pub(crate) block_count: u32,
-    pub(crate) item_count: u32,
+    pub(crate) block_count: u64,
+    pub(crate) item_count: u64,
     pub(crate) compression_level: u8,
     pub(crate) filter: FilterType,
     pub(crate) context_label: &'static str,
@@ -377,7 +388,7 @@ impl BinaryStore {
         self.slots.get_mut(slot_index)?.take()
     }
 
-    fn parse_item_index(raw: &[u8], item_count: u32) -> Result<Vec<ItemIndexEntry>, String> {
+    fn parse_item_index(raw: &[u8], item_count: u64) -> Result<Vec<ItemIndexEntry>, String> {
         let mut read_pos = 0;
         let mut entries = Vec::with_capacity(item_count as usize);
         for _ in 0..item_count {
@@ -495,7 +506,8 @@ mod tests {
         entry.extend_from_slice(&payload_offset.to_le_bytes());
         entry.extend_from_slice(&payload_size.to_le_bytes());
         entry.extend_from_slice(&uncompressed.to_le_bytes());
-        entry.extend_from_slice(&[0u8; 8]);
+        entry.extend_from_slice(&0u32.to_le_bytes());
+        entry.extend_from_slice(&[0u8; 4]);
         entry
     }
 

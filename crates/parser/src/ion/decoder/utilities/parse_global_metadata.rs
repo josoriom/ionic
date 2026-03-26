@@ -1,19 +1,19 @@
 use crate::{
     decoder::decode::Metadatum,
     ion::utilities::{
-        common::{decompress_zstd_allow_aligned_padding, read_u32_le_at},
+        common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
         parse_metadata::{HDR_CODEC_NONE, HDR_CODEC_ZSTD, parse_metadata},
     },
 };
 
-const GLOBAL_SECTION_HEADER_BYTE_SIZE: usize = 36;
+const GLOBAL_SECTION_HEADER_BYTE_SIZE: usize = 32;
 
 pub(crate) fn parse_global_metadata(
     bytes: &[u8],
-    item_count: u32,
-    meta_count: u32,
-    num_count: u32,
-    str_count: u32,
+    item_count: u64,
+    meta_count: u64,
+    num_count: u64,
+    str_count: u64,
     compression_codec: u8,
     expected_uncompressed: u64,
 ) -> Result<Vec<Metadatum>, String> {
@@ -50,15 +50,18 @@ pub(crate) fn parse_global_metadata(
 
     let mut read_pos = 0usize;
 
-    let n_file_description = read_u32_le_at(bytes, &mut read_pos, "n_file_description")?;
-    let n_run = read_u32_le_at(bytes, &mut read_pos, "n_run")?;
-    let n_ref_param_groups = read_u32_le_at(bytes, &mut read_pos, "n_ref_param_groups")?;
-    let n_samples = read_u32_le_at(bytes, &mut read_pos, "n_samples")?;
-    let n_instrument_configs = read_u32_le_at(bytes, &mut read_pos, "n_instrument_configs")?;
-    let n_software = read_u32_le_at(bytes, &mut read_pos, "n_software")?;
-    let n_data_processing = read_u32_le_at(bytes, &mut read_pos, "n_data_processing")?;
-    let n_acquisition_settings = read_u32_le_at(bytes, &mut read_pos, "n_acquisition_settings")?;
-    let n_cvs = read_u32_le_at(bytes, &mut read_pos, "n_cvs")?;
+    let n_file_description = read_u16_le_at(bytes, &mut read_pos, "n_file_description")? as u64;
+    let n_ref_param_groups = read_u16_le_at(bytes, &mut read_pos, "n_ref_param_groups")? as u64;
+    let n_samples = read_u16_le_at(bytes, &mut read_pos, "n_samples")? as u64;
+    let n_instrument_configs = read_u16_le_at(bytes, &mut read_pos, "n_instrument_configs")? as u64;
+    let n_software = read_u16_le_at(bytes, &mut read_pos, "n_software")? as u64;
+    let n_data_processing = read_u16_le_at(bytes, &mut read_pos, "n_data_processing")? as u64;
+    let n_acquisition_settings =
+        read_u16_le_at(bytes, &mut read_pos, "n_acquisition_settings")? as u64;
+    let n_cvs = read_u16_le_at(bytes, &mut read_pos, "n_cvs")? as u64;
+    let n_run = read_u16_le_at(bytes, &mut read_pos, "n_run")? as u64;
+
+    read_pos += 14;
 
     let derived_item_count = [
         n_file_description,
@@ -72,7 +75,7 @@ pub(crate) fn parse_global_metadata(
         n_cvs,
     ]
     .iter()
-    .try_fold(0u32, |acc, &count| {
+    .try_fold(0u64, |acc, &count| {
         acc.checked_add(count)
             .ok_or("global metadata: item_count overflow")
     })?;
@@ -105,15 +108,20 @@ pub(crate) fn parse_global_metadata(
 mod tests {
     use super::*;
 
+    fn write_u16_le(buf: &mut Vec<u8>, value: u16) {
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+
     fn write_u32_le(buf: &mut Vec<u8>, value: u32) {
         buf.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn make_global_header(counts: &[u32; 9]) -> Vec<u8> {
+    fn make_global_header(counts: &[u16; 9]) -> Vec<u8> {
         let mut buf = Vec::new();
         for &count in counts {
-            write_u32_le(&mut buf, count);
+            write_u16_le(&mut buf, count);
         }
+        buf.extend_from_slice(&[0u8; 14]);
         buf
     }
 

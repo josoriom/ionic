@@ -4,6 +4,8 @@ use zstd::bulk::compress as zstd_compress;
 
 use crate::{
     UserParam,
+    decoder::decode::MetadatumValue,
+    encoder::utilities::le_writers::{write_f64_slice_le, write_u32_slice_le},
     ion::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_CV_FULL_NAME, ACC_ATTR_CV_URI, ACC_ATTR_CV_VERSION,
@@ -15,8 +17,6 @@ use crate::{
         },
         utilities::assign_attributes,
     },
-    decoder::decode::MetadatumValue,
-    encoder::utilities::le_writers::{write_f64_slice_le, write_u32_le, write_u32_slice_le},
     mzml::{
         schema::TagId,
         structs::{
@@ -680,20 +680,21 @@ fn serialize_packed_meta(m: &PackedMeta) -> Vec<u8> {
 }
 
 fn serialize_global_meta_with_counts(counts: &GlobalCounts, m: &PackedMeta) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(9 * 4 + packed_meta_byte_size(m));
+    let mut buf = Vec::with_capacity(32 + packed_meta_byte_size(m));
     for n in [
-        counts.n_file_description,
-        counts.n_run,
-        counts.n_ref_param_groups,
-        counts.n_samples,
-        counts.n_instrument_configs,
-        counts.n_software,
-        counts.n_data_processing,
-        counts.n_acquisition_settings,
-        counts.n_cvs,
+        counts.n_file_description as u16,
+        counts.n_ref_param_groups as u16,
+        counts.n_samples as u16,
+        counts.n_instrument_configs as u16,
+        counts.n_software as u16,
+        counts.n_data_processing as u16,
+        counts.n_acquisition_settings as u16,
+        counts.n_cvs as u16,
+        counts.n_run as u16,
     ] {
-        write_u32_le(&mut buf, n);
+        buf.extend_from_slice(&n.to_le_bytes());
     }
+    buf.extend_from_slice(&[0u8; 14]);
     write_packed_meta(&mut buf, m);
     buf
 }
