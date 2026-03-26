@@ -6,7 +6,7 @@ use crate::{
             ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
-        encoder::utilities::FilterType,
+        encoder::{encode::FILTER_INDEX_RECORD_SIZE, utilities::FilterType},
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
@@ -29,6 +29,7 @@ pub fn decode(bytes: &[u8]) -> Result<MzML, String> {
     let lookup = ChildrenLookup::new(&global_meta);
     let meta_refs: Vec<&Metadatum> = global_meta.iter().collect();
     let policy = DefaultMetadataPolicy;
+    let filter_record = read_filter_index(bytes, &header)?;
 
     Ok(MzML {
         cv_list: parse_cv_list(&meta_refs, &lookup),
@@ -42,7 +43,48 @@ pub fn decode(bytes: &[u8]) -> Result<MzML, String> {
         data_processing_list: parse_data_processing_list(&meta_refs, &lookup, &policy),
         scan_settings_list: parse_scan_settings_list(&meta_refs, &lookup, &policy),
         run: parse_run(bytes, &header, &global_meta, &policy)?,
+        filter_record,
     })
+}
+
+pub fn read_filter_index(bytes: &[u8], header: &Header) -> Result<Vec<FilterRecord>, String> {
+    let off = header.off_filter_index as usize;
+    let len = header.len_filter_index as usize;
+    let count = header.spectrum_count as usize;
+
+    if len != count * FILTER_INDEX_RECORD_SIZE {
+        return Err(format!(
+            "filter index: len_filter_index={len} does not match spectrum_count={count} × {FILTER_INDEX_RECORD_SIZE}"
+        ));
+    }
+
+    let section = bytes
+        .get(off..off + len)
+        .ok_or_else(|| "filter index: section out of bounds".to_string())?;
+
+    let mut records = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = i * FILTER_INDEX_RECORD_SIZE;
+        let rec = &section[base..base + FILTER_INDEX_RECORD_SIZE];
+
+        let rt_seconds = f64::from_le_bytes(rec[0..8].try_into().unwrap());
+        let base_peak_mz = f64::from_le_bytes(rec[8..16].try_into().unwrap());
+        let base_peak_int = f64::from_le_bytes(rec[16..24].try_into().unwrap());
+        let total_ion_current = f64::from_le_bytes(rec[24..32].try_into().unwrap());
+        let ms_level = rec[32];
+        let polarity = rec[33];
+
+        records.push(FilterRecord {
+            rt_seconds,
+            base_peak_mz,
+            base_peak_int,
+            total_ion_current,
+            ms_level,
+            polarity,
+        });
+    }
+
+    Ok(records)
 }
 
 #[inline]

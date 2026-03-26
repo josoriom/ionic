@@ -14,10 +14,10 @@ pub(crate) const HDR_CODEC_ZSTD: u8 = 1;
 
 pub(crate) fn parse_metadata(
     bytes: &[u8],
-    item_count: u32,
-    meta_count: u32,
-    num_count: u32,
-    str_count: u32,
+    item_count: u64,
+    meta_count: u64,
+    num_count: u64,
+    str_count: u64,
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
 ) -> Result<Vec<Metadatum>, String> {
