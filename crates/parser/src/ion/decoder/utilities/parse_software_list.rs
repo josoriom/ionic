@@ -1,4 +1,5 @@
 use crate::{
+    decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_COUNT, ACC_ATTR_ID, ACC_ATTR_NAME, ACC_ATTR_REF, ACC_ATTR_VERSION},
         utilities::{
@@ -7,14 +8,13 @@ use crate::{
             cv_table, parse_cv_and_user_params,
         },
     },
-    decoder::decode::Metadatum,
     mzml::{
         schema::TagId,
         structs::{Software, SoftwareList, SoftwareParam},
     },
 };
 
-const EXCLUDED_ACCESSION_PREFIX: &str = "B000:";
+const EXCLUDED_ACCESSION_PREFIX: &str = "ATTR:";
 
 #[inline]
 pub(crate) fn parse_software_list<P: MetadataPolicy>(

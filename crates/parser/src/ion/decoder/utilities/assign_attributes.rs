@@ -1,5 +1,5 @@
-use crate::ion::attr_meta::{AccessionTail, CV_REF_ATTR, key_to_attr_tail};
 use crate::decoder::decode::{Metadatum, MetadatumValue};
+use crate::ion::attr_meta::{AccessionTail, CV_REF_ATTR, key_to_attr_tail};
 use crate::mzml::schema::{SchemaNode, TagId, schema};
 use hashbrown::HashMap;
 use serde::Serialize;

@@ -12,6 +12,17 @@ pub struct MzML {
     pub data_processing_list: Option<DataProcessingList>,
     pub scan_settings_list: Option<ScanSettingsList>,
     pub run: Run,
+    pub filter_record: Vec<FilterRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Copy)]
+pub struct FilterRecord {
+    pub(crate) rt_seconds: f64,
+    pub(crate) base_peak_mz: f64,
+    pub(crate) base_peak_int: f64,
+    pub(crate) total_ion_current: f64,
+    pub(crate) ms_level: u8,
+    pub(crate) polarity: u8,
 }
 
 /// <cvList>
