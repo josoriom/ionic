@@ -3,7 +3,7 @@ use hashbrown::{HashMap as HbHashMap, HashSet as HbHashSet, hash_map};
 
 type Map<K, V> = HbHashMap<K, V>;
 
-const EXCLUDED_ACCESSION_PREFIX: &str = "IONIC:";
+const EXCLUDED_ACCESSION_PREFIX: &str = "ATTR:";
 
 pub(crate) trait MetadataPolicy {
     fn is_param(&self, tag: TagId) -> bool;
@@ -294,13 +294,13 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_excludes_ionic_prefixed_accessions() {
+    fn default_policy_excludes_attr_prefixed_accessions() {
         let row = Metadatum {
             item_index: 0,
             id: 1,
             parent_id: 0,
             tag_id: TagId::CvParam,
-            accession: Some("IONIC:9910001".to_string()),
+            accession: Some("ATTR:9910001".to_string()),
             unit_accession: None,
             value: MetadatumValue::Empty,
         };

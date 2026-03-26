@@ -115,7 +115,7 @@ Instead of storing metadata as objects, the format flattens all properties into 
 | `MTI`         | u8[]  | **Metadata Tag ID**. Metadata Tag ID. The tag/context for metadata row `j` using your `TagId` mapping. `255 = Unknown`. Size = `meta_count`.                                       |
 | `MOI`         | u32[] | **Metadata Owner ID**. Tag ID.                                                                                                                                                     |
 | `MPI`         | u32[] | **Metadata Parent ID**. Parent ID.                                                                                                                                                 |
-| `MRI`         | u8[]  | **Metadata Ref ID**. Identifies the ontology (0=MS, 1=UO, 2=NCIT, 3=PEFF, 4=IONIC, 255=None).                                                                                      |
+| `MRI`         | u8[]  | **Metadata Ref ID**. Identifies the ontology (0=MS, 1=UO, 2=NCIT, 3=PEFF, 4=ATTR, 255=None).                                                                                       |
 | `MAN`         | u32[] | **Metadata Accession**. The numeric tail of the CV term (e.g., 1000514 for MS:1000514).                                                                                            |
 | `MURI`        | u8[]  | **Metadata Unit Reference**. Reference ID for the property's unit.                                                                                                                 |
 | `MUAN`        | u32[] | **Metadata Unit Accession**. Numeric tail of the unit's accession number.                                                                                                          |
@@ -126,7 +126,7 @@ Instead of storing metadata as objects, the format flattens all properties into 
 | `VLEN`        | u32[] | **String Length**. The length of the string in bytes. MUST NOT exceed 2³¹ − 1.                                                                                                     |
 | `VS`          | u8[]  | **String Pool**. Concatenated UTF-8 byte stream for all string values.                                                                                                             |
 
-**Note:** All accessions in `MAN` and `MUAN` (except `IONIC`) are numeric tails of PSI-MS CV terms (e.g., `MS:1000514` → `1000514`); human-readable names are resolved at runtime via a bundled `cv_table.json`.
+**Note:** All accessions in `MAN` and `MUAN` (except `ATTR`) are numeric tails of PSI-MS CV terms (e.g., `MS:1000514` → `1000514`); human-readable names are resolved at runtime via a bundled `cv_table.json`.
 
 Metadata is encoded as tightly-packed columns in the following exact order:
 
@@ -339,10 +339,9 @@ Decoders MUST verify all 14 conditions before trusting the parsed data:
 
 The encoder MUST write the trailer as the final operation after all sections and after patching the file header.
 
-# IONIC Accession Registry
+# Attributes Accession Registry
 
-The `IONIC` namespace (cv_ref code `4`) encodes format-internal attributes that
-have no PSI-MS equivalent. All accessions use the format `IONIC:<number>`.
+The `ATTR` (cv_ref code `4`) encodes format-internal attributes that have no PSI-MS equivalent. All accessions use the format `ATTR:<number>`.
 
 | Range                 | Purpose                    | Examples                                       |
 | :-------------------- | :------------------------- | :--------------------------------------------- |

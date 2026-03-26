@@ -1,12 +1,12 @@
 use crate::mzml::structs::CvParam;
 
-pub(crate) const CV_REF_ATTR: &str = "B000";
+pub(crate) const CV_REF_ATTR: &str = "ATTR";
 
 pub(crate) const CV_CODE_MS: u8 = 0;
 pub(crate) const CV_CODE_UO: u8 = 1;
 pub(crate) const CV_CODE_NCIT: u8 = 2;
 pub(crate) const CV_CODE_PEFF: u8 = 3;
-pub(crate) const CV_CODE_B000: u8 = 4;
+pub(crate) const CV_CODE_ATTR: u8 = 4;
 pub(crate) const CV_CODE_UNKNOWN: u8 = 255;
 
 #[inline]
@@ -16,7 +16,7 @@ pub(crate) fn cv_ref_code_from_str(cv_ref: Option<&str>) -> u8 {
         Some("UO") => CV_CODE_UO,
         Some("NCIT") => CV_CODE_NCIT,
         Some("PEFF") => CV_CODE_PEFF,
-        Some(CV_REF_ATTR) => CV_CODE_B000,
+        Some(CV_REF_ATTR) => CV_CODE_ATTR,
         _ => CV_CODE_UNKNOWN,
     }
 }
@@ -28,7 +28,7 @@ pub(crate) fn cv_ref_prefix_from_code(code: u8) -> Option<&'static str> {
         CV_CODE_UO => Some("UO"),
         CV_CODE_NCIT => Some("NCIT"),
         CV_CODE_PEFF => Some("PEFF"),
-        CV_CODE_B000 => Some(CV_REF_ATTR),
+        CV_CODE_ATTR => Some(CV_REF_ATTR),
         _ => None,
     }
 }
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn parse_accession_tail_roundtrip() {
         assert_eq!(parse_accession_tail(Some("MS:1000514")).raw(), 1_000_514);
-        assert_eq!(parse_accession_tail(Some("B000:9910001")).raw(), 9_910_001);
+        assert_eq!(parse_accession_tail(Some("ATTR:9910001")).raw(), 9_910_001);
         assert_eq!(parse_accession_tail(None).raw(), 0);
         assert_eq!(parse_accession_tail(Some("no-colon")).raw(), 0);
     }
@@ -372,7 +372,7 @@ mod tests {
             CV_CODE_UO,
             CV_CODE_NCIT,
             CV_CODE_PEFF,
-            CV_CODE_B000,
+            CV_CODE_ATTR,
         ] {
             let prefix = cv_ref_prefix_from_code(code).unwrap();
             assert_eq!(cv_ref_code_from_str(Some(prefix)), code);

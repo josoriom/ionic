@@ -293,7 +293,7 @@ mod tests {
             tag_id: TagId::ComponentSource,
             accession: Some({
                 use core::fmt::Write;
-                let mut s = String::from("IONIC:");
+                let mut s = String::from("ATTR:");
                 write!(&mut s, "{:07}", ACC_ATTR_ORDER.raw()).unwrap();
                 s
             }),

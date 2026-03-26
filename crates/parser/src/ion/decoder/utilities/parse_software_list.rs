@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-const EXCLUDED_ACCESSION_PREFIX: &str = "IONIC:";
+const EXCLUDED_ACCESSION_PREFIX: &str = "ATTR:";
 
 #[inline]
 pub(crate) fn parse_software_list<P: MetadataPolicy>(

@@ -1,6 +1,5 @@
-use std::{fs, path::PathBuf};
-
 use crate::ion::utilities::parse_header;
+use std::{fs, path::PathBuf};
 
 const PATH: &str = "data/ion/test.ion";
 
@@ -14,40 +13,31 @@ fn check_header() {
     let bytes = read_bytes(PATH);
     let header = parse_header(&bytes).expect("parse_header failed");
 
-    assert_eq!(header.file_signature, [66, 48, 48, 48]);
+    assert_eq!(header.file_signature, *b"START\0\0\0");
     assert_eq!(header.endianness_flag, 0);
-    assert_eq!(header.reserved, [0, 0, 0]);
-
     assert_eq!(header.spectrum_count, 2);
     assert_eq!(header.chrom_count, 2);
-
     assert_eq!(header.spec_meta_count, 71);
     assert_eq!(header.spec_meta_num_count, 34);
     assert_eq!(header.spec_meta_str_count, 3);
-
     assert_eq!(header.chrom_meta_count, 45);
     assert_eq!(header.chrom_meta_num_count, 15);
     assert_eq!(header.chrom_meta_str_count, 5);
-
     assert_eq!(header.global_meta_count, 70);
     assert_eq!(header.global_meta_num_count, 8);
     assert_eq!(header.global_meta_str_count, 26);
-
     assert_eq!(header.block_count_spect, 2);
     assert_eq!(header.block_count_chrom, 2);
-
     assert_eq!(header.compression_codec, 1);
     assert_eq!(header.compression_level, 22);
     assert_eq!(header.array_filter, 1);
-
     assert!(header.spect_array_count > 0);
     assert!(header.chrom_array_count > 0);
-
     assert_eq!(header.target_block_uncompressed_bytes, 64 * 1024 * 1024);
-
     assert!(header.spec_meta_uncompressed_bytes > 0);
     assert!(header.chrom_meta_uncompressed_bytes > 0);
     assert!(header.global_meta_uncompressed_bytes > 0);
+    assert_eq!(header.len_filter_index, header.spectrum_count * 48);
 
     for &off in &[
         header.off_spec_entries,
@@ -59,8 +49,9 @@ fn check_header() {
         header.off_global_meta,
         header.off_container_spect,
         header.off_container_chrom,
+        header.off_filter_index,
     ] {
-        assert!(off >= 512, "offset {off} must be >= 512");
+        assert!(off >= 1024, "offset {off} must be >= 1024");
         assert_eq!(off % 8, 0, "offset {off} must be 8-aligned");
     }
 
@@ -120,15 +111,11 @@ fn check_header() {
             .unwrap_or(u64::MAX)
             <= header.off_container_chrom
     );
-
-    assert!(header.len_container_spect >= (header.block_count_spect as u64) * 32);
-    assert!(header.len_container_chrom >= (header.block_count_chrom as u64) * 32);
+    assert!(header.len_container_spect >= header.block_count_spect * 32);
+    assert!(header.len_container_chrom >= header.block_count_chrom * 32);
 
     assert_eq!(&bytes[5..8], &[0u8; 3]);
-    assert_eq!(&bytes[212..216], &[0u8; 4]);
-    assert_eq!(bytes[227], 0);
-    assert_eq!(&bytes[228..232], &[0u8; 4]);
-    assert_eq!(&bytes[256..512], &[0u8; 256]);
+    assert_eq!(&bytes[336..1008], &[0u8; 672]);
 
     let len = bytes.len() as u64;
     for &off in &[
@@ -141,6 +128,7 @@ fn check_header() {
         header.off_global_meta,
         header.off_container_spect,
         header.off_container_chrom,
+        header.off_filter_index,
     ] {
         assert!(off < len, "offset {off} out of bounds (len={len})");
     }
