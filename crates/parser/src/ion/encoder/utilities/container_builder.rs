@@ -110,6 +110,7 @@ pub(crate) struct BlockDirEntry {
     pub(crate) payload_offset: u64,
     pub(crate) payload_size: u64,
     pub(crate) uncompressed_len_bytes: u64,
+    pub(crate) checksum: u32,
 }
 
 impl BlockDirEntry {
@@ -117,7 +118,8 @@ impl BlockDirEntry {
         buffer.extend_from_slice(&self.payload_offset.to_le_bytes());
         buffer.extend_from_slice(&self.payload_size.to_le_bytes());
         buffer.extend_from_slice(&self.uncompressed_len_bytes.to_le_bytes());
-        buffer.extend_from_slice(&[0u8; 8]);
+        buffer.extend_from_slice(&self.checksum.to_le_bytes());
+        buffer.extend_from_slice(&[0u8; 4]);
     }
 }
 
@@ -389,7 +391,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         let payload_offset = self.cumulative_payload_bytes;
         let uncompressed_byte_len = active_block.accumulated_data.len() as u64;
 
-        let written_byte_len =
+        let (written_byte_len, checksum) =
             self.compress_and_write_block_payload(&active_block.accumulated_data, stride)?;
 
         self.cumulative_payload_bytes += written_byte_len;
@@ -399,6 +401,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
                 payload_offset,
                 payload_size: written_byte_len,
                 uncompressed_len_bytes: uncompressed_byte_len,
+                checksum,
             },
         )
     }
@@ -407,11 +410,11 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         &mut self,
         block_data: &[u8],
         stride: Stride,
-    ) -> Result<u64, String> {
+    ) -> Result<(u64, u32), String> {
         match &mut self.compressor {
             CompressionMode::Raw => {
                 self.output.write_bytes(block_data)?;
-                Ok(block_data.len() as u64)
+                Ok((block_data.len() as u64, crc32fast::hash(block_data)))
             }
             CompressionMode::Compressed(compressor) => {
                 let shuffle_before_compress =
@@ -430,9 +433,10 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
                 };
 
                 compressor.compress(data_to_compress, &mut self.seal_scratch.compressed_bytes)?;
+                let checksum = crc32fast::hash(&self.seal_scratch.compressed_bytes);
                 self.output
                     .write_bytes(&self.seal_scratch.compressed_bytes)?;
-                Ok(self.seal_scratch.compressed_bytes.len() as u64)
+                Ok((self.seal_scratch.compressed_bytes.len() as u64, checksum))
             }
         }
     }
@@ -492,6 +496,7 @@ mod tests {
                     payload_offset: 10,
                     payload_size: 20,
                     uncompressed_len_bytes: 40,
+                    checksum: 0,
                 },
             )
             .unwrap();
@@ -511,6 +516,7 @@ mod tests {
             payload_offset: 1,
             payload_size: 2,
             uncompressed_len_bytes: 3,
+            checksum: 0,
         };
         let mut buffer = Vec::new();
         entry.write_to_buffer(&mut buffer);
@@ -523,6 +529,7 @@ mod tests {
             payload_offset: 0x0102030405060708,
             payload_size: 0,
             uncompressed_len_bytes: 0,
+            checksum: 0,
         };
         let mut buffer = Vec::new();
         entry.write_to_buffer(&mut buffer);
@@ -644,6 +651,7 @@ mod tests {
                     payload_offset: 100,
                     payload_size: 50,
                     uncompressed_len_bytes: 200,
+                    checksum: 0,
                 },
             )
             .unwrap();
