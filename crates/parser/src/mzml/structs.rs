@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ion::utilities::spectrum_source::SpectrumSource;
+use crate::ion::utilities::spectrum_source::{
+    SpectrumSource, as_f64_cow, extract_binary_pair, extract_ms_level, extract_rt_minutes,
+};
 
 /// <mzML>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -20,67 +22,38 @@ pub struct MzML {
 impl SpectrumSource for MzML {
     fn for_each_scan_in_range(
         &mut self,
-        rt_min: f64, // minutes
-        rt_max: f64, // minutes
+        rt_min: f64,
+        rt_max: f64,
         ms_level: u8,
         callback: &mut dyn FnMut(f64, &[f64], &[f64]),
     ) {
-        let spectra = match self.run.spectrum_list.as_ref() {
-            Some(sl) => sl.spectra.as_slice(),
-            None => return, // no spectra at all, nothing to do
+        let spectra = match &self.run.spectrum_list {
+            Some(sl) => &sl.spectra,
+            None => return,
         };
 
-        for (spectrum, record) in spectra.iter().zip(self.filter_record.iter()) {
-            // Filter by MS level (0 = give me everything)
-            if ms_level != 0 && record.ms_level != ms_level {
+        for spectrum in spectra {
+            if ms_level != 0 && extract_ms_level(spectrum) != Some(ms_level) {
                 continue;
             }
 
-            // filter_record stores RT in seconds, trait contract uses minutes
-            let rt_minutes = record.rt_seconds / 60.0;
-            if rt_minutes < rt_min || rt_minutes > rt_max {
+            let rt = match extract_rt_minutes(spectrum) {
+                Some(rt) if rt >= rt_min && rt <= rt_max => rt,
+                _ => continue,
+            };
+
+            let Some((mz_data, int_data)) = extract_binary_pair(spectrum) else {
                 continue;
+            };
+
+            let mz = as_f64_cow(mz_data);
+            let int = as_f64_cow(int_data);
+            let n = mz.len().min(int.len());
+            if n > 0 {
+                callback(rt, &mz[..n], &int[..n]);
             }
-
-            // Extract mz and intensity arrays
-            let bdal = match spectrum.binary_data_array_list.as_ref() {
-                Some(b) => b,
-                None => continue,
-            };
-
-            let mz = match find_array(bdal, "MS:1000514") {
-                Some(v) => v,
-                None => continue,
-            };
-
-            let intensity = match find_array(bdal, "MS:1000515") {
-                Some(v) => v,
-                None => continue,
-            };
-
-            callback(rt_minutes, &mz, &intensity);
         }
     }
-}
-
-pub(crate) fn find_array(bdal: &BinaryDataArrayList, accession: &str) -> Option<Vec<f64>> {
-    bdal.binary_data_arrays
-        .iter()
-        .find(|arr| {
-            arr.cv_params
-                .iter()
-                .any(|p| p.accession.as_deref() == Some(accession))
-        })?
-        .binary
-        .as_ref()
-        .map(|data| match data {
-            BinaryData::F64(v) => v.clone(),
-            BinaryData::F32(v) => v.iter().map(|&x| x as f64).collect(),
-            BinaryData::I32(v) => v.iter().map(|&x| x as f64).collect(),
-            BinaryData::I16(v) => v.iter().map(|&x| x as f64).collect(),
-            BinaryData::I64(v) => v.iter().map(|&x| x as f64).collect(),
-            BinaryData::F16(v) => v.iter().map(|&x| x as f64).collect(),
-        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
