@@ -4,4 +4,4 @@ pub mod ion;
 pub use ion::{decoder, encoder, utilities::Header};
 pub mod utilities;
 pub use ion::utilities::ion_reader::IonReader;
-pub use ion::utilities::spectrum_source::SpectrumSource;
+pub use ion::utilities::spectrum_source::{ScanMeta, SpectrumSource};

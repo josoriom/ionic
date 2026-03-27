@@ -1,9 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ion::utilities::spectrum_source::{
-    SpectrumSource, as_f64_cow, extract_binary_pair, extract_ms_level, extract_rt_minutes,
-};
-
 /// <mzML>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MzML {
@@ -17,43 +13,6 @@ pub struct MzML {
     pub scan_settings_list: Option<ScanSettingsList>,
     pub run: Run,
     pub filter_record: Vec<FilterRecord>,
-}
-
-impl SpectrumSource for MzML {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        callback: &mut dyn FnMut(f64, &[f64], &[f64]),
-    ) {
-        let spectra = match &self.run.spectrum_list {
-            Some(sl) => &sl.spectra,
-            None => return,
-        };
-
-        for spectrum in spectra {
-            if ms_level != 0 && extract_ms_level(spectrum) != Some(ms_level) {
-                continue;
-            }
-
-            let rt = match extract_rt_minutes(spectrum) {
-                Some(rt) if rt >= rt_min && rt <= rt_max => rt,
-                _ => continue,
-            };
-
-            let Some((mz_data, int_data)) = extract_binary_pair(spectrum) else {
-                continue;
-            };
-
-            let mz = as_f64_cow(mz_data);
-            let int = as_f64_cow(int_data);
-            let n = mz.len().min(int.len());
-            if n > 0 {
-                callback(rt, &mz[..n], &int[..n]);
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]

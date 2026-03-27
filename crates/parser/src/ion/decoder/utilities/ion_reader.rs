@@ -1,4 +1,5 @@
 use crate::ion::encoder::utilities::container_builder::FilterType;
+use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerView, DefaultProcessor},
     parse_header::{Header, parse_header},
@@ -119,7 +120,7 @@ impl<'a> SpectrumSource for IonReader<'a> {
         rt_min: f64,
         rt_max: f64,
         ms_level: u8,
-        callback: &mut dyn FnMut(f64, &[f64], &[f64]),
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
     ) {
         let rt_min_s = rt_min * 60.0;
         let rt_max_s = rt_max * 60.0;
@@ -173,7 +174,6 @@ impl<'a> SpectrumSource for IonReader<'a> {
             let (Some(mr), Some(ir)) = (mz_ref, int_ref) else {
                 continue;
             };
-
             if !decode_from_block(&mut self.container, &mut self.mz_buf, &mr) {
                 continue;
             }
@@ -182,9 +182,19 @@ impl<'a> SpectrumSource for IonReader<'a> {
             }
 
             let n = self.mz_buf.len().min(self.int_buf.len());
-            if n > 0 {
-                callback(rt_s / 60.0, &self.mz_buf[..n], &self.int_buf[..n]);
+            if n == 0 {
+                continue;
             }
+
+            let meta = ScanMeta {
+                ms_level: ms,
+                polarity: fs[33],
+                base_peak_mz: f64::from_le_bytes(fs[8..16].try_into().unwrap()),
+                base_peak_int: f64::from_le_bytes(fs[16..24].try_into().unwrap()),
+                total_ion_current: f64::from_le_bytes(fs[24..32].try_into().unwrap()),
+            };
+
+            callback(rt_s / 60.0, &meta, &self.mz_buf[..n], &self.int_buf[..n]);
         }
     }
 }
@@ -318,7 +328,7 @@ mod tests {
     fn for_each_scan_yields_matching_scans() {
         let mut reader = IonReader::open(BYTES).unwrap();
         let mut count = 0usize;
-        reader.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, mz, int| {
+        reader.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, _meta, mz, int| {
             assert!(rt.is_finite());
             assert!(!mz.is_empty());
             assert_eq!(mz.len(), int.len());
@@ -331,7 +341,7 @@ mod tests {
     fn for_each_scan_filters_by_ms_level() {
         let mut reader = IonReader::open(BYTES).unwrap();
         let mut count = 0usize;
-        reader.for_each_scan_in_range(0.0, f64::MAX, 1, &mut |_, _, _| {
+        reader.for_each_scan_in_range(0.0, f64::MAX, 1, &mut |_, _, _, _| {
             count += 1;
         });
         let expected = (0..reader.spectrum_count() as usize)

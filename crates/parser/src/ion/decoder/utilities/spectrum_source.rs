@@ -1,6 +1,5 @@
+use crate::mzml::structs::{BinaryData, MzML, Spectrum};
 use std::borrow::Cow;
-
-use crate::mzml::structs::{BinaryData, Spectrum};
 
 const ACC_SCAN_START_TIME: &str = "MS:1000016";
 const ACC_MS_LEVEL: &str = "MS:1000511";
@@ -10,14 +9,67 @@ const UO_MINUTE: &str = "UO:0000031";
 const UO_SECOND: &str = "UO:0000010";
 const UO_MILLISECOND: &str = "UO:0000028";
 
+#[derive(Debug, Clone, Copy)]
+pub struct ScanMeta {
+    pub ms_level: u8,
+    pub polarity: u8,
+    pub base_peak_mz: f64,
+    pub base_peak_int: f64,
+    pub total_ion_current: f64,
+}
+
 pub trait SpectrumSource {
     fn for_each_scan_in_range(
         &mut self,
         rt_min: f64,
         rt_max: f64,
         ms_level: u8,
-        callback: &mut dyn FnMut(f64, &[f64], &[f64]),
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
     );
+}
+
+impl SpectrumSource for MzML {
+    fn for_each_scan_in_range(
+        &mut self,
+        rt_min: f64,
+        rt_max: f64,
+        ms_level: u8,
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
+    ) {
+        let spectra = match self.run.spectrum_list.as_ref() {
+            Some(sl) => sl.spectra.as_slice(),
+            None => return,
+        };
+
+        for (spectrum, record) in spectra.iter().zip(self.filter_record.iter()) {
+            if ms_level != 0 && record.ms_level != ms_level {
+                continue;
+            }
+            let rt = record.rt_seconds / 60.0;
+            if rt < rt_min || rt > rt_max {
+                continue;
+            }
+            let Some((mz_data, int_data)) = extract_binary_pair(spectrum) else {
+                continue;
+            };
+            let mz = as_f64_cow(mz_data);
+            let intensity = as_f64_cow(int_data);
+            let n = mz.len().min(intensity.len());
+            if n == 0 {
+                continue;
+            }
+
+            let meta = ScanMeta {
+                ms_level: record.ms_level,
+                polarity: record.polarity,
+                base_peak_mz: record.base_peak_mz,
+                base_peak_int: record.base_peak_int,
+                total_ion_current: record.total_ion_current,
+            };
+
+            callback(rt, &meta, &mz[..n], &intensity[..n]);
+        }
+    }
 }
 
 pub(crate) fn extract_ms_level(spectrum: &Spectrum) -> Option<u8> {
@@ -38,7 +90,6 @@ pub(crate) fn extract_rt_minutes(spectrum: &Spectrum) -> Option<f64> {
             .as_ref()
             .and_then(|d| d.scan_list.as_ref())
     })?;
-
     for scan in &scan_list.scans {
         for p in &scan.cv_params {
             if p.accession.as_deref() == Some(ACC_SCAN_START_TIME) {
