@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::ion::utilities::spectrum_source::SpectrumSource;
+
 /// <mzML>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MzML {
@@ -13,6 +15,72 @@ pub struct MzML {
     pub scan_settings_list: Option<ScanSettingsList>,
     pub run: Run,
     pub filter_record: Vec<FilterRecord>,
+}
+
+impl SpectrumSource for MzML {
+    fn for_each_scan_in_range(
+        &mut self,
+        rt_min: f64, // minutes
+        rt_max: f64, // minutes
+        ms_level: u8,
+        callback: &mut dyn FnMut(f64, &[f64], &[f64]),
+    ) {
+        let spectra = match self.run.spectrum_list.as_ref() {
+            Some(sl) => sl.spectra.as_slice(),
+            None => return, // no spectra at all, nothing to do
+        };
+
+        for (spectrum, record) in spectra.iter().zip(self.filter_record.iter()) {
+            // Filter by MS level (0 = give me everything)
+            if ms_level != 0 && record.ms_level != ms_level {
+                continue;
+            }
+
+            // filter_record stores RT in seconds, trait contract uses minutes
+            let rt_minutes = record.rt_seconds / 60.0;
+            if rt_minutes < rt_min || rt_minutes > rt_max {
+                continue;
+            }
+
+            // Extract mz and intensity arrays
+            let bdal = match spectrum.binary_data_array_list.as_ref() {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let mz = match find_array(bdal, "MS:1000514") {
+                Some(v) => v,
+                None => continue,
+            };
+
+            let intensity = match find_array(bdal, "MS:1000515") {
+                Some(v) => v,
+                None => continue,
+            };
+
+            callback(rt_minutes, &mz, &intensity);
+        }
+    }
+}
+
+pub(crate) fn find_array(bdal: &BinaryDataArrayList, accession: &str) -> Option<Vec<f64>> {
+    bdal.binary_data_arrays
+        .iter()
+        .find(|arr| {
+            arr.cv_params
+                .iter()
+                .any(|p| p.accession.as_deref() == Some(accession))
+        })?
+        .binary
+        .as_ref()
+        .map(|data| match data {
+            BinaryData::F64(v) => v.clone(),
+            BinaryData::F32(v) => v.iter().map(|&x| x as f64).collect(),
+            BinaryData::I32(v) => v.iter().map(|&x| x as f64).collect(),
+            BinaryData::I16(v) => v.iter().map(|&x| x as f64).collect(),
+            BinaryData::I64(v) => v.iter().map(|&x| x as f64).collect(),
+            BinaryData::F16(v) => v.iter().map(|&x| x as f64).collect(),
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
