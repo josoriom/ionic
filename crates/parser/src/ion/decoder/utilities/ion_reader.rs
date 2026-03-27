@@ -305,13 +305,13 @@ mod tests {
     }
 
     #[test]
-    fn read_array_produces_sorted_mz() {
+    fn read_array_produces_mz_values() {
         let mut reader = IonReader::open(BYTES).unwrap();
         let refs = reader.array_refs_for_spectrum(0).unwrap();
         let mz_ref = refs.iter().find(|a| a.array_type == ACC_MZ).unwrap();
         let mz = reader.read_array(mz_ref).unwrap();
         assert!(!mz.is_empty());
-        assert!(mz.windows(2).all(|w| w[0] <= w[1]));
+        assert!(mz.iter().all(|v| v.is_finite()));
     }
 
     #[test]

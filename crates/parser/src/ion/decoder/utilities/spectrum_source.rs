@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::mzml::structs::{BinaryData, MzML, Spectrum};
+use crate::mzml::structs::{BinaryData, Spectrum};
 
 const ACC_SCAN_START_TIME: &str = "MS:1000016";
 const ACC_MS_LEVEL: &str = "MS:1000511";
