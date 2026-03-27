@@ -41,33 +41,61 @@ impl SpectrumSource for MzML {
             None => return,
         };
 
-        for (spectrum, record) in spectra.iter().zip(self.filter_record.iter()) {
-            if ms_level != 0 && record.ms_level != ms_level {
-                continue;
-            }
-            let rt = record.rt_seconds / 60.0;
-            if rt < rt_min || rt > rt_max {
-                continue;
-            }
+        let has_filter_records = self.filter_record.len() == spectra.len();
+
+        for (i, spectrum) in spectra.iter().enumerate() {
+            let (rt, meta) = if has_filter_records {
+                let r = &self.filter_record[i];
+                if ms_level != 0 && r.ms_level != ms_level {
+                    continue;
+                }
+                let rt = r.rt_seconds / 60.0;
+                if rt < rt_min || rt > rt_max {
+                    continue;
+                }
+                (
+                    rt,
+                    ScanMeta {
+                        ms_level: r.ms_level,
+                        polarity: r.polarity,
+                        base_peak_mz: r.base_peak_mz,
+                        base_peak_int: r.base_peak_int,
+                        total_ion_current: r.total_ion_current,
+                    },
+                )
+            } else {
+                let level = match extract_ms_level(spectrum) {
+                    Some(l) => l,
+                    None => continue,
+                };
+                if ms_level != 0 && level != ms_level {
+                    continue;
+                }
+                let rt = match extract_rt_minutes(spectrum) {
+                    Some(rt) if rt >= rt_min && rt <= rt_max => rt,
+                    _ => continue,
+                };
+                (
+                    rt,
+                    ScanMeta {
+                        ms_level: level,
+                        polarity: 0,
+                        base_peak_mz: f64::NAN,
+                        base_peak_int: f64::NAN,
+                        total_ion_current: f64::NAN,
+                    },
+                )
+            };
+
             let Some((mz_data, int_data)) = extract_binary_pair(spectrum) else {
                 continue;
             };
             let mz = as_f64_cow(mz_data);
             let intensity = as_f64_cow(int_data);
             let n = mz.len().min(intensity.len());
-            if n == 0 {
-                continue;
+            if n > 0 {
+                callback(rt, &meta, &mz[..n], &intensity[..n]);
             }
-
-            let meta = ScanMeta {
-                ms_level: record.ms_level,
-                polarity: record.polarity,
-                base_peak_mz: record.base_peak_mz,
-                base_peak_int: record.base_peak_int,
-                total_ion_current: record.total_ion_current,
-            };
-
-            callback(rt, &meta, &mz[..n], &intensity[..n]);
         }
     }
 }
