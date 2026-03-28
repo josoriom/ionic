@@ -14,6 +14,7 @@ pub struct ScanMeta {
     pub ms_level: u8,
     pub polarity: u8,
     pub base_peak_mz: f64,
+    pub selected_ion_mz: f64,
     pub base_peak_int: f64,
     pub total_ion_current: f64,
 }
@@ -59,6 +60,7 @@ impl SpectrumSource for MzML {
                         ms_level: r.ms_level,
                         polarity: r.polarity,
                         base_peak_mz: r.base_peak_mz,
+                        selected_ion_mz: r.selected_ion_mz,
                         base_peak_int: r.base_peak_int,
                         total_ion_current: r.total_ion_current,
                     },
@@ -81,6 +83,7 @@ impl SpectrumSource for MzML {
                         ms_level: level,
                         polarity: 0,
                         base_peak_mz: f64::NAN,
+                        selected_ion_mz: f64::NAN,
                         base_peak_int: f64::NAN,
                         total_ion_current: f64::NAN,
                     },

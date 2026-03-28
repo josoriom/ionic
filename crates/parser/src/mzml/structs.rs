@@ -19,6 +19,7 @@ pub struct MzML {
 pub struct FilterRecord {
     pub(crate) rt_seconds: f64,
     pub(crate) base_peak_mz: f64,
+    pub(crate) selected_ion_mz: f64,
     pub(crate) base_peak_int: f64,
     pub(crate) total_ion_current: f64,
     pub(crate) ms_level: u8,

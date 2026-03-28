@@ -1,4 +1,4 @@
-use crate::ion::utilities::parse_header;
+use crate::{encoder::encode::FILTER_INDEX_RECORD_SIZE, ion::utilities::parse_header};
 use std::{fs, path::PathBuf};
 
 const PATH: &str = "data/ion/test.ion";
@@ -37,7 +37,10 @@ fn check_header() {
     assert!(header.spec_meta_uncompressed_bytes > 0);
     assert!(header.chrom_meta_uncompressed_bytes > 0);
     assert!(header.global_meta_uncompressed_bytes > 0);
-    assert_eq!(header.len_filter_index, header.spectrum_count * 48);
+    assert_eq!(
+        header.len_filter_index,
+        header.spectrum_count * FILTER_INDEX_RECORD_SIZE as u64
+    );
 
     for &off in &[
         header.off_spec_entries,

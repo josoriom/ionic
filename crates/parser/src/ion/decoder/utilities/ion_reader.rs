@@ -1,3 +1,4 @@
+use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
 use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
@@ -9,7 +10,6 @@ use crate::mzml::structs::FilterRecord;
 
 const ACC_MZ: u32 = 1_000_514;
 const ACC_INT: u32 = 1_000_515;
-const FILTER_BYTES: usize = 48;
 const ENTRY_A_BYTES: usize = 16;
 const ENTRY_A1_BYTES: usize = 32;
 
@@ -65,18 +65,16 @@ impl<'a> IonReader<'a> {
     }
 
     pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
-        if index >= self.header.spectrum_count as usize {
-            return None;
-        }
-        let base = self.header.off_filter_index as usize + index * FILTER_BYTES;
-        let b = self.bytes.get(base..base + FILTER_BYTES)?;
+        let base = self.header.off_filter_index as usize + index * FILTER_INDEX_RECORD_SIZE;
+        let b = self.bytes.get(base..base + FILTER_INDEX_RECORD_SIZE)?;
         Some(FilterRecord {
             rt_seconds: f64::from_le_bytes(b[0..8].try_into().unwrap()),
             base_peak_mz: f64::from_le_bytes(b[8..16].try_into().unwrap()),
-            base_peak_int: f64::from_le_bytes(b[16..24].try_into().unwrap()),
-            total_ion_current: f64::from_le_bytes(b[24..32].try_into().unwrap()),
-            ms_level: b[32],
-            polarity: b[33],
+            selected_ion_mz: f64::from_le_bytes(b[16..24].try_into().unwrap()),
+            base_peak_int: f64::from_le_bytes(b[24..32].try_into().unwrap()),
+            total_ion_current: f64::from_le_bytes(b[32..40].try_into().unwrap()),
+            ms_level: b[40],
+            polarity: b[41],
         })
     }
 
@@ -130,8 +128,8 @@ impl<'a> SpectrumSource for IonReader<'a> {
         let aref_base = self.header.off_spec_arrayrefs as usize;
 
         for i in 0..count {
-            let fb = filter_base + i * FILTER_BYTES;
-            let Some(fs) = self.bytes.get(fb..fb + FILTER_BYTES) else {
+            let fb = filter_base + i * FILTER_INDEX_RECORD_SIZE;
+            let Some(fs) = self.bytes.get(fb..fb + FILTER_INDEX_RECORD_SIZE) else {
                 continue;
             };
 
@@ -140,7 +138,7 @@ impl<'a> SpectrumSource for IonReader<'a> {
                 continue;
             }
 
-            let ms = fs[32];
+            let ms = fs[40];
             if ms_level != 0 && ms != ms_level {
                 continue;
             }
@@ -188,10 +186,11 @@ impl<'a> SpectrumSource for IonReader<'a> {
 
             let meta = ScanMeta {
                 ms_level: ms,
-                polarity: fs[33],
+                polarity: fs[41],
                 base_peak_mz: f64::from_le_bytes(fs[8..16].try_into().unwrap()),
-                base_peak_int: f64::from_le_bytes(fs[16..24].try_into().unwrap()),
-                total_ion_current: f64::from_le_bytes(fs[24..32].try_into().unwrap()),
+                selected_ion_mz: f64::from_le_bytes(fs[16..24].try_into().unwrap()),
+                base_peak_int: f64::from_le_bytes(fs[24..32].try_into().unwrap()),
+                total_ion_current: f64::from_le_bytes(fs[32..40].try_into().unwrap()),
             };
 
             callback(rt_s / 60.0, &meta, &self.mz_buf[..n], &self.int_buf[..n]);

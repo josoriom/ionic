@@ -23,7 +23,7 @@ use crate::encoder::utilities::{
 pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
-pub const FILTER_INDEX_RECORD_SIZE: usize = 48;
+pub const FILTER_INDEX_RECORD_SIZE: usize = 128;
 
 const ARRAY_FILTER_NONE: u8 = 0;
 const ARRAY_FILTER_BYTE_SHUFFLE: u8 = 1;
@@ -43,6 +43,7 @@ const ACC_MS_LEVEL: u32 = 1_000_511;
 const ACC_POSITIVE_SCAN: u32 = 1_000_130;
 const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
 const ACC_UNIT_MINUTE: u32 = 31;
+const ACC_SELECTED_ION_MZ: u32 = 1_000_744;
 
 const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
@@ -59,6 +60,7 @@ impl FilterRecord {
         Self {
             rt_seconds: f64::NAN,
             base_peak_mz: f64::NAN,
+            selected_ion_mz: f64::NAN,
             base_peak_int: f64::NAN,
             total_ion_current: f64::NAN,
             ms_level: 0,
@@ -69,11 +71,12 @@ impl FilterRecord {
     fn write_into(&self, buf: &mut Vec<u8>) {
         buf.extend_from_slice(&self.rt_seconds.to_le_bytes());
         buf.extend_from_slice(&self.base_peak_mz.to_le_bytes());
+        buf.extend_from_slice(&self.selected_ion_mz.to_le_bytes());
         buf.extend_from_slice(&self.base_peak_int.to_le_bytes());
         buf.extend_from_slice(&self.total_ion_current.to_le_bytes());
         buf.push(self.ms_level);
         buf.push(self.polarity);
-        buf.extend_from_slice(&[0u8; 14]);
+        buf.extend_from_slice(&[0u8; 86]);
     }
 }
 
@@ -92,6 +95,25 @@ fn extract_filter_record(spectrum: &Spectrum) -> FilterRecord {
                         } else {
                             val
                         };
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(pl) = &spectrum.precursor_list {
+        if let Some(precursor) = pl.precursors.first() {
+            if let Some(sil) = &precursor.selected_ion_list {
+                if let Some(si) = sil.selected_ions.first() {
+                    for cv in &si.cv_params {
+                        let tail = parse_accession_tail_raw(cv.accession.as_deref());
+                        if tail == ACC_SELECTED_ION_MZ {
+                            if let Some(val) =
+                                cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
+                            {
+                                record.selected_ion_mz = val;
+                            }
+                        }
                     }
                 }
             }
@@ -867,12 +889,13 @@ mod tests {
     fn filter_index_unknown_record_is_all_nan_and_zero() {
         let mut buf = Vec::new();
         FilterRecord::unknown().write_into(&mut buf);
-        for i in (0..32).step_by(8) {
+        // Five f64 fields: rt_seconds, base_peak_mz, selected_ion_mz, base_peak_int, total_ion_current
+        for i in (0..40).step_by(8) {
             let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
             assert!(v.is_nan());
         }
-        assert_eq!(buf[32], 0);
-        assert_eq!(buf[33], 0);
+        assert_eq!(buf[40], 0); // ms_level
+        assert_eq!(buf[41], 0); // polarity
     }
 
     #[test]
