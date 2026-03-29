@@ -69,14 +69,16 @@ pub fn read_filter_index(bytes: &[u8], header: &Header) -> Result<Vec<FilterReco
 
         let rt_seconds = f64::from_le_bytes(rec[0..8].try_into().unwrap());
         let base_peak_mz = f64::from_le_bytes(rec[8..16].try_into().unwrap());
-        let base_peak_int = f64::from_le_bytes(rec[16..24].try_into().unwrap());
-        let total_ion_current = f64::from_le_bytes(rec[24..32].try_into().unwrap());
-        let ms_level = rec[32];
-        let polarity = rec[33];
+        let selected_ion_mz = f64::from_le_bytes(rec[16..24].try_into().unwrap());
+        let base_peak_int = f64::from_le_bytes(rec[24..32].try_into().unwrap());
+        let total_ion_current = f64::from_le_bytes(rec[32..40].try_into().unwrap());
+        let ms_level = rec[40];
+        let polarity = rec[41];
 
         records.push(FilterRecord {
             rt_seconds,
             base_peak_mz,
+            selected_ion_mz,
             base_peak_int,
             total_ion_current,
             ms_level,

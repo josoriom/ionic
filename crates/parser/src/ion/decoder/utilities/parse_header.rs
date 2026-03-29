@@ -394,9 +394,9 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
 
     if h.len_filter_index != h.spectrum_count * FILTER_INDEX_RECORD_SIZE as u64 {
         failures.push(format!(
-            "condition 11: len_filter_index ({}) != spectrum_count × 48 ({})",
+            "condition 11: len_filter_index ({}) != spectrum_count × 128 ({})",
             h.len_filter_index,
-            h.spectrum_count * 48
+            h.spectrum_count * 128
         ));
     }
 

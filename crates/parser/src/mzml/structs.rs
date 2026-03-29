@@ -17,12 +17,13 @@ pub struct MzML {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
 pub struct FilterRecord {
-    pub(crate) rt_seconds: f64,
-    pub(crate) base_peak_mz: f64,
-    pub(crate) base_peak_int: f64,
-    pub(crate) total_ion_current: f64,
-    pub(crate) ms_level: u8,
-    pub(crate) polarity: u8,
+    pub rt_seconds: f64,
+    pub base_peak_mz: f64,
+    pub selected_ion_mz: f64,
+    pub base_peak_int: f64,
+    pub total_ion_current: f64,
+    pub ms_level: u8,
+    pub polarity: u8,
 }
 
 /// <cvList>

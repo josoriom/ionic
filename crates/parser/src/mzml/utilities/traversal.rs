@@ -1,6 +1,6 @@
 use crate::mzml::structs::*;
 
-#[allow(dead_code)] // New feature!
+#[allow(dead_code)]
 pub enum ParamEvent {
     Cv(CvParam),
     User(UserParam),

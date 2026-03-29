@@ -101,7 +101,6 @@ pub(crate) fn parse_accession_tail(accession: Option<&str>) -> AccessionTail {
     AccessionTail::from_raw(if saw { v } else { 0 })
 }
 
-// String-valued attributes
 pub(crate) const ACC_ATTR_ID: AccessionTail = AccessionTail(9_910_001);
 pub(crate) const ACC_ATTR_REF: AccessionTail = AccessionTail(9_910_002);
 pub(crate) const ACC_ATTR_NAME: AccessionTail = AccessionTail(9_910_003);
@@ -112,33 +111,27 @@ pub(crate) const ACC_ATTR_CV_VERSION: AccessionTail = AccessionTail(9_900_003);
 pub(crate) const ACC_ATTR_CV_URI: AccessionTail = AccessionTail(9_900_004);
 pub(crate) const ACC_ATTR_LABEL: AccessionTail = AccessionTail(9_910_020);
 
-// Run / section references
 pub(crate) const ACC_ATTR_START_TIME_STAMP: AccessionTail = AccessionTail(9_910_005);
 pub(crate) const ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF: AccessionTail =
     AccessionTail(9_910_006);
 pub(crate) const ACC_ATTR_DEFAULT_SOURCE_FILE_REF: AccessionTail = AccessionTail(9_910_007);
 pub(crate) const ACC_ATTR_SAMPLE_REF: AccessionTail = AccessionTail(9_910_008);
 
-// Data processing / source file
 pub(crate) const ACC_ATTR_DEFAULT_DATA_PROCESSING_REF: AccessionTail = AccessionTail(9_910_009);
 pub(crate) const ACC_ATTR_DATA_PROCESSING_REF: AccessionTail = AccessionTail(9_910_010);
 pub(crate) const ACC_ATTR_SOURCE_FILE_REF: AccessionTail = AccessionTail(9_910_011);
 
-// Spectrum identity
 pub(crate) const ACC_ATTR_NATIVE_ID: AccessionTail = AccessionTail(9_910_012);
 pub(crate) const ACC_ATTR_SPOT_ID: AccessionTail = AccessionTail(9_910_013);
 pub(crate) const ACC_ATTR_EXTERNAL_SPECTRUM_ID: AccessionTail = AccessionTail(9_910_014);
 pub(crate) const ACC_ATTR_SPECTRUM_REF: AccessionTail = AccessionTail(9_910_015);
 
-// Instrument / scan settings
 pub(crate) const ACC_ATTR_SCAN_SETTINGS_REF: AccessionTail = AccessionTail(9_910_016);
 pub(crate) const ACC_ATTR_INSTRUMENT_CONFIGURATION_REF: AccessionTail = AccessionTail(9_910_017);
 
-// Software
 pub(crate) const ACC_ATTR_SOFTWARE_REF: AccessionTail = AccessionTail(9_910_018);
 pub(crate) const ACC_ATTR_VERSION: AccessionTail = AccessionTail(9_910_019);
 
-// Numeric-valued
 pub(crate) const ACC_ATTR_COUNT: AccessionTail = AccessionTail(9_910_100);
 pub(crate) const ACC_ATTR_ORDER: AccessionTail = AccessionTail(9_910_101);
 pub(crate) const ACC_ATTR_INDEX: AccessionTail = AccessionTail(9_910_102);
