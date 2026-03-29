@@ -20,7 +20,7 @@ use crate::ion::utilities::parse_header::{
 
 #[derive(Default)]
 pub(crate) struct FileHeader {
-    // file_signature: "START\0\0\0" at 0..8
+    // "START\0\0\0" at 0..8
     // endianness_flag: 0 at 8
     // format_version: 1 at 9..11
     pub(crate) compression_codec: u8,
@@ -79,7 +79,7 @@ pub(crate) struct FileHeader {
     // File size
     pub(crate) total_file_size: u64,
 
-    // Integrity — written last
+    // crc32
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
     pub(crate) global_meta_crc32: u32,
@@ -88,7 +88,6 @@ pub(crate) struct FileHeader {
 
 impl FileHeader {
     pub(crate) fn write_into(&self, buf: &mut [u8]) {
-        // Static identity fields
         buf[0..8].copy_from_slice(b"START\0\0\0");
         buf[8] = 0u8; // endianness_flag: little-endian
         patch_u16_at(buf, HEADER_FORMAT_VERSION, 1u16);
@@ -210,7 +209,7 @@ impl FileHeader {
         // File size
         patch_u64_at(buf, HEADER_TOTAL_FILE_SIZE, self.total_file_size);
 
-        // Integrity seals
+        // crc32
         patch_u32_at(buf, HEADER_SPEC_META_CRC32, self.spec_meta_crc32);
         patch_u32_at(buf, HEADER_CHROM_META_CRC32, self.chrom_meta_crc32);
         patch_u32_at(buf, HEADER_GLOBAL_META_CRC32, self.global_meta_crc32);

@@ -889,13 +889,12 @@ mod tests {
     fn filter_index_unknown_record_is_all_nan_and_zero() {
         let mut buf = Vec::new();
         FilterRecord::unknown().write_into(&mut buf);
-        // Five f64 fields: rt_seconds, base_peak_mz, selected_ion_mz, base_peak_int, total_ion_current
         for i in (0..40).step_by(8) {
             let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
             assert!(v.is_nan());
         }
-        assert_eq!(buf[40], 0); // ms_level
-        assert_eq!(buf[41], 0); // polarity
+        assert_eq!(buf[40], 0);
+        assert_eq!(buf[41], 0);
     }
 
     #[test]
