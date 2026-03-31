@@ -42,54 +42,26 @@ impl SpectrumSource for MzML {
             None => return,
         };
 
-        let has_filter_records = self.filter_record.len() == spectra.len();
-
-        for (i, spectrum) in spectra.iter().enumerate() {
-            let (rt, meta) = if has_filter_records {
-                let r = &self.filter_record[i];
-                if ms_level != 0 && r.ms_level != ms_level {
-                    continue;
-                }
-                let rt = r.rt_seconds / 60.0;
-                if rt < rt_min || rt > rt_max {
-                    continue;
-                }
-                (
-                    rt,
-                    ScanMeta {
-                        ms_level: r.ms_level,
-                        polarity: r.polarity,
-                        base_peak_mz: r.base_peak_mz,
-                        selected_ion_mz: r.selected_ion_mz,
-                        base_peak_int: r.base_peak_int,
-                        total_ion_current: r.total_ion_current,
-                    },
-                )
-            } else {
-                let level = match extract_ms_level(spectrum) {
-                    Some(l) => l,
-                    None => continue,
-                };
-                if ms_level != 0 && level != ms_level {
-                    continue;
-                }
-                let rt = match extract_rt_minutes(spectrum) {
-                    Some(rt) if rt >= rt_min && rt <= rt_max => rt,
-                    _ => continue,
-                };
-                (
-                    rt,
-                    ScanMeta {
-                        ms_level: level,
-                        polarity: 0,
-                        base_peak_mz: f64::NAN,
-                        selected_ion_mz: f64::NAN,
-                        base_peak_int: f64::NAN,
-                        total_ion_current: f64::NAN,
-                    },
-                )
+        for spectrum in spectra.iter() {
+            let level = match extract_ms_level(spectrum) {
+                Some(l) => l,
+                None => continue,
             };
-
+            if ms_level != 0 && level != ms_level {
+                continue;
+            }
+            let rt = match extract_rt_minutes(spectrum) {
+                Some(rt) if rt >= rt_min && rt <= rt_max => rt,
+                _ => continue,
+            };
+            let meta = ScanMeta {
+                ms_level: level,
+                polarity: 0,
+                base_peak_mz: f64::NAN,
+                selected_ion_mz: f64::NAN,
+                base_peak_int: f64::NAN,
+                total_ion_current: f64::NAN,
+            };
             let Some((mz_data, int_data)) = extract_binary_pair(spectrum) else {
                 continue;
             };

@@ -330,7 +330,6 @@ impl<'a> Decoder<'a> {
             parse_chromatogram_list(&chrom_refs, &ChildrenLookup::new(&chrom_meta), &policy);
 
         let source_file_ref_list = parse_run_source_file_refs(&owner_rows, &global_lookup, run_id);
-        let filter_record = self.filter_records()?;
 
         Ok(MzML {
             cv_list: parse_cv_list(&meta_refs, &global_lookup),
@@ -362,7 +361,6 @@ impl<'a> Decoder<'a> {
                 chromatogram_list,
                 ..Default::default()
             },
-            filter_record,
         })
     }
 
@@ -437,6 +435,103 @@ impl<'a> Decoder<'a> {
             bdal.count = Some(bdal.binary_data_arrays.len());
         }
         Ok(())
+    }
+}
+
+pub struct Ion<'a> {
+    pub cv_list: Option<CvList>,
+    pub file_description: Option<FileDescription>,
+    pub referenceable_param_group_list: Option<ReferenceableParamGroupList>,
+    pub sample_list: Option<SampleList>,
+    pub instrument_list: Option<InstrumentList>,
+    pub software_list: Option<SoftwareList>,
+    pub data_processing_list: Option<DataProcessingList>,
+    pub scan_settings_list: Option<ScanSettingsList>,
+    pub run: Run,
+    decoder: Decoder<'a>,
+}
+
+impl<'a> Ion<'a> {
+    pub fn open(bytes: &'a [u8]) -> Result<Self, String> {
+        Self::open_with_config(bytes, DecoderConfig::default())
+    }
+
+    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> Result<Self, String> {
+        let decoder = Decoder::open_with_config(bytes, config)?;
+        let mzml = decoder.to_mzml_metadata_only()?;
+        Ok(Self {
+            cv_list: mzml.cv_list,
+            file_description: mzml.file_description,
+            referenceable_param_group_list: mzml.referenceable_param_group_list,
+            sample_list: mzml.sample_list,
+            instrument_list: mzml.instrument_list,
+            software_list: mzml.software_list,
+            data_processing_list: mzml.data_processing_list,
+            scan_settings_list: mzml.scan_settings_list,
+            run: mzml.run,
+            decoder,
+        })
+    }
+
+    #[inline]
+    pub fn spectrum_count(&self) -> u64 {
+        self.decoder.spectrum_count()
+    }
+
+    #[inline]
+    pub fn chromatogram_count(&self) -> u64 {
+        self.decoder.chromatogram_count()
+    }
+
+    #[inline]
+    pub fn header(&self) -> &Header {
+        self.decoder.header()
+    }
+
+    #[inline]
+    pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
+        self.decoder.filter_record(index)
+    }
+
+    pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
+        self.decoder.filter_records()
+    }
+
+    pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
+        self.decoder.spectrum_array_refs(index)
+    }
+
+    pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
+        self.decoder.chromatogram_array_refs(index)
+    }
+
+    pub fn read_spectrum_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
+        self.decoder.read_spectrum_array(aref)
+    }
+
+    pub fn read_chromatogram_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
+        self.decoder.read_chromatogram_array(aref)
+    }
+
+    pub fn to_mzml(&mut self) -> Result<MzML, String> {
+        self.decoder.to_mzml()
+    }
+
+    pub fn to_mzml_metadata_only(&self) -> Result<MzML, String> {
+        self.decoder.to_mzml_metadata_only()
+    }
+}
+
+impl<'a> SpectrumSource for Ion<'a> {
+    fn for_each_scan_in_range(
+        &mut self,
+        rt_min: f64,
+        rt_max: f64,
+        ms_level: u8,
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
+    ) {
+        self.decoder
+            .for_each_scan_in_range(rt_min, rt_max, ms_level, callback);
     }
 }
 
@@ -849,21 +944,6 @@ mod tests {
         );
     }
 
-    #[allow(deprecated)]
-    #[test]
-    fn to_mzml_filter_records_match_count() {
-        let mut d = Decoder::open(BYTES).unwrap();
-        let mzml = d.to_mzml().unwrap();
-        assert_eq!(
-            mzml.filter_record.len(),
-            mzml.run
-                .spectrum_list
-                .as_ref()
-                .map(|sl| sl.spectra.len())
-                .unwrap_or(0)
-        );
-    }
-
     #[test]
     fn global_metadata_returns_entries() {
         let d = Decoder::open(BYTES).unwrap();
@@ -912,5 +992,51 @@ mod tests {
         assert_eq!(dtype_stride(4), 2);
         assert_eq!(dtype_stride(5), 4);
         assert_eq!(dtype_stride(6), 8);
+    }
+
+    #[test]
+    fn ion_open_has_metadata() {
+        let ion = Ion::open(BYTES).unwrap();
+        assert!(ion.spectrum_count() > 0);
+        assert!(ion.run.spectrum_list.is_some());
+        assert!(ion.software_list.is_some() || ion.instrument_list.is_some());
+    }
+
+    #[test]
+    fn ion_for_each_scan_yields_scans() {
+        let mut ion = Ion::open(BYTES).unwrap();
+        let mut count = 0usize;
+        ion.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, _, mz, int| {
+            assert!(rt.is_finite());
+            assert!(!mz.is_empty());
+            assert_eq!(mz.len(), int.len());
+            count += 1;
+        });
+        assert_eq!(count, ion.spectrum_count() as usize);
+    }
+
+    #[test]
+    fn ion_filter_record_matches_decoder() {
+        let ion = Ion::open(BYTES).unwrap();
+        let r = ion.filter_record(0).unwrap();
+        assert!(r.rt_seconds.is_finite());
+        assert!(r.ms_level >= 1);
+    }
+
+    #[test]
+    fn ion_to_mzml_has_binaries() {
+        let mut ion = Ion::open(BYTES).unwrap();
+        let mzml = ion.to_mzml().unwrap();
+        let sl = mzml.run.spectrum_list.as_ref().unwrap();
+        assert!(!sl.spectra.is_empty());
+        assert!(
+            sl.spectra[0]
+                .binary_data_array_list
+                .as_ref()
+                .unwrap()
+                .binary_data_arrays
+                .iter()
+                .any(|b| b.binary.is_some())
+        );
     }
 }

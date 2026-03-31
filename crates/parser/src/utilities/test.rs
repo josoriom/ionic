@@ -1,9 +1,5 @@
 use core::str::FromStr;
-use std::{
-    fs,
-    path::PathBuf,
-    sync::{Mutex, OnceLock},
-};
+use std::{fs, path::PathBuf, sync::OnceLock};
 
 use crate::{
     ion::decoder::decode::Decoder,
@@ -30,13 +26,6 @@ pub(crate) fn mzml(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML 
         let bytes = load_mzml_bytes(path);
         parse_mzml(&bytes).unwrap_or_else(|e| panic!("parse_mzml failed: {e}"))
     })
-}
-
-pub(crate) struct ParsedFile {
-    #[allow(dead_code)]
-    pub meta: MzML,
-    #[allow(dead_code)]
-    pub decoder: Mutex<Decoder<'static>>,
 }
 
 #[allow(dead_code)]
