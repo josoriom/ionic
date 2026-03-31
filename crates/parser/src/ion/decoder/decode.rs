@@ -458,19 +458,32 @@ impl<'a> Ion<'a> {
 
     pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> Result<Self, String> {
         let decoder = Decoder::open_with_config(bytes, config)?;
-        let mzml = decoder.to_mzml_metadata_only()?;
         Ok(Self {
-            cv_list: mzml.cv_list,
-            file_description: mzml.file_description,
-            referenceable_param_group_list: mzml.referenceable_param_group_list,
-            sample_list: mzml.sample_list,
-            instrument_list: mzml.instrument_list,
-            software_list: mzml.software_list,
-            data_processing_list: mzml.data_processing_list,
-            scan_settings_list: mzml.scan_settings_list,
-            run: mzml.run,
+            cv_list: None,
+            file_description: None,
+            referenceable_param_group_list: None,
+            sample_list: None,
+            instrument_list: None,
+            software_list: None,
+            data_processing_list: None,
+            scan_settings_list: None,
+            run: Run::default(),
             decoder,
         })
+    }
+
+    pub fn load_metadata(&mut self) -> Result<(), String> {
+        let mzml = self.decoder.to_mzml_metadata_only()?;
+        self.cv_list = mzml.cv_list;
+        self.file_description = mzml.file_description;
+        self.referenceable_param_group_list = mzml.referenceable_param_group_list;
+        self.sample_list = mzml.sample_list;
+        self.instrument_list = mzml.instrument_list;
+        self.software_list = mzml.software_list;
+        self.data_processing_list = mzml.data_processing_list;
+        self.scan_settings_list = mzml.scan_settings_list;
+        self.run = mzml.run;
+        Ok(())
     }
 
     #[inline]
@@ -996,7 +1009,8 @@ mod tests {
 
     #[test]
     fn ion_open_has_metadata() {
-        let ion = Ion::open(BYTES).unwrap();
+        let mut ion = Ion::open(BYTES).unwrap();
+        ion.load_metadata().unwrap();
         assert!(ion.spectrum_count() > 0);
         assert!(ion.run.spectrum_list.is_some());
         assert!(ion.software_list.is_some() || ion.instrument_list.is_some());
