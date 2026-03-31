@@ -8,6 +8,27 @@ use crate::ion::utilities::{
 };
 use crate::mzml::structs::FilterRecord;
 
+use crate::{
+    decoder::decode::{Metadatum, slice_at},
+    ion::{
+        attr_meta::{
+            ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
+            ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
+            ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
+        },
+        utilities::{
+            children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
+            common::get_attr_text,
+            parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
+            parse_data_processing_list, parse_file_description,
+            parse_global_metadata::parse_global_metadata,
+            parse_instrument_list, parse_metadata, parse_referenceable_param_group_list,
+            parse_sample_list, parse_scan_settings_list, parse_software_list, parse_spectrum_list,
+        },
+    },
+    mzml::{schema::TagId, structs::*},
+};
+
 const ACC_MZ: u32 = 1_000_514;
 const ACC_INT: u32 = 1_000_515;
 const ENTRY_A_BYTES: usize = 16;
@@ -25,7 +46,8 @@ pub struct ArrayRef {
 pub struct IonReader<'a> {
     bytes: &'a [u8],
     header: Header,
-    container: ContainerView<'a, DefaultProcessor>,
+    spec_container: ContainerView<'a, DefaultProcessor>,
+    chrom_container: Option<ContainerView<'a, DefaultProcessor>>,
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
 }
@@ -35,28 +57,53 @@ impl<'a> IonReader<'a> {
         let header = parse_header(bytes)?;
         let filter = FilterType::try_from(header.array_filter).unwrap_or(FilterType::None);
 
-        let off = header.off_container_spect as usize;
-        let len = header.len_container_spect as usize;
-        let container_bytes = bytes
-            .get(off..off + len)
-            .ok_or("spectrum container out of bounds")?;
+        let spec_container = {
+            let off = header.off_container_spect as usize;
+            let len = header.len_container_spect as usize;
+            let container_bytes = bytes
+                .get(off..off + len)
+                .ok_or("spectrum container out of bounds")?;
+            ContainerView::new(
+                container_bytes,
+                header.block_count_spect,
+                header.compression_level,
+                filter,
+                "spec",
+                DefaultProcessor,
+            )?
+        };
 
-        let container = ContainerView::new(
-            container_bytes,
-            header.block_count_spect,
-            header.compression_level,
-            filter,
-            "spec",
-            DefaultProcessor,
-        )?;
+        let chrom_container = if header.block_count_chrom > 0 && header.len_container_chrom > 0 {
+            let off = header.off_container_chrom as usize;
+            let len = header.len_container_chrom as usize;
+            let container_bytes = bytes
+                .get(off..off + len)
+                .ok_or("chrom container out of bounds")?;
+            Some(ContainerView::new(
+                container_bytes,
+                header.block_count_chrom,
+                header.compression_level,
+                filter,
+                "chrom",
+                DefaultProcessor,
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             bytes,
             header,
-            container,
+            spec_container,
+            chrom_container,
             mz_buf: Vec::new(),
             int_buf: Vec::new(),
         })
+    }
+
+    #[inline]
+    pub fn header(&self) -> &Header {
+        &self.header
     }
 
     #[inline]
@@ -64,51 +111,299 @@ impl<'a> IonReader<'a> {
         self.header.spectrum_count
     }
 
+    #[inline]
+    pub fn chromatogram_count(&self) -> u64 {
+        self.header.chrom_count
+    }
+
     pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
         let base = self.header.off_filter_index as usize + index * FILTER_INDEX_RECORD_SIZE;
         let b = self.bytes.get(base..base + FILTER_INDEX_RECORD_SIZE)?;
-        Some(FilterRecord {
-            rt_seconds: f64::from_le_bytes(b[0..8].try_into().unwrap()),
-            base_peak_mz: f64::from_le_bytes(b[8..16].try_into().unwrap()),
-            selected_ion_mz: f64::from_le_bytes(b[16..24].try_into().unwrap()),
-            base_peak_int: f64::from_le_bytes(b[24..32].try_into().unwrap()),
-            total_ion_current: f64::from_le_bytes(b[32..40].try_into().unwrap()),
-            ms_level: b[40],
-            polarity: b[41],
-        })
+        Some(parse_filter_record(b))
     }
 
-    pub fn array_refs_for_spectrum(&self, index: usize) -> Option<Vec<ArrayRef>> {
+    pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
+        let off = self.header.off_filter_index as usize;
+        let len = self.header.len_filter_index as usize;
+        let count = self.header.spectrum_count as usize;
+
+        if len != count * FILTER_INDEX_RECORD_SIZE {
+            return Err(format!(
+                "filter index: len_filter_index={len} != spectrum_count={count} × {FILTER_INDEX_RECORD_SIZE}"
+            ));
+        }
+
+        let section = self
+            .bytes
+            .get(off..off + len)
+            .ok_or_else(|| "filter index: section out of bounds".to_string())?;
+
+        let mut records = Vec::with_capacity(count);
+        for i in 0..count {
+            let base = i * FILTER_INDEX_RECORD_SIZE;
+            records.push(parse_filter_record(
+                &section[base..base + FILTER_INDEX_RECORD_SIZE],
+            ));
+        }
+        Ok(records)
+    }
+
+    pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
         if index >= self.header.spectrum_count as usize {
             return None;
         }
-        let ea = self.header.off_spec_entries as usize + index * ENTRY_A_BYTES;
-        let entry = self.bytes.get(ea..ea + ENTRY_A_BYTES)?;
-        let ref_start = u64::from_le_bytes(entry[0..8].try_into().unwrap()) as usize;
-        let ref_count = u64::from_le_bytes(entry[8..16].try_into().unwrap()) as usize;
-        let aref_base = self.header.off_spec_arrayrefs as usize;
-
-        let mut refs = Vec::with_capacity(ref_count);
-        for j in 0..ref_count {
-            let ab = aref_base + (ref_start + j) * ENTRY_A1_BYTES;
-            let b = self.bytes.get(ab..ab + ENTRY_A1_BYTES)?;
-            refs.push(parse_array_ref(b));
-        }
-        Some(refs)
+        read_array_refs_at(
+            self.bytes,
+            self.header.off_spec_entries as usize,
+            self.header.off_spec_arrayrefs as usize,
+            index,
+        )
     }
 
-    pub fn read_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
+    pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
+        if index >= self.header.chrom_count as usize {
+            return None;
+        }
+        read_array_refs_at(
+            self.bytes,
+            self.header.off_chrom_entries as usize,
+            self.header.off_chrom_arrayrefs as usize,
+            index,
+        )
+    }
+
+    pub fn read_spectrum_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
         let stride = dtype_stride(aref.dtype);
-        let raw = self.container.get_item_from_block(
+        let raw = self.spec_container.get_item_from_block(
             aref.block_id,
             aref.element_offset,
             aref.element_count,
             stride,
-            "read_array",
+            "read_spectrum_array",
         )?;
         let mut buf = Vec::new();
         decode_into(&mut buf, raw, aref.dtype);
         Ok(buf)
+    }
+
+    pub fn read_chromatogram_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
+        let container = self
+            .chrom_container
+            .as_mut()
+            .ok_or_else(|| "no chromatogram container".to_string())?;
+        let stride = dtype_stride(aref.dtype);
+        let raw = container.get_item_from_block(
+            aref.block_id,
+            aref.element_offset,
+            aref.element_count,
+            stride,
+            "read_chromatogram_array",
+        )?;
+        let mut buf = Vec::new();
+        decode_into(&mut buf, raw, aref.dtype);
+        Ok(buf)
+    }
+
+    pub fn global_metadata(&self) -> Result<Vec<Metadatum>, String> {
+        let s = slice_at(
+            self.bytes,
+            self.header.off_global_meta,
+            self.header.len_global_meta,
+            "global",
+        )?;
+        parse_global_metadata(
+            s,
+            0,
+            self.header.global_meta_count,
+            self.header.global_meta_num_count,
+            self.header.global_meta_str_count,
+            self.header.compression_codec,
+            self.header.global_meta_uncompressed_bytes,
+        )
+    }
+
+    pub fn spectrum_metadata(&self) -> Result<Vec<Metadatum>, String> {
+        let s = slice_at(
+            self.bytes,
+            self.header.off_spec_meta,
+            self.header.len_spec_meta,
+            "spec_meta",
+        )?;
+        parse_metadata(
+            s,
+            self.header.spectrum_count,
+            self.header.spec_meta_count,
+            self.header.spec_meta_num_count,
+            self.header.spec_meta_str_count,
+            self.header.compression_codec,
+            self.header.spec_meta_uncompressed_bytes as usize,
+        )
+    }
+
+    pub fn chromatogram_metadata(&self) -> Result<Vec<Metadatum>, String> {
+        let s = slice_at(
+            self.bytes,
+            self.header.off_chrom_meta,
+            self.header.len_chrom_meta,
+            "chrom_meta",
+        )?;
+        parse_metadata(
+            s,
+            self.header.chrom_count,
+            self.header.chrom_meta_count,
+            self.header.chrom_meta_num_count,
+            self.header.chrom_meta_str_count,
+            self.header.compression_codec,
+            self.header.chrom_meta_uncompressed_bytes as usize,
+        )
+    }
+
+    #[deprecated(
+        note = "use the lazy API (spectrum_array_refs, read_spectrum_array, etc.) instead"
+    )]
+    pub fn to_mzml(&mut self) -> Result<MzML, String> {
+        let global_meta = self.global_metadata()?;
+        let global_lookup = ChildrenLookup::new(&global_meta);
+        let meta_refs: Vec<&Metadatum> = global_meta.iter().collect();
+        let policy = DefaultMetadataPolicy;
+
+        let mut owner_rows = OwnerRows::with_capacity(global_meta.len());
+        for m in &global_meta {
+            owner_rows.insert(m.id, m);
+        }
+
+        let run_id = global_lookup
+            .all_ids(TagId::Run)
+            .first()
+            .copied()
+            .unwrap_or(0);
+
+        let rows = owner_rows.get(run_id);
+
+        let mut param_buffer: Vec<&Metadatum> = Vec::new();
+        global_lookup.get_param_rows_into(&owner_rows, run_id, &policy, &mut param_buffer);
+        let (cv_params, user_params) = parse_cv_and_user_params(&param_buffer);
+
+        let spec_meta = self.spectrum_metadata()?;
+        let chrom_meta = self.chromatogram_metadata()?;
+        let spec_refs: Vec<&Metadatum> = spec_meta.iter().collect();
+        let chrom_refs: Vec<&Metadatum> = chrom_meta.iter().collect();
+
+        let mut spectrum_list =
+            parse_spectrum_list(&spec_refs, &ChildrenLookup::new(&spec_meta), &policy);
+        let mut chromatogram_list =
+            parse_chromatogram_list(&chrom_refs, &ChildrenLookup::new(&chrom_meta), &policy);
+
+        if let Some(sl) = spectrum_list.as_mut() {
+            self.attach_spec_binaries(&mut sl.spectra)?;
+        }
+
+        if let Some(cl) = chromatogram_list.as_mut() {
+            self.attach_chrom_binaries(&mut cl.chromatograms)?;
+        }
+
+        let source_file_ref_list = parse_run_source_file_refs(&owner_rows, &global_lookup, run_id);
+
+        let filter_record = self.filter_records()?;
+
+        let run = Run {
+            id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
+            start_time_stamp: get_attr_text(rows, ACC_ATTR_START_TIME_STAMP)
+                .filter(|s| !s.is_empty()),
+            default_instrument_configuration_ref: get_attr_text(
+                rows,
+                ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF,
+            )
+            .or_else(|| get_attr_text(rows, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF)),
+            sample_ref: get_attr_text(rows, ACC_ATTR_SAMPLE_REF),
+            cv_params,
+            user_params,
+            source_file_ref_list,
+            spectrum_list,
+            chromatogram_list,
+            ..Default::default()
+        };
+
+        Ok(MzML {
+            cv_list: parse_cv_list(&meta_refs, &global_lookup),
+            file_description: parse_file_description(&meta_refs, &global_lookup, &policy),
+            referenceable_param_group_list: parse_referenceable_param_group_list(
+                &meta_refs,
+                &global_lookup,
+                &policy,
+            ),
+            sample_list: parse_sample_list(&meta_refs, &global_lookup, &policy),
+            instrument_list: parse_instrument_list(&meta_refs, &global_lookup, &policy),
+            software_list: parse_software_list(&meta_refs, &global_lookup, &policy),
+            data_processing_list: parse_data_processing_list(&meta_refs, &global_lookup, &policy),
+            scan_settings_list: parse_scan_settings_list(&meta_refs, &global_lookup, &policy),
+            run,
+            filter_record,
+        })
+    }
+
+    fn attach_spec_binaries(&mut self, spectra: &mut [Spectrum]) -> Result<(), String> {
+        let entry_base = self.header.off_spec_entries as usize;
+        let aref_base = self.header.off_spec_arrayrefs as usize;
+
+        for (i, spectrum) in spectra.iter_mut().enumerate() {
+            let Some(refs) = read_array_refs_at(self.bytes, entry_base, aref_base, i) else {
+                continue;
+            };
+            if refs.is_empty() {
+                continue;
+            }
+            let bdal = spectrum
+                .binary_data_array_list
+                .get_or_insert_with(BinaryDataArrayList::default);
+            for aref in &refs {
+                let stride = dtype_stride(aref.dtype);
+                let raw = self.spec_container.get_item_from_block(
+                    aref.block_id,
+                    aref.element_offset,
+                    aref.element_count,
+                    stride,
+                    "spec",
+                )?;
+                attach_array(bdal, aref.array_type, aref.dtype, raw);
+            }
+            bdal.count = Some(bdal.binary_data_arrays.len());
+        }
+        Ok(())
+    }
+
+    fn attach_chrom_binaries(&mut self, chromatograms: &mut [Chromatogram]) -> Result<(), String> {
+        let container = match self.chrom_container.as_mut() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let entry_base = self.header.off_chrom_entries as usize;
+        let aref_base = self.header.off_chrom_arrayrefs as usize;
+
+        for (i, chromatogram) in chromatograms.iter_mut().enumerate() {
+            let Some(refs) = read_array_refs_at(self.bytes, entry_base, aref_base, i) else {
+                continue;
+            };
+            if refs.is_empty() {
+                continue;
+            }
+            let bdal = chromatogram
+                .binary_data_array_list
+                .get_or_insert_with(BinaryDataArrayList::default);
+            for aref in &refs {
+                let stride = dtype_stride(aref.dtype);
+                let raw = container.get_item_from_block(
+                    aref.block_id,
+                    aref.element_offset,
+                    aref.element_count,
+                    stride,
+                    "chrom",
+                )?;
+                attach_array(bdal, aref.array_type, aref.dtype, raw);
+            }
+            bdal.count = Some(bdal.binary_data_arrays.len());
+        }
+        Ok(())
     }
 }
 
@@ -172,10 +467,10 @@ impl<'a> SpectrumSource for IonReader<'a> {
             let (Some(mr), Some(ir)) = (mz_ref, int_ref) else {
                 continue;
             };
-            if !decode_from_block(&mut self.container, &mut self.mz_buf, &mr) {
+            if !decode_from_block(&mut self.spec_container, &mut self.mz_buf, &mr) {
                 continue;
             }
-            if !decode_from_block(&mut self.container, &mut self.int_buf, &ir) {
+            if !decode_from_block(&mut self.spec_container, &mut self.int_buf, &ir) {
                 continue;
             }
 
@@ -196,6 +491,40 @@ impl<'a> SpectrumSource for IonReader<'a> {
             callback(rt_s / 60.0, &meta, &self.mz_buf[..n], &self.int_buf[..n]);
         }
     }
+}
+
+#[inline]
+fn parse_filter_record(b: &[u8]) -> FilterRecord {
+    FilterRecord {
+        rt_seconds: f64::from_le_bytes(b[0..8].try_into().unwrap()),
+        base_peak_mz: f64::from_le_bytes(b[8..16].try_into().unwrap()),
+        selected_ion_mz: f64::from_le_bytes(b[16..24].try_into().unwrap()),
+        base_peak_int: f64::from_le_bytes(b[24..32].try_into().unwrap()),
+        total_ion_current: f64::from_le_bytes(b[32..40].try_into().unwrap()),
+        ms_level: b[40],
+        polarity: b[41],
+    }
+}
+
+#[inline]
+fn read_array_refs_at(
+    bytes: &[u8],
+    entry_base: usize,
+    aref_base: usize,
+    index: usize,
+) -> Option<Vec<ArrayRef>> {
+    let ea = entry_base + index * ENTRY_A_BYTES;
+    let entry = bytes.get(ea..ea + ENTRY_A_BYTES)?;
+    let ref_start = u64::from_le_bytes(entry[0..8].try_into().unwrap()) as usize;
+    let ref_count = u64::from_le_bytes(entry[8..16].try_into().unwrap()) as usize;
+
+    let mut refs = Vec::with_capacity(ref_count);
+    for j in 0..ref_count {
+        let ab = aref_base + (ref_start + j) * ENTRY_A1_BYTES;
+        let b = bytes.get(ab..ab + ENTRY_A1_BYTES)?;
+        refs.push(parse_array_ref(b));
+    }
+    Some(refs)
 }
 
 #[inline]
@@ -275,6 +604,150 @@ fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8) {
     }
 }
 
+fn attach_array(bdal: &mut BinaryDataArrayList, array_type: u32, dtype: u8, raw: &[u8]) {
+    let binary = raw_to_binary_data(raw, dtype);
+    let numeric_type = dtype_to_numeric_type(dtype);
+
+    let found = bdal
+        .binary_data_arrays
+        .iter_mut()
+        .find(|b| bda_matches(b, array_type));
+
+    let bda = match found {
+        Some(existing) => existing,
+        None => {
+            bdal.binary_data_arrays.push(make_bda_stub(array_type));
+            bdal.binary_data_arrays.last_mut().unwrap()
+        }
+    };
+
+    bda.binary = Some(binary);
+    sync_numeric_meta(bda, numeric_type);
+}
+
+fn raw_to_binary_data(raw: &[u8], dtype: u8) -> BinaryData {
+    match dtype {
+        1 => BinaryData::F64(byte_cast(raw)),
+        2 => BinaryData::F32(byte_cast(raw)),
+        3 => BinaryData::F16(byte_cast(raw)),
+        4 => BinaryData::I16(byte_cast(raw)),
+        5 => BinaryData::I32(byte_cast(raw)),
+        6 => BinaryData::I64(byte_cast(raw)),
+        _ => BinaryData::F64(Vec::new()),
+    }
+}
+
+#[inline]
+fn byte_cast<T>(raw: &[u8]) -> Vec<T> {
+    let element_count = raw.len() / std::mem::size_of::<T>();
+    let mut out = Vec::with_capacity(element_count);
+    unsafe {
+        out.set_len(element_count);
+        std::ptr::copy_nonoverlapping(raw.as_ptr(), out.as_mut_ptr() as *mut u8, raw.len());
+    }
+    out
+}
+
+fn dtype_to_numeric_type(dtype: u8) -> NumericType {
+    match dtype {
+        1 => NumericType::Float64,
+        2 => NumericType::Float32,
+        3 => NumericType::Float16,
+        4 => NumericType::Int16,
+        5 => NumericType::Int32,
+        6 => NumericType::Int64,
+        _ => NumericType::Float64,
+    }
+}
+
+fn make_bda_stub(array_type_accession: u32) -> BinaryDataArray {
+    BinaryDataArray {
+        cv_params: vec![CvParam {
+            cv_ref: Some("MS".to_string()),
+            accession: Some(format!("MS:{array_type_accession:07}")),
+            name: String::new(),
+            value: None,
+            unit_cv_ref: None,
+            unit_name: None,
+            unit_accession: None,
+        }],
+        ..BinaryDataArray::default()
+    }
+}
+
+#[inline]
+fn sync_numeric_meta(bda: &mut BinaryDataArray, numeric_type: NumericType) {
+    let target = match numeric_type {
+        NumericType::Float16 => 1_000_520,
+        NumericType::Float32 => 1_000_521,
+        NumericType::Float64 => 1_000_523,
+        NumericType::Int16 => 1_000_518,
+        NumericType::Int32 => 1_000_519,
+        NumericType::Int64 => 1_000_522,
+    };
+    bda.cv_params
+        .retain(|p| !is_numeric_acc(parse_accession_tail(p.accession.as_deref())));
+    bda.cv_params.push(ms_numeric_param(target));
+    bda.numeric_type = Some(numeric_type);
+}
+
+#[inline]
+fn is_numeric_acc(tail: crate::ion::attr_meta::AccessionTail) -> bool {
+    matches!(
+        tail.raw(),
+        1_000_520 | 1_000_521 | 1_000_523 | 1_000_518 | 1_000_519 | 1_000_522
+    )
+}
+
+#[inline]
+fn bda_matches(bda: &BinaryDataArray, kind: u32) -> bool {
+    bda.cv_params
+        .iter()
+        .any(|p| parse_accession_tail(p.accession.as_deref()).raw() == kind)
+}
+
+#[inline]
+fn ms_numeric_param(tail: u32) -> CvParam {
+    let name = match tail {
+        1_000_521 => "32-bit float",
+        1_000_523 => "64-bit float",
+        1_000_519 => "32-bit integer",
+        1_000_522 => "64-bit integer",
+        _ => "numeric",
+    };
+    CvParam {
+        cv_ref: Some("MS".into()),
+        accession: Some(format!("MS:{tail:07}")),
+        name: name.into(),
+        ..Default::default()
+    }
+}
+
+fn parse_run_source_file_refs(
+    owner_rows: &OwnerRows,
+    lookup: &ChildrenLookup,
+    run_id: u32,
+) -> Option<SourceFileRefList> {
+    let list_id = lookup
+        .ids_for(run_id, TagId::SourceFileRefList)
+        .first()
+        .copied()
+        .or_else(|| lookup.all_ids(TagId::SourceFileRefList).first().copied())?;
+
+    let refs: Vec<_> = lookup
+        .ids_for(list_id, TagId::SourceFileRef)
+        .iter()
+        .filter_map(|&ref_id| {
+            get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF).map(|r| SourceFileRef { r#ref: r })
+        })
+        .collect();
+
+    (!refs.is_empty()).then(|| SourceFileRefList {
+        count: Some(refs.len()),
+        source_file_refs: refs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,17 +781,17 @@ mod tests {
     #[test]
     fn array_refs_contain_mz_and_intensity() {
         let reader = IonReader::open(BYTES).unwrap();
-        let refs = reader.array_refs_for_spectrum(0).unwrap();
+        let refs = reader.spectrum_array_refs(0).unwrap();
         assert!(refs.iter().any(|a| a.array_type == ACC_MZ));
         assert!(refs.iter().any(|a| a.array_type == ACC_INT));
     }
 
     #[test]
-    fn read_array_produces_mz_values() {
+    fn read_spectrum_array_produces_mz_values() {
         let mut reader = IonReader::open(BYTES).unwrap();
-        let refs = reader.array_refs_for_spectrum(0).unwrap();
+        let refs = reader.spectrum_array_refs(0).unwrap();
         let mz_ref = refs.iter().find(|a| a.array_type == ACC_MZ).unwrap();
-        let mz = reader.read_array(mz_ref).unwrap();
+        let mz = reader.read_spectrum_array(mz_ref).unwrap();
         assert!(!mz.is_empty());
         assert!(mz.iter().all(|v| v.is_finite()));
     }
@@ -347,6 +820,49 @@ mod tests {
             .filter(|&i| reader.filter_record(i).map_or(false, |r| r.ms_level == 1))
             .count();
         assert_eq!(count, expected);
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn to_mzml_produces_valid_structure() {
+        let mut reader = IonReader::open(BYTES).unwrap();
+        let mzml = reader.to_mzml().unwrap();
+        let sl = mzml.run.spectrum_list.as_ref().unwrap();
+        assert!(!sl.spectra.is_empty());
+        let first = &sl.spectra[0];
+        assert!(first.binary_data_array_list.is_some());
+        let bdal = first.binary_data_array_list.as_ref().unwrap();
+        assert!(!bdal.binary_data_arrays.is_empty());
+        assert!(bdal.binary_data_arrays.iter().any(|b| b.binary.is_some()));
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn to_mzml_filter_records_match_count() {
+        let mut reader = IonReader::open(BYTES).unwrap();
+        let mzml = reader.to_mzml().unwrap();
+        assert_eq!(
+            mzml.filter_record.len(),
+            mzml.run
+                .spectrum_list
+                .as_ref()
+                .map(|sl| sl.spectra.len())
+                .unwrap_or(0)
+        );
+    }
+
+    #[test]
+    fn global_metadata_returns_entries() {
+        let reader = IonReader::open(BYTES).unwrap();
+        let meta = reader.global_metadata().unwrap();
+        assert!(!meta.is_empty());
+    }
+
+    #[test]
+    fn spectrum_metadata_returns_entries() {
+        let reader = IonReader::open(BYTES).unwrap();
+        let meta = reader.spectrum_metadata().unwrap();
+        assert!(!meta.is_empty());
     }
 
     #[test]

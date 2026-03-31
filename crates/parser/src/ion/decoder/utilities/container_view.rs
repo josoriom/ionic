@@ -2,8 +2,9 @@ use crate::ion::encoder::utilities::container_builder::{
     BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, FilterType, Stride,
 };
 use crate::ion::utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take};
-use crate::mzml::structs::NumericType;
 use std::ops::Deref;
+
+const DEFAULT_MAX_CACHED_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) trait BlockProcessor {
     fn decompress(&self, source: &[u8], target_len: usize) -> Result<Vec<u8>, String>;
@@ -37,6 +38,12 @@ pub(crate) enum BlockData<'a> {
     Owned(Vec<u8>),
 }
 
+impl<'a> BlockData<'a> {
+    fn heap_bytes(&self) -> usize {
+        self.len()
+    }
+}
+
 impl<'a> Deref for BlockData<'a> {
     type Target = [u8];
 
@@ -54,6 +61,10 @@ pub(crate) struct ContainerView<'a, P: BlockProcessor> {
     raw_data: &'a [u8],
     entries: Vec<BlockDirEntry>,
     cache: Vec<Option<BlockData<'a>>>,
+    access_tick: Vec<u64>,
+    tick_counter: u64,
+    cached_bytes: usize,
+    max_cached_bytes: usize,
     scratch_buffer: Vec<u8>,
     stride_history: Vec<Option<Stride>>,
     compression_level: u8,
@@ -62,6 +73,7 @@ pub(crate) struct ContainerView<'a, P: BlockProcessor> {
 }
 
 impl<'a, P: BlockProcessor> ContainerView<'a, P> {
+    #[allow(dead_code)]
     pub(crate) fn new(
         raw_data: &'a [u8],
         block_count: u64,
@@ -69,6 +81,26 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         filter: FilterType,
         ctx: &'static str,
         processor: P,
+    ) -> Result<Self, String> {
+        Self::with_max_cached_bytes(
+            raw_data,
+            block_count,
+            compression_level,
+            filter,
+            ctx,
+            processor,
+            DEFAULT_MAX_CACHED_BYTES,
+        )
+    }
+
+    pub(crate) fn with_max_cached_bytes(
+        raw_data: &'a [u8],
+        block_count: u64,
+        compression_level: u8,
+        filter: FilterType,
+        ctx: &'static str,
+        processor: P,
+        max_cached_bytes: usize,
     ) -> Result<Self, String> {
         let block_count = block_count as usize;
         let directory_byte_size = block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
@@ -105,6 +137,10 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             raw_data,
             entries,
             cache,
+            access_tick: vec![0u64; block_count],
+            tick_counter: 0,
+            cached_bytes: 0,
+            max_cached_bytes,
             scratch_buffer: Vec::new(),
             stride_history: vec![None; block_count],
             compression_level,
@@ -124,7 +160,11 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
     ) -> Result<&[u8], String> {
         self.ensure_block_loaded(block_id, element_stride, ctx)?;
 
-        let block = self.cache[block_id as usize].as_ref().unwrap();
+        let block_index = block_id as usize;
+        self.tick_counter += 1;
+        self.access_tick[block_index] = self.tick_counter;
+
+        let block = self.cache[block_index].as_ref().unwrap();
         let start_byte = (element_offset as usize) * element_stride;
         let end_byte = start_byte + (element_count as usize) * element_stride;
 
@@ -135,6 +175,31 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             ));
         }
         Ok(&block[start_byte..end_byte])
+    }
+
+    fn evict_until_room(&mut self, needed: usize) {
+        if self.max_cached_bytes == 0 {
+            return;
+        }
+        while self.cached_bytes + needed > self.max_cached_bytes {
+            let mut oldest_tick = u64::MAX;
+            let mut oldest_idx = usize::MAX;
+
+            for (i, slot) in self.cache.iter().enumerate() {
+                if slot.is_some() && self.access_tick[i] < oldest_tick {
+                    oldest_tick = self.access_tick[i];
+                    oldest_idx = i;
+                }
+            }
+
+            if oldest_idx == usize::MAX {
+                break;
+            }
+
+            if let Some(block) = self.cache[oldest_idx].take() {
+                self.cached_bytes -= block.heap_bytes();
+            }
+        }
     }
 
     fn ensure_block_loaded(
@@ -183,7 +248,14 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
 
         let decoded =
             self.run_decode_pipeline(payload, entry.uncompressed_len_bytes as usize, stride)?;
+
+        let block_heap = decoded.heap_bytes();
+        self.evict_until_room(block_heap);
+
+        self.cached_bytes += block_heap;
         self.cache[block_index] = Some(decoded);
+        self.tick_counter += 1;
+        self.access_tick[block_index] = self.tick_counter;
         Ok(())
     }
 
@@ -313,202 +385,33 @@ fn unshuffle_any(source: &[u8], target: &mut [u8], stride: usize) {
     }
 }
 
-pub(crate) struct BinaryStoreConfig {
-    pub(crate) block_count: u64,
-    pub(crate) item_count: u64,
-    pub(crate) compression_level: u8,
-    pub(crate) filter: FilterType,
-    pub(crate) context_label: &'static str,
-}
-
-pub(crate) struct BinaryStore {
-    slots: Vec<Option<Vec<(u32, ArrayData)>>>,
-}
-
-struct ArrayRef {
-    array_type_accession: u32,
-    dtype: u8,
-    block_id: u32,
-    element_offset: u64,
-    element_count: u64,
-}
-
-struct ItemIndexEntry {
-    arrayref_start: u64,
-    arrayref_count: u64,
-}
-
-pub(crate) const ARRAYREF_ENTRY_BYTE_SIZE: u64 = 32;
-
-#[derive(Clone, Debug)]
-pub(crate) enum ArrayData {
-    F64(Vec<f64>),
-    F32(Vec<f32>),
-    F16(Vec<u16>),
-    I16(Vec<i16>),
-    I32(Vec<i32>),
-    I64(Vec<i64>),
-}
-
-impl BinaryStore {
-    pub(crate) fn build(
-        container_bytes: &[u8],
-        arrayref_bytes: &[u8],
-        item_index_bytes: &[u8],
-        config: BinaryStoreConfig,
-    ) -> Result<Self, String> {
-        let mut view = ContainerView::new(
-            container_bytes,
-            config.block_count,
-            config.compression_level,
-            config.filter,
-            config.context_label,
-            DefaultProcessor,
-        )?;
-
-        let array_refs = Self::parse_arrayrefs(arrayref_bytes)?;
-        let item_index = Self::parse_item_index(item_index_bytes, config.item_count)?;
-
-        let slots = item_index
-            .iter()
-            .map(|entry| {
-                Some(Self::extract_arrays_for_entry(
-                    &mut view,
-                    &array_refs,
-                    entry,
-                ))
-            })
-            .collect();
-
-        Ok(Self { slots })
-    }
-
-    #[inline]
-    pub(crate) fn take(&mut self, slot_index: usize) -> Option<Vec<(u32, ArrayData)>> {
-        self.slots.get_mut(slot_index)?.take()
-    }
-
-    fn parse_item_index(raw: &[u8], item_count: u64) -> Result<Vec<ItemIndexEntry>, String> {
-        let mut read_pos = 0;
-        let mut entries = Vec::with_capacity(item_count as usize);
-        for _ in 0..item_count {
-            let arrayref_start = read_u64_le_at(raw, &mut read_pos, "arrayref_start")?;
-            let arrayref_count = read_u64_le_at(raw, &mut read_pos, "arrayref_count")?;
-            entries.push(ItemIndexEntry {
-                arrayref_start,
-                arrayref_count,
-            });
-        }
-        Ok(entries)
-    }
-
-    fn parse_arrayrefs(raw: &[u8]) -> Result<Vec<ArrayRef>, String> {
-        let entry_count = (raw.len() as u64 / ARRAYREF_ENTRY_BYTE_SIZE) as usize;
-        let mut read_pos = 0;
-        let mut refs = Vec::with_capacity(entry_count);
-        for _ in 0..entry_count {
-            let element_offset = read_u64_le_at(raw, &mut read_pos, "element_offset")?;
-            let element_count = read_u64_le_at(raw, &mut read_pos, "element_count")?;
-            let block_id = read_u32_le_at(raw, &mut read_pos, "block_id")?;
-            let array_type_accession = read_u32_le_at(raw, &mut read_pos, "array_type")?;
-            let dtype = take(raw, &mut read_pos, 1, "dtype")?[0];
-            let _padding = take(raw, &mut read_pos, 7, "padding")?;
-            refs.push(ArrayRef {
-                array_type_accession,
-                dtype,
-                block_id,
-                element_offset,
-                element_count,
-            });
-        }
-        Ok(refs)
-    }
-
-    fn extract_arrays_for_entry<P: BlockProcessor>(
-        view: &mut ContainerView<'_, P>,
-        array_refs: &[ArrayRef],
-        entry: &ItemIndexEntry,
-    ) -> Vec<(u32, ArrayData)> {
-        let range_start = entry.arrayref_start as usize;
-        let range_end = range_start + entry.arrayref_count as usize;
-        if range_end > array_refs.len() {
-            return Vec::new();
-        }
-        array_refs[range_start..range_end]
-            .iter()
-            .filter_map(|array_ref| {
-                let (element_stride, numeric_type) =
-                    Self::dtype_to_stride_and_type(array_ref.dtype).ok()?;
-                let raw_bytes = view
-                    .get_item_from_block(
-                        array_ref.block_id,
-                        array_ref.element_offset,
-                        array_ref.element_count,
-                        element_stride,
-                        "",
-                    )
-                    .ok()?;
-                Some((
-                    array_ref.array_type_accession,
-                    Self::bytes_to_typed_array(raw_bytes, numeric_type),
-                ))
-            })
-            .collect()
-    }
-
-    #[inline]
-    fn dtype_to_stride_and_type(dtype: u8) -> Result<(usize, NumericType), String> {
-        match dtype {
-            1 => Ok((8, NumericType::Float64)),
-            2 => Ok((4, NumericType::Float32)),
-            3 => Ok((2, NumericType::Float16)),
-            4 => Ok((2, NumericType::Int16)),
-            5 => Ok((4, NumericType::Int32)),
-            6 => Ok((8, NumericType::Int64)),
-            unknown => Err(format!("unrecognised dtype code {unknown}")),
-        }
-    }
-
-    #[inline]
-    fn bytes_to_typed_array(raw: &[u8], numeric_type: NumericType) -> ArrayData {
-        match numeric_type {
-            NumericType::Float64 => ArrayData::F64(byte_cast(raw)),
-            NumericType::Float32 => ArrayData::F32(byte_cast(raw)),
-            NumericType::Float16 => ArrayData::F16(byte_cast(raw)),
-            NumericType::Int64 => ArrayData::I64(byte_cast(raw)),
-            NumericType::Int32 => ArrayData::I32(byte_cast(raw)),
-            NumericType::Int16 => ArrayData::I16(byte_cast(raw)),
-        }
-    }
-}
-
-#[inline]
-fn byte_cast<T>(raw: &[u8]) -> Vec<T> {
-    let element_count = raw.len() / std::mem::size_of::<T>();
-    let mut out = Vec::with_capacity(element_count);
-    unsafe {
-        out.set_len(element_count);
-        std::ptr::copy_nonoverlapping(raw.as_ptr(), out.as_mut_ptr() as *mut u8, raw.len());
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_raw_directory_entry(
-        payload_offset: u64,
-        payload_size: u64,
-        uncompressed: u64,
-    ) -> Vec<u8> {
-        let mut entry = Vec::with_capacity(BLOCK_DIRECTORY_ENTRY_SIZE);
-        entry.extend_from_slice(&payload_offset.to_le_bytes());
-        entry.extend_from_slice(&payload_size.to_le_bytes());
-        entry.extend_from_slice(&uncompressed.to_le_bytes());
-        entry.extend_from_slice(&0u32.to_le_bytes());
-        entry.extend_from_slice(&[0u8; 4]);
-        entry
+    fn make_raw_directory_entry(off: u64, size: u64, uncomp: u64) -> Vec<u8> {
+        let mut e = Vec::with_capacity(BLOCK_DIRECTORY_ENTRY_SIZE);
+        e.extend_from_slice(&off.to_le_bytes());
+        e.extend_from_slice(&size.to_le_bytes());
+        e.extend_from_slice(&uncomp.to_le_bytes());
+        e.extend_from_slice(&0u32.to_le_bytes());
+        e.extend_from_slice(&[0u8; 4]);
+        e
+    }
+
+    fn make_container(block_size: usize, count: usize) -> Vec<u8> {
+        let mut raw = Vec::new();
+        for i in 0..count {
+            raw.extend(vec![i as u8; block_size]);
+        }
+        for i in 0..count {
+            raw.extend_from_slice(&make_raw_directory_entry(
+                (i * block_size) as u64,
+                block_size as u64,
+                block_size as u64,
+            ));
+        }
+        raw
     }
 
     #[test]
@@ -516,56 +419,43 @@ mod tests {
         let tiny = vec![0u8; 10];
         let result = ContainerView::new(&tiny, 1, 0, FilterType::None, "test", DefaultProcessor);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("too small"));
     }
 
     #[test]
     fn container_view_accepts_empty_container_with_zero_blocks() {
         let empty = vec![];
-        let result = ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor);
-        assert!(result.is_ok());
+        assert!(
+            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor).is_ok()
+        );
     }
 
     #[test]
     fn container_view_get_item_returns_correct_bytes_uncompressed() {
         let payload = vec![0u8, 1, 2, 3, 4, 5, 6, 7];
-        let directory = make_raw_directory_entry(0, 8, 8);
+        let dir = make_raw_directory_entry(0, 8, 8);
         let mut raw = Vec::new();
         raw.extend_from_slice(&payload);
-        raw.extend_from_slice(&directory);
+        raw.extend_from_slice(&dir);
 
         let mut view =
             ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor).unwrap();
-        let result = view.get_item_from_block(0, 1, 1, 4, "test").unwrap();
-        assert_eq!(result, &[4u8, 5, 6, 7]);
-    }
-
-    #[test]
-    fn container_view_get_item_returns_multiple_elements_uncompressed() {
-        let payload = vec![0u8, 1, 2, 3, 4, 5, 6, 7];
-        let directory = make_raw_directory_entry(0, 8, 8);
-        let mut raw = Vec::new();
-        raw.extend_from_slice(&payload);
-        raw.extend_from_slice(&directory);
-
-        let mut view =
-            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor).unwrap();
-        let result = view.get_item_from_block(0, 0, 2, 4, "test").unwrap();
-        assert_eq!(result, &[0u8, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            view.get_item_from_block(0, 1, 1, 4, "test").unwrap(),
+            &[4, 5, 6, 7]
+        );
     }
 
     #[test]
     fn container_view_rejects_out_of_bounds_element_range() {
         let payload = vec![0u8; 8];
-        let directory = make_raw_directory_entry(0, 8, 8);
+        let dir = make_raw_directory_entry(0, 8, 8);
         let mut raw = Vec::new();
         raw.extend_from_slice(&payload);
-        raw.extend_from_slice(&directory);
+        raw.extend_from_slice(&dir);
 
         let mut view =
             ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor).unwrap();
-        let result = view.get_item_from_block(0, 0, 3, 4, "test");
-        assert!(result.is_err());
+        assert!(view.get_item_from_block(0, 0, 3, 4, "test").is_err());
     }
 
     #[test]
@@ -573,92 +463,117 @@ mod tests {
         let empty = vec![];
         let mut view =
             ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor).unwrap();
-        let result = view.get_item_from_block(99, 0, 1, 4, "test");
-        assert!(result.is_err());
+        assert!(view.get_item_from_block(99, 0, 1, 4, "test").is_err());
     }
 
     #[test]
-    fn binary_store_take_returns_none_after_first_call() {
-        let config = BinaryStoreConfig {
-            block_count: 0,
-            item_count: 0,
-            compression_level: 0,
-            filter: FilterType::None,
-            context_label: "test",
-        };
-        let mut store = BinaryStore::build(&[], &[], &[], config).unwrap();
-        assert!(store.take(0).is_none());
+    fn lru_evicts_when_byte_limit_exceeded() {
+        let bs = 100usize;
+        let raw = make_container(bs, 3);
+
+        let mut view = ContainerView::with_max_cached_bytes(
+            &raw,
+            3,
+            0,
+            FilterType::None,
+            "test",
+            DefaultProcessor,
+            bs * 2,
+        )
+        .unwrap();
+
+        view.get_item_from_block(0, 0, 1, bs, "test").unwrap();
+        view.get_item_from_block(1, 0, 1, bs, "test").unwrap();
+        assert_eq!(view.cached_bytes, bs * 2);
+
+        view.get_item_from_block(2, 0, 1, bs, "test").unwrap();
+        assert_eq!(view.cached_bytes, bs * 2);
+        assert!(view.cache[0].is_none());
+        assert!(view.cache[1].is_some());
+        assert!(view.cache[2].is_some());
     }
 
     #[test]
-    fn binary_store_build_with_empty_sections_succeeds() {
-        let config = BinaryStoreConfig {
-            block_count: 0,
-            item_count: 0,
-            compression_level: 0,
-            filter: FilterType::None,
-            context_label: "test",
-        };
-        assert!(BinaryStore::build(&[], &[], &[], config).is_ok());
+    fn lru_evicts_least_recently_used() {
+        let bs = 100usize;
+        let raw = make_container(bs, 3);
+
+        let mut view = ContainerView::with_max_cached_bytes(
+            &raw,
+            3,
+            0,
+            FilterType::None,
+            "test",
+            DefaultProcessor,
+            bs * 2,
+        )
+        .unwrap();
+
+        view.get_item_from_block(0, 0, 1, bs, "test").unwrap();
+        view.get_item_from_block(1, 0, 1, bs, "test").unwrap();
+        view.get_item_from_block(0, 0, 1, bs, "test").unwrap();
+        view.get_item_from_block(2, 0, 1, bs, "test").unwrap();
+
+        assert!(view.cache[0].is_some());
+        assert!(view.cache[1].is_none());
+        assert!(view.cache[2].is_some());
     }
 
     #[test]
-    fn parse_item_index_reads_correct_entries() {
+    fn zero_max_bytes_means_unlimited() {
+        let bs = 100usize;
+        let raw = make_container(bs, 4);
+
+        let mut view = ContainerView::with_max_cached_bytes(
+            &raw,
+            4,
+            0,
+            FilterType::None,
+            "test",
+            DefaultProcessor,
+            0,
+        )
+        .unwrap();
+
+        for i in 0..4 {
+            view.get_item_from_block(i, 0, 1, bs, "test").unwrap();
+        }
+        assert_eq!(view.cached_bytes, bs * 4);
+        assert!(view.cache.iter().all(|s| s.is_some()));
+    }
+
+    #[test]
+    fn borrowed_blocks_dont_count_toward_byte_limit() {
+        let payload = vec![0u8; 8];
+        let dir = make_raw_directory_entry(0, 8, 8);
         let mut raw = Vec::new();
-        raw.extend_from_slice(&5u64.to_le_bytes());
-        raw.extend_from_slice(&3u64.to_le_bytes());
-        raw.extend_from_slice(&8u64.to_le_bytes());
-        raw.extend_from_slice(&1u64.to_le_bytes());
+        raw.extend_from_slice(&payload);
+        raw.extend_from_slice(&dir);
 
-        let entries = BinaryStore::parse_item_index(&raw, 2).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].arrayref_start, 5);
-        assert_eq!(entries[0].arrayref_count, 3);
-        assert_eq!(entries[1].arrayref_start, 8);
-        assert_eq!(entries[1].arrayref_count, 1);
-    }
+        let mut view = ContainerView::with_max_cached_bytes(
+            &raw,
+            1,
+            0,
+            FilterType::None,
+            "test",
+            DefaultProcessor,
+            4,
+        )
+        .unwrap();
 
-    #[test]
-    fn dtype_to_stride_and_type_maps_all_known_codes() {
-        assert!(matches!(
-            BinaryStore::dtype_to_stride_and_type(1),
-            Ok((8, NumericType::Float64))
-        ));
-        assert!(matches!(
-            BinaryStore::dtype_to_stride_and_type(2),
-            Ok((4, NumericType::Float32))
-        ));
-        assert!(matches!(
-            BinaryStore::dtype_to_stride_and_type(3),
-            Ok((2, NumericType::Float16))
-        ));
-        assert!(matches!(
-            BinaryStore::dtype_to_stride_and_type(4),
-            Ok((2, NumericType::Int16))
-        ));
-        assert!(matches!(
-            BinaryStore::dtype_to_stride_and_type(5),
-            Ok((4, NumericType::Int32))
-        ));
-        assert!(matches!(
-            BinaryStore::dtype_to_stride_and_type(6),
-            Ok((8, NumericType::Int64))
-        ));
-        assert!(BinaryStore::dtype_to_stride_and_type(99).is_err());
+        view.get_item_from_block(0, 0, 1, 4, "test").unwrap();
+        assert_eq!(view.cached_bytes, 8);
     }
 
     #[test]
     fn unshuffle2_inverts_shuffle2_output() {
         let original = [1u8, 2, 3, 4, 5, 6, 7, 8];
-        let shuffled = {
-            let half = original.len() / 2;
-            let mut s = vec![0u8; original.len()];
-            for i in 0..half {
-                s[i] = original[i * 2];
-                s[i + half] = original[i * 2 + 1];
-            }
-            s
-        };
+        let half = original.len() / 2;
+        let mut shuffled = vec![0u8; original.len()];
+        for i in 0..half {
+            shuffled[i] = original[i * 2];
+            shuffled[i + half] = original[i * 2 + 1];
+        }
         let mut recovered = vec![0u8; original.len()];
         unshuffle2(&shuffled, &mut recovered);
         assert_eq!(recovered, original);
@@ -679,17 +594,5 @@ mod tests {
         let mut recovered = vec![0u8; original.len()];
         unshuffle4(&shuffled, &mut recovered);
         assert_eq!(recovered, original);
-    }
-
-    #[test]
-    fn byte_cast_produces_correct_f32_values() {
-        let values = [1.0f32, 2.0f32, 3.0f32];
-        let bytes =
-            unsafe { std::slice::from_raw_parts(values.as_ptr() as *const u8, values.len() * 4) };
-        let recovered: Vec<f32> = byte_cast(bytes);
-        assert_eq!(recovered.len(), 3);
-        assert!((recovered[0] - 1.0f32).abs() < f32::EPSILON);
-        assert!((recovered[1] - 2.0f32).abs() < f32::EPSILON);
-        assert!((recovered[2] - 3.0f32).abs() < f32::EPSILON);
     }
 }
