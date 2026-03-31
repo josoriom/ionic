@@ -29,7 +29,7 @@ const ACC_MZ: u32 = 1_000_514;
 const ACC_INT: u32 = 1_000_515;
 const ENTRY_A_BYTES: usize = 16;
 const ENTRY_A1_BYTES: usize = 32;
-const DEFAULT_MAX_CACHED_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_MAX_CACHED_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum MetadatumValue {
