@@ -1,5 +1,6 @@
 pub(crate) mod parse_header;
 pub use parse_header::Header;
+#[allow(unused_imports)]
 pub(crate) use parse_header::parse_header;
 pub(crate) mod common;
 pub(crate) mod parse_metadata;
@@ -41,7 +42,6 @@ pub(crate) use parse_cv_list::parse_cv_list;
 pub(crate) mod children_lookup;
 pub(crate) mod container_view;
 pub(crate) mod cv_table;
-pub(crate) mod ion_reader;
 pub(crate) mod spectrum_source;
 
 #[cfg(test)]

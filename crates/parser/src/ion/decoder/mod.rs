@@ -1,5 +1,5 @@
 pub mod decode;
-pub use decode::decode;
+pub use decode::{Decoder, DecoderConfig};
 pub(crate) mod utilities;
 
 #[cfg(test)]

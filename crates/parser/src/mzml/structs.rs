@@ -12,7 +12,6 @@ pub struct MzML {
     pub data_processing_list: Option<DataProcessingList>,
     pub scan_settings_list: Option<ScanSettingsList>,
     pub run: Run,
-    pub filter_record: Vec<FilterRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
