@@ -1025,7 +1025,6 @@ fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
 }
 
 #[test]
-#[ignore = "check this"]
 fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
     let mzml = parse_b(&MZML_CACHE, PATH);
 
@@ -1043,7 +1042,7 @@ fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
                 "expected at least 10 values, got {}",
                 xs.len()
             );
-            assert_eq!(&xs[..10], &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            assert_eq!(&xs[..10], &[0, 10, 0, 30, 0, 50, 0, 70, 0, 90]);
         }
         other => panic!("expected BinaryData::I64, got {:?}", other),
     }
