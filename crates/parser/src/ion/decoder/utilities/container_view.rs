@@ -4,12 +4,23 @@ use crate::ion::encoder::utilities::container_builder::{
 use crate::ion::utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take};
 use std::ops::Deref;
 
-const DEFAULT_MAX_CACHED_BYTES: usize = 64 * 1024 * 1024;
+const LRU_NONE: usize = usize::MAX;
 
 pub(crate) trait BlockProcessor {
     fn decompress(&self, source: &[u8], target_len: usize) -> Result<Vec<u8>, String>;
     fn unshuffle(&self, source: &[u8], target: &mut [u8], stride: usize);
     fn requires_unshuffle(&self, filter: FilterType) -> bool;
+}
+
+pub(crate) trait ContainerAccess {
+    fn get_item_from_block(
+        &mut self,
+        block_id: u32,
+        element_offset: u64,
+        element_count: u64,
+        element_stride: usize,
+        ctx: &'static str,
+    ) -> Result<&[u8], String>;
 }
 
 #[derive(Debug)]
@@ -39,6 +50,7 @@ pub(crate) enum BlockData<'a> {
 }
 
 impl<'a> BlockData<'a> {
+    #[inline]
     fn heap_bytes(&self) -> usize {
         self.len()
     }
@@ -60,13 +72,15 @@ impl<'a> Deref for BlockData<'a> {
 pub(crate) struct ContainerView<'a, P: BlockProcessor> {
     raw_data: &'a [u8],
     entries: Vec<BlockDirEntry>,
-    cache: Vec<Option<BlockData<'a>>>,
-    access_tick: Vec<u64>,
-    tick_counter: u64,
+    cache: Box<[Option<BlockData<'a>>]>,
+    lru_prev: Box<[usize]>,
+    lru_next: Box<[usize]>,
+    lru_head: usize,
+    lru_tail: usize,
     cached_bytes: usize,
     max_cached_bytes: usize,
     scratch_buffer: Vec<u8>,
-    stride_history: Vec<Option<Stride>>,
+    stride_history: Box<[Option<Stride>]>,
     compression_level: u8,
     filter: FilterType,
     processor: P,
@@ -81,6 +95,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         filter: FilterType,
         ctx: &'static str,
         processor: P,
+        max_cached_bytes: usize,
     ) -> Result<Self, String> {
         Self::with_max_cached_bytes(
             raw_data,
@@ -89,7 +104,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             filter,
             ctx,
             processor,
-            DEFAULT_MAX_CACHED_BYTES,
+            max_cached_bytes,
         )
     }
 
@@ -121,7 +136,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             let payload_size = read_u64_le_at(directory_bytes, &mut read_position, ctx)?;
             let uncompressed_len_bytes = read_u64_le_at(directory_bytes, &mut read_position, ctx)?;
             let checksum = read_u32_le_at(directory_bytes, &mut read_position, ctx)?;
-            let _reserved_padding = take(directory_bytes, &mut read_position, 4, ctx)?;
+            let _ = take(directory_bytes, &mut read_position, 4, ctx)?;
             entries.push(BlockDirEntry {
                 payload_offset,
                 payload_size,
@@ -130,19 +145,21 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             });
         }
 
-        let mut cache = Vec::with_capacity(block_count);
-        cache.resize_with(block_count, || None);
-
         Ok(Self {
             raw_data,
             entries,
-            cache,
-            access_tick: vec![0u64; block_count],
-            tick_counter: 0,
+            cache: std::iter::repeat_with(|| None)
+                .take(block_count)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            lru_prev: vec![LRU_NONE; block_count].into_boxed_slice(),
+            lru_next: vec![LRU_NONE; block_count].into_boxed_slice(),
+            lru_head: LRU_NONE,
+            lru_tail: LRU_NONE,
             cached_bytes: 0,
             max_cached_bytes,
             scratch_buffer: Vec::new(),
-            stride_history: vec![None; block_count],
+            stride_history: vec![None; block_count].into_boxed_slice(),
             compression_level,
             filter,
             processor,
@@ -150,55 +167,69 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
     }
 
     #[inline]
-    pub(crate) fn get_item_from_block(
-        &mut self,
-        block_id: u32,
-        element_offset: u64,
-        element_count: u64,
-        element_stride: usize,
-        ctx: &'static str,
-    ) -> Result<&[u8], String> {
-        self.ensure_block_loaded(block_id, element_stride, ctx)?;
-
-        let block_index = block_id as usize;
-        self.tick_counter += 1;
-        self.access_tick[block_index] = self.tick_counter;
-
-        let block = self.cache[block_index].as_ref().unwrap();
-        let start_byte = (element_offset as usize) * element_stride;
-        let end_byte = start_byte + (element_count as usize) * element_stride;
-
-        if end_byte > block.len() {
-            return Err(format!(
-                "{ctx}: item range [{start_byte}..{end_byte}] out of bounds for block {block_id} (len={})",
-                block.len()
-            ));
+    fn touch_lru(&mut self, block_index: usize) {
+        if self.lru_head == block_index {
+            return;
         }
-        Ok(&block[start_byte..end_byte])
+        self.detach_lru(block_index);
+        self.attach_lru_front(block_index);
+    }
+
+    #[inline]
+    fn attach_lru_front(&mut self, block_index: usize) {
+        self.lru_prev[block_index] = LRU_NONE;
+        self.lru_next[block_index] = self.lru_head;
+        if self.lru_head != LRU_NONE {
+            self.lru_prev[self.lru_head] = block_index;
+        } else {
+            self.lru_tail = block_index;
+        }
+        self.lru_head = block_index;
+    }
+
+    #[inline]
+    fn detach_lru(&mut self, block_index: usize) {
+        let prev = self.lru_prev[block_index];
+        let next = self.lru_next[block_index];
+        if prev != LRU_NONE {
+            self.lru_next[prev] = next;
+        } else if self.lru_head == block_index {
+            self.lru_head = next;
+        }
+        if next != LRU_NONE {
+            self.lru_prev[next] = prev;
+        } else if self.lru_tail == block_index {
+            self.lru_tail = prev;
+        }
+        self.lru_prev[block_index] = LRU_NONE;
+        self.lru_next[block_index] = LRU_NONE;
+    }
+
+    #[inline]
+    fn evict_lru_tail(&mut self) {
+        let block_index = self.lru_tail;
+        if block_index == LRU_NONE {
+            return;
+        }
+        self.detach_lru(block_index);
+        if let Some(block) = self.cache[block_index].take() {
+            self.cached_bytes = self.cached_bytes.saturating_sub(block.heap_bytes());
+        }
     }
 
     fn evict_until_room(&mut self, needed: usize) {
         if self.max_cached_bytes == 0 {
             return;
         }
-        while self.cached_bytes + needed > self.max_cached_bytes {
-            let mut oldest_tick = u64::MAX;
-            let mut oldest_idx = usize::MAX;
-
-            for (i, slot) in self.cache.iter().enumerate() {
-                if slot.is_some() && self.access_tick[i] < oldest_tick {
-                    oldest_tick = self.access_tick[i];
-                    oldest_idx = i;
-                }
-            }
-
-            if oldest_idx == usize::MAX {
+        while self
+            .cached_bytes
+            .checked_add(needed)
+            .map_or(true, |total| total > self.max_cached_bytes)
+        {
+            if self.lru_tail == LRU_NONE {
                 break;
             }
-
-            if let Some(block) = self.cache[oldest_idx].take() {
-                self.cached_bytes -= block.heap_bytes();
-            }
+            self.evict_lru_tail();
         }
     }
 
@@ -227,8 +258,12 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         let payload_end = payload_start
             .checked_add(entry.payload_size as usize)
             .ok_or_else(|| format!("{ctx}: block {block_index} payload size overflows"))?;
+        let payload_limit = self
+            .raw_data
+            .len()
+            .saturating_sub(self.entries.len() * BLOCK_DIRECTORY_ENTRY_SIZE);
 
-        if payload_end > self.raw_data.len() - (self.entries.len() * BLOCK_DIRECTORY_ENTRY_SIZE) {
+        if payload_end > payload_limit {
             return Err(format!(
                 "{ctx}: block {block_index} payload exceeds payload region bounds"
             ));
@@ -248,14 +283,11 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
 
         let decoded =
             self.run_decode_pipeline(payload, entry.uncompressed_len_bytes as usize, stride)?;
-
         let block_heap = decoded.heap_bytes();
         self.evict_until_room(block_heap);
-
         self.cached_bytes += block_heap;
         self.cache[block_index] = Some(decoded);
-        self.tick_counter += 1;
-        self.access_tick[block_index] = self.tick_counter;
+        self.attach_lru_front(block_index);
         Ok(())
     }
 
@@ -316,6 +348,42 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
     }
 }
 
+impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
+    #[inline]
+    fn get_item_from_block(
+        &mut self,
+        block_id: u32,
+        element_offset: u64,
+        element_count: u64,
+        element_stride: usize,
+        ctx: &'static str,
+    ) -> Result<&[u8], String> {
+        self.ensure_block_loaded(block_id, element_stride, ctx)?;
+
+        let block_index = block_id as usize;
+        self.touch_lru(block_index);
+
+        let block = self.cache[block_index].as_ref().unwrap();
+        let start_byte = usize::try_from(element_offset)
+            .ok()
+            .and_then(|offset| offset.checked_mul(element_stride))
+            .ok_or_else(|| format!("{ctx}: item range overflow for block {block_id}"))?;
+        let end_byte = usize::try_from(element_count)
+            .ok()
+            .and_then(|count| count.checked_mul(element_stride))
+            .and_then(|len| start_byte.checked_add(len))
+            .ok_or_else(|| format!("{ctx}: item range overflow for block {block_id}"))?;
+
+        if end_byte > block.len() {
+            return Err(format!(
+                "{ctx}: item range [{start_byte}..{end_byte}] out of bounds for block {block_id} (len={})",
+                block.len()
+            ));
+        }
+        Ok(&block[start_byte..end_byte])
+    }
+}
+
 #[inline(always)]
 fn unshuffle_bytes(source: &[u8], target: &mut [u8], stride: usize) {
     match stride {
@@ -343,34 +411,34 @@ fn unshuffle4(source: &[u8], target: &mut [u8]) {
     let (g1, rest) = rest.split_at(quarter);
     let (g2, g3) = rest.split_at(quarter);
     for i in 0..quarter {
-        let o = i * 4;
-        target[o] = g0[i];
-        target[o + 1] = g1[i];
-        target[o + 2] = g2[i];
-        target[o + 3] = g3[i];
+        let offset = i * 4;
+        target[offset] = g0[i];
+        target[offset + 1] = g1[i];
+        target[offset + 2] = g2[i];
+        target[offset + 3] = g3[i];
     }
 }
 
 #[inline(always)]
 fn unshuffle8(source: &[u8], target: &mut [u8]) {
-    let seg = source.len() / 8;
-    let (g0, rest) = source.split_at(seg);
-    let (g1, rest) = rest.split_at(seg);
-    let (g2, rest) = rest.split_at(seg);
-    let (g3, rest) = rest.split_at(seg);
-    let (g4, rest) = rest.split_at(seg);
-    let (g5, rest) = rest.split_at(seg);
-    let (g6, g7) = rest.split_at(seg);
-    for i in 0..seg {
-        let o = i * 8;
-        target[o] = g0[i];
-        target[o + 1] = g1[i];
-        target[o + 2] = g2[i];
-        target[o + 3] = g3[i];
-        target[o + 4] = g4[i];
-        target[o + 5] = g5[i];
-        target[o + 6] = g6[i];
-        target[o + 7] = g7[i];
+    let segment = source.len() / 8;
+    let (g0, rest) = source.split_at(segment);
+    let (g1, rest) = rest.split_at(segment);
+    let (g2, rest) = rest.split_at(segment);
+    let (g3, rest) = rest.split_at(segment);
+    let (g4, rest) = rest.split_at(segment);
+    let (g5, rest) = rest.split_at(segment);
+    let (g6, g7) = rest.split_at(segment);
+    for i in 0..segment {
+        let offset = i * 8;
+        target[offset] = g0[i];
+        target[offset + 1] = g1[i];
+        target[offset + 2] = g2[i];
+        target[offset + 3] = g3[i];
+        target[offset + 4] = g4[i];
+        target[offset + 5] = g5[i];
+        target[offset + 6] = g6[i];
+        target[offset + 7] = g7[i];
     }
 }
 
@@ -417,7 +485,7 @@ mod tests {
     #[test]
     fn container_view_rejects_data_smaller_than_directory() {
         let tiny = vec![0u8; 10];
-        let result = ContainerView::new(&tiny, 1, 0, FilterType::None, "test", DefaultProcessor);
+        let result = ContainerView::new(&tiny, 1, 0, FilterType::None, "test", DefaultProcessor, 0);
         assert!(result.is_err());
     }
 
@@ -425,7 +493,7 @@ mod tests {
     fn container_view_accepts_empty_container_with_zero_blocks() {
         let empty = vec![];
         assert!(
-            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor).is_ok()
+            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor, 0).is_ok()
         );
     }
 
@@ -438,7 +506,7 @@ mod tests {
         raw.extend_from_slice(&dir);
 
         let mut view =
-            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor).unwrap();
+            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor, 0).unwrap();
         assert_eq!(
             view.get_item_from_block(0, 1, 1, 4, "test").unwrap(),
             &[4, 5, 6, 7]
@@ -454,7 +522,7 @@ mod tests {
         raw.extend_from_slice(&dir);
 
         let mut view =
-            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor).unwrap();
+            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor, 0).unwrap();
         assert!(view.get_item_from_block(0, 0, 3, 4, "test").is_err());
     }
 
@@ -462,7 +530,8 @@ mod tests {
     fn container_view_rejects_invalid_block_id() {
         let empty = vec![];
         let mut view =
-            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor).unwrap();
+            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor, 0)
+                .unwrap();
         assert!(view.get_item_from_block(99, 0, 1, 4, "test").is_err());
     }
 

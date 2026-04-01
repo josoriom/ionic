@@ -2,9 +2,9 @@ use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
 use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
-    container_view::{ContainerView, DefaultProcessor},
+    container_view::{ContainerAccess, ContainerView, DefaultProcessor},
     parse_header::{Header, parse_header},
-    spectrum_source::{SpectrumSource, f16_bits_to_f64},
+    spectrum_source::{SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range},
 };
 use crate::ion::{
     attr_meta::{
@@ -30,6 +30,7 @@ const ACC_INT: u32 = 1_000_515;
 const ENTRY_A_BYTES: usize = 16;
 const ENTRY_A1_BYTES: usize = 32;
 const DEFAULT_MAX_CACHED_BYTES: usize = 256 * 1024 * 1024;
+const INLINE_ARRAY_REF_CAP: usize = 8;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum MetadatumValue {
@@ -56,13 +57,17 @@ pub(crate) fn slice_at<'a>(
     len: u64,
     f: &str,
 ) -> Result<&'a [u8], String> {
-    let (o, l) = (off as usize, len as usize);
+    let end = off
+        .checked_add(len)
+        .ok_or_else(|| format!("{f}: range error"))?;
+    let start = usize::try_from(off).map_err(|_| format!("{f}: range error"))?;
+    let end = usize::try_from(end).map_err(|_| format!("{f}: range error"))?;
     bytes
-        .get(o..o + l)
+        .get(start..end)
         .ok_or_else(|| format!("{f}: range error"))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ArrayRef {
     pub block_id: u32,
     pub element_offset: u64,
@@ -103,11 +108,16 @@ impl<'a> Decoder<'a> {
         let filter = FilterType::try_from(header.array_filter).unwrap_or(FilterType::None);
 
         let spec_container = {
-            let off = header.off_container_spect as usize;
-            let len = header.len_container_spect as usize;
+            let off = usize::try_from(header.off_container_spect)
+                .map_err(|_| "spectrum container out of bounds".to_string())?;
+            let len = usize::try_from(header.len_container_spect)
+                .map_err(|_| "spectrum container out of bounds".to_string())?;
+            let end = off
+                .checked_add(len)
+                .ok_or_else(|| "spectrum container out of bounds".to_string())?;
             let cb = bytes
-                .get(off..off + len)
-                .ok_or("spectrum container out of bounds")?;
+                .get(off..end)
+                .ok_or_else(|| "spectrum container out of bounds".to_string())?;
             ContainerView::with_max_cached_bytes(
                 cb,
                 header.block_count_spect,
@@ -120,11 +130,16 @@ impl<'a> Decoder<'a> {
         };
 
         let chrom_container = if header.block_count_chrom > 0 && header.len_container_chrom > 0 {
-            let off = header.off_container_chrom as usize;
-            let len = header.len_container_chrom as usize;
+            let off = usize::try_from(header.off_container_chrom)
+                .map_err(|_| "chrom container out of bounds".to_string())?;
+            let len = usize::try_from(header.len_container_chrom)
+                .map_err(|_| "chrom container out of bounds".to_string())?;
+            let end = off
+                .checked_add(len)
+                .ok_or_else(|| "chrom container out of bounds".to_string())?;
             let cb = bytes
-                .get(off..off + len)
-                .ok_or("chrom container out of bounds")?;
+                .get(off..end)
+                .ok_or_else(|| "chrom container out of bounds".to_string())?;
             Some(ContainerView::with_max_cached_bytes(
                 cb,
                 header.block_count_chrom,
@@ -164,29 +179,43 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
-        let base = self.header.off_filter_index as usize + index * FILTER_INDEX_RECORD_SIZE;
-        let b = self.bytes.get(base..base + FILTER_INDEX_RECORD_SIZE)?;
+        let base = self
+            .header
+            .off_filter_index
+            .try_into()
+            .ok()
+            .and_then(|off: usize| {
+                index
+                    .checked_mul(FILTER_INDEX_RECORD_SIZE)
+                    .and_then(|delta| off.checked_add(delta))
+            })?;
+        let end = base.checked_add(FILTER_INDEX_RECORD_SIZE)?;
+        let b = self.bytes.get(base..end)?;
         Some(parse_filter_record(b))
     }
 
     pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
-        let off = self.header.off_filter_index as usize;
-        let len = self.header.len_filter_index as usize;
-        let count = self.header.spectrum_count as usize;
+        let off = usize::try_from(self.header.off_filter_index)
+            .map_err(|_| "filter index: out of bounds".to_string())?;
+        let len = usize::try_from(self.header.len_filter_index)
+            .map_err(|_| "filter index: out of bounds".to_string())?;
+        let count = usize::try_from(self.header.spectrum_count)
+            .map_err(|_| "filter index: out of bounds".to_string())?;
         if len != count * FILTER_INDEX_RECORD_SIZE {
             return Err(format!(
                 "filter index: len={len} != count={count} × {FILTER_INDEX_RECORD_SIZE}"
             ));
         }
+        let end = off
+            .checked_add(len)
+            .ok_or_else(|| "filter index: out of bounds".to_string())?;
         let section = self
             .bytes
-            .get(off..off + len)
-            .ok_or("filter index: out of bounds")?;
-        Ok((0..count)
-            .map(|i| {
-                let base = i * FILTER_INDEX_RECORD_SIZE;
-                parse_filter_record(&section[base..base + FILTER_INDEX_RECORD_SIZE])
-            })
+            .get(off..end)
+            .ok_or_else(|| "filter index: out of bounds".to_string())?;
+        Ok(section
+            .chunks_exact(FILTER_INDEX_RECORD_SIZE)
+            .map(parse_filter_record)
             .collect())
     }
 
@@ -200,6 +229,7 @@ impl<'a> Decoder<'a> {
             self.header.off_spec_arrayrefs as usize,
             index,
         )
+        .map(ArrayRefs::into_vec)
     }
 
     pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
@@ -212,38 +242,43 @@ impl<'a> Decoder<'a> {
             self.header.off_chrom_arrayrefs as usize,
             index,
         )
+        .map(ArrayRefs::into_vec)
     }
 
-    pub fn read_spectrum_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
-        let stride = dtype_stride(aref.dtype);
+    pub fn read_spectrum_array(
+        &mut self,
+        aref: &ArrayRef,
+        out: &mut Vec<f64>,
+    ) -> Result<(), String> {
         let raw = self.spec_container.get_item_from_block(
             aref.block_id,
             aref.element_offset,
             aref.element_count,
-            stride,
+            dtype_stride(aref.dtype),
             "read_spectrum_array",
         )?;
-        let mut buf = Vec::new();
-        decode_into(&mut buf, raw, aref.dtype);
-        Ok(buf)
+        decode_into(out, raw, aref.dtype);
+        Ok(())
     }
 
-    pub fn read_chromatogram_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
-        let c = self
+    pub fn read_chromatogram_array(
+        &mut self,
+        aref: &ArrayRef,
+        out: &mut Vec<f64>,
+    ) -> Result<(), String> {
+        let container = self
             .chrom_container
             .as_mut()
-            .ok_or("no chromatogram container")?;
-        let stride = dtype_stride(aref.dtype);
-        let raw = c.get_item_from_block(
+            .ok_or_else(|| "no chromatogram container".to_string())?;
+        let raw = container.get_item_from_block(
             aref.block_id,
             aref.element_offset,
             aref.element_count,
-            stride,
+            dtype_stride(aref.dtype),
             "read_chromatogram_array",
         )?;
-        let mut buf = Vec::new();
-        decode_into(&mut buf, raw, aref.dtype);
-        Ok(buf)
+        decode_into(out, raw, aref.dtype);
+        Ok(())
     }
 
     pub(crate) fn global_metadata(&self) -> Result<Vec<Metadatum>, String> {
@@ -298,14 +333,309 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn to_mzml_metadata_only(&self) -> Result<MzML, String> {
-        let global_meta = self.global_metadata()?;
+        MzmlConverter::metadata_only(self)
+    }
+
+    pub fn to_mzml(&mut self) -> Result<MzML, String> {
+        MzmlConverter::new(self).full()
+    }
+}
+
+enum IonBackend<'a> {
+    Decoder(Decoder<'a>),
+    Materialized,
+}
+
+pub struct Ion<'a> {
+    pub cv_list: Option<CvList>,
+    pub file_description: Option<FileDescription>,
+    pub referenceable_param_group_list: Option<ReferenceableParamGroupList>,
+    pub sample_list: Option<SampleList>,
+    pub instrument_list: Option<InstrumentList>,
+    pub software_list: Option<SoftwareList>,
+    pub data_processing_list: Option<DataProcessingList>,
+    pub scan_settings_list: Option<ScanSettingsList>,
+    pub run: Run,
+    backend: IonBackend<'a>,
+}
+
+impl<'a> Ion<'a> {
+    pub fn open(bytes: &'a [u8]) -> Result<Self, String> {
+        Self::open_with_config(bytes, DecoderConfig::default())
+    }
+
+    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> Result<Self, String> {
+        let decoder = Decoder::open_with_config(bytes, config)?;
+        Ok(Self::empty(IonBackend::Decoder(decoder)))
+    }
+
+    pub fn from_mzml(mzml: MzML) -> Self {
+        let mut ion = Self::empty(IonBackend::Materialized);
+        ion.set_from_mzml(mzml);
+        ion
+    }
+
+    #[inline]
+    fn empty(backend: IonBackend<'a>) -> Self {
+        Self {
+            cv_list: None,
+            file_description: None,
+            referenceable_param_group_list: None,
+            sample_list: None,
+            instrument_list: None,
+            software_list: None,
+            data_processing_list: None,
+            scan_settings_list: None,
+            run: Run::default(),
+            backend,
+        }
+    }
+
+    fn set_from_mzml(&mut self, mzml: MzML) {
+        self.cv_list = mzml.cv_list;
+        self.file_description = mzml.file_description;
+        self.referenceable_param_group_list = mzml.referenceable_param_group_list;
+        self.sample_list = mzml.sample_list;
+        self.instrument_list = mzml.instrument_list;
+        self.software_list = mzml.software_list;
+        self.data_processing_list = mzml.data_processing_list;
+        self.scan_settings_list = mzml.scan_settings_list;
+        self.run = mzml.run;
+    }
+
+    #[inline]
+    fn clone_as_mzml(&self) -> MzML {
+        MzML {
+            cv_list: self.cv_list.clone(),
+            file_description: self.file_description.clone(),
+            referenceable_param_group_list: self.referenceable_param_group_list.clone(),
+            sample_list: self.sample_list.clone(),
+            instrument_list: self.instrument_list.clone(),
+            software_list: self.software_list.clone(),
+            data_processing_list: self.data_processing_list.clone(),
+            scan_settings_list: self.scan_settings_list.clone(),
+            run: self.run.clone(),
+        }
+    }
+
+    pub fn load_metadata(&mut self) -> Result<(), String> {
+        let mzml = match &mut self.backend {
+            IonBackend::Decoder(decoder) => Some(decoder.to_mzml_metadata_only()?),
+            IonBackend::Materialized => None,
+        };
+        if let Some(mzml) = mzml {
+            self.set_from_mzml(mzml);
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn spectrum_count(&self) -> u64 {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.spectrum_count(),
+            IonBackend::Materialized => self
+                .run
+                .spectrum_list
+                .as_ref()
+                .map_or(0, |list| list.spectra.len() as u64),
+        }
+    }
+
+    #[inline]
+    pub fn chromatogram_count(&self) -> u64 {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.chromatogram_count(),
+            IonBackend::Materialized => self
+                .run
+                .chromatogram_list
+                .as_ref()
+                .map_or(0, |list| list.chromatograms.len() as u64),
+        }
+    }
+
+    #[inline]
+    pub fn header(&self) -> &Header {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.header(),
+            IonBackend::Materialized => panic!("header is unavailable for mzML-backed Ion"),
+        }
+    }
+
+    #[inline]
+    pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.filter_record(index),
+            IonBackend::Materialized => None,
+        }
+    }
+
+    pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.filter_records(),
+            IonBackend::Materialized => {
+                Err("filter records are unavailable for mzML-backed Ion".to_string())
+            }
+        }
+    }
+
+    pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.spectrum_array_refs(index),
+            IonBackend::Materialized => None,
+        }
+    }
+
+    pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
+        match &self.backend {
+            IonBackend::Decoder(decoder) => decoder.chromatogram_array_refs(index),
+            IonBackend::Materialized => None,
+        }
+    }
+
+    pub fn read_spectrum_array(
+        &mut self,
+        aref: &ArrayRef,
+        out: &mut Vec<f64>,
+    ) -> Result<(), String> {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => decoder.read_spectrum_array(aref, out),
+            IonBackend::Materialized => {
+                Err("array refs are unavailable for mzML-backed Ion".to_string())
+            }
+        }
+    }
+
+    pub fn read_chromatogram_array(
+        &mut self,
+        aref: &ArrayRef,
+        out: &mut Vec<f64>,
+    ) -> Result<(), String> {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => decoder.read_chromatogram_array(aref, out),
+            IonBackend::Materialized => {
+                Err("array refs are unavailable for mzML-backed Ion".to_string())
+            }
+        }
+    }
+
+    pub fn to_mzml(&mut self) -> Result<MzML, String> {
+        if let IonBackend::Decoder(decoder) = &mut self.backend {
+            return decoder.to_mzml();
+        }
+        Ok(self.clone_as_mzml())
+    }
+
+    pub fn to_mzml_metadata_only(&self) -> Result<MzML, String> {
+        if let IonBackend::Decoder(decoder) = &self.backend {
+            return decoder.to_mzml_metadata_only();
+        }
+        Ok(self.clone_as_mzml())
+    }
+}
+
+impl<'a> SpectrumSource for Ion<'a> {
+    fn for_each_scan_in_range(
+        &mut self,
+        rt_min: f64,
+        rt_max: f64,
+        ms_level: u8,
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
+    ) {
+        if let IonBackend::Decoder(decoder) = &mut self.backend {
+            decoder.for_each_scan_in_range(rt_min, rt_max, ms_level, callback);
+            return;
+        }
+        if let Some(list) = self.run.spectrum_list.as_ref() {
+            for_each_spectra_in_range(&list.spectra, rt_min, rt_max, ms_level, callback);
+        }
+    }
+}
+
+impl<'a> SpectrumSource for Decoder<'a> {
+    fn for_each_scan_in_range(
+        &mut self,
+        rt_min: f64,
+        rt_max: f64,
+        ms_level: u8,
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
+    ) {
+        let Some(filter_bytes) =
+            self.header
+                .len_filter_index
+                .try_into()
+                .ok()
+                .and_then(|len: usize| {
+                    usize::try_from(self.header.off_filter_index)
+                        .ok()
+                        .and_then(|off| {
+                            off.checked_add(len)
+                                .and_then(|end| self.bytes.get(off..end))
+                        })
+                })
+        else {
+            return;
+        };
+
+        let count = match usize::try_from(self.header.spectrum_count) {
+            Ok(count) => count,
+            Err(_) => return,
+        };
+        let Some(entry_bytes) = count.checked_mul(ENTRY_A_BYTES).and_then(|len| {
+            usize::try_from(self.header.off_spec_entries)
+                .ok()
+                .and_then(|off| {
+                    off.checked_add(len)
+                        .and_then(|end| self.bytes.get(off..end))
+                })
+        }) else {
+            return;
+        };
+
+        let aref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
+            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
+            Err(_) => return,
+        };
+
+        let (container, mz_buf, int_buf) = (
+            &mut self.spec_container as &mut dyn ContainerAccess,
+            &mut self.mz_buf,
+            &mut self.int_buf,
+        );
+
+        ScanIterator::new(
+            filter_bytes,
+            entry_bytes,
+            aref_bytes,
+            container,
+            mz_buf,
+            int_buf,
+            rt_min * 60.0,
+            rt_max * 60.0,
+            ms_level,
+        )
+        .run(callback);
+    }
+}
+
+struct MzmlConverter<'a, 'd> {
+    decoder: &'d mut Decoder<'a>,
+}
+
+impl<'a, 'd> MzmlConverter<'a, 'd> {
+    #[inline]
+    fn new(decoder: &'d mut Decoder<'a>) -> Self {
+        Self { decoder }
+    }
+
+    fn metadata_only(decoder: &Decoder<'a>) -> Result<MzML, String> {
+        let global_meta = decoder.global_metadata()?;
         let global_lookup = ChildrenLookup::new(&global_meta);
         let meta_refs: Vec<&Metadatum> = global_meta.iter().collect();
         let policy = DefaultMetadataPolicy;
 
         let mut owner_rows = OwnerRows::with_capacity(global_meta.len());
-        for m in &global_meta {
-            owner_rows.insert(m.id, m);
+        for metadatum in &global_meta {
+            owner_rows.insert(metadatum.id, metadatum);
         }
 
         let run_id = global_lookup
@@ -319,8 +649,8 @@ impl<'a> Decoder<'a> {
         global_lookup.get_param_rows_into(&owner_rows, run_id, &policy, &mut param_buffer);
         let (cv_params, user_params) = parse_cv_and_user_params(&param_buffer);
 
-        let spec_meta = self.spectrum_metadata()?;
-        let chrom_meta = self.chromatogram_metadata()?;
+        let spec_meta = decoder.spectrum_metadata()?;
+        let chrom_meta = decoder.chromatogram_metadata()?;
         let spec_refs: Vec<&Metadatum> = spec_meta.iter().collect();
         let chrom_refs: Vec<&Metadatum> = chrom_meta.iter().collect();
 
@@ -347,7 +677,7 @@ impl<'a> Decoder<'a> {
             run: Run {
                 id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
                 start_time_stamp: get_attr_text(rows, ACC_ATTR_START_TIME_STAMP)
-                    .filter(|s| !s.is_empty()),
+                    .filter(|value| !value.is_empty()),
                 default_instrument_configuration_ref: get_attr_text(
                     rows,
                     ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF,
@@ -364,281 +694,198 @@ impl<'a> Decoder<'a> {
         })
     }
 
-    pub fn to_mzml(&mut self) -> Result<MzML, String> {
-        let mut mzml = self.to_mzml_metadata_only()?;
+    fn full(&mut self) -> Result<MzML, String> {
+        let mut mzml = Self::metadata_only(self.decoder)?;
 
-        if let Some(sl) = mzml.run.spectrum_list.as_mut() {
-            self.attach_spec_binaries(&mut sl.spectra)?;
+        if let Some(spectrum_list) = mzml.run.spectrum_list.as_mut() {
+            attach_binaries(
+                self.decoder.bytes,
+                self.decoder.header.off_spec_entries as usize,
+                self.decoder.header.off_spec_arrayrefs as usize,
+                &mut spectrum_list.spectra,
+                &mut self.decoder.spec_container,
+                "spec",
+            )?;
         }
-        if let Some(cl) = mzml.run.chromatogram_list.as_mut() {
-            self.attach_chrom_binaries(&mut cl.chromatograms)?;
+
+        if let (Some(chrom_list), Some(container)) = (
+            mzml.run.chromatogram_list.as_mut(),
+            self.decoder.chrom_container.as_mut(),
+        ) {
+            attach_binaries(
+                self.decoder.bytes,
+                self.decoder.header.off_chrom_entries as usize,
+                self.decoder.header.off_chrom_arrayrefs as usize,
+                &mut chrom_list.chromatograms,
+                container,
+                "chrom",
+            )?;
         }
 
         Ok(mzml)
     }
-
-    fn attach_spec_binaries(&mut self, spectra: &mut [Spectrum]) -> Result<(), String> {
-        let entry_base = self.header.off_spec_entries as usize;
-        let aref_base = self.header.off_spec_arrayrefs as usize;
-        for (i, spectrum) in spectra.iter_mut().enumerate() {
-            let Some(refs) = read_array_refs_at(self.bytes, entry_base, aref_base, i) else {
-                continue;
-            };
-            if refs.is_empty() {
-                continue;
-            }
-            let bdal = spectrum
-                .binary_data_array_list
-                .get_or_insert_with(BinaryDataArrayList::default);
-            for aref in &refs {
-                let raw = self.spec_container.get_item_from_block(
-                    aref.block_id,
-                    aref.element_offset,
-                    aref.element_count,
-                    dtype_stride(aref.dtype),
-                    "spec",
-                )?;
-                attach_array(bdal, aref.array_type, aref.dtype, raw);
-            }
-            bdal.count = Some(bdal.binary_data_arrays.len());
-        }
-        Ok(())
-    }
-
-    fn attach_chrom_binaries(&mut self, chromatograms: &mut [Chromatogram]) -> Result<(), String> {
-        let container = match self.chrom_container.as_mut() {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-        let entry_base = self.header.off_chrom_entries as usize;
-        let aref_base = self.header.off_chrom_arrayrefs as usize;
-        for (i, chromatogram) in chromatograms.iter_mut().enumerate() {
-            let Some(refs) = read_array_refs_at(self.bytes, entry_base, aref_base, i) else {
-                continue;
-            };
-            if refs.is_empty() {
-                continue;
-            }
-            let bdal = chromatogram
-                .binary_data_array_list
-                .get_or_insert_with(BinaryDataArrayList::default);
-            for aref in &refs {
-                let raw = container.get_item_from_block(
-                    aref.block_id,
-                    aref.element_offset,
-                    aref.element_count,
-                    dtype_stride(aref.dtype),
-                    "chrom",
-                )?;
-                attach_array(bdal, aref.array_type, aref.dtype, raw);
-            }
-            bdal.count = Some(bdal.binary_data_arrays.len());
-        }
-        Ok(())
-    }
 }
 
-pub struct Ion<'a> {
-    pub cv_list: Option<CvList>,
-    pub file_description: Option<FileDescription>,
-    pub referenceable_param_group_list: Option<ReferenceableParamGroupList>,
-    pub sample_list: Option<SampleList>,
-    pub instrument_list: Option<InstrumentList>,
-    pub software_list: Option<SoftwareList>,
-    pub data_processing_list: Option<DataProcessingList>,
-    pub scan_settings_list: Option<ScanSettingsList>,
-    pub run: Run,
-    decoder: Decoder<'a>,
+struct ScanIterator<'a, 'd> {
+    filter_chunks: std::slice::ChunksExact<'a, u8>,
+    entry_chunks: std::slice::ChunksExact<'a, u8>,
+    aref_bytes: &'a [u8],
+    container: &'d mut dyn ContainerAccess,
+    mz_buf: &'d mut Vec<f64>,
+    int_buf: &'d mut Vec<f64>,
+    rt_min_s: f64,
+    rt_max_s: f64,
+    ms_level: u8,
 }
 
-impl<'a> Ion<'a> {
-    pub fn open(bytes: &'a [u8]) -> Result<Self, String> {
-        Self::open_with_config(bytes, DecoderConfig::default())
-    }
-
-    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> Result<Self, String> {
-        let decoder = Decoder::open_with_config(bytes, config)?;
-        Ok(Self {
-            cv_list: None,
-            file_description: None,
-            referenceable_param_group_list: None,
-            sample_list: None,
-            instrument_list: None,
-            software_list: None,
-            data_processing_list: None,
-            scan_settings_list: None,
-            run: Run::default(),
-            decoder,
-        })
-    }
-
-    pub fn load_metadata(&mut self) -> Result<(), String> {
-        let mzml = self.decoder.to_mzml_metadata_only()?;
-        self.cv_list = mzml.cv_list;
-        self.file_description = mzml.file_description;
-        self.referenceable_param_group_list = mzml.referenceable_param_group_list;
-        self.sample_list = mzml.sample_list;
-        self.instrument_list = mzml.instrument_list;
-        self.software_list = mzml.software_list;
-        self.data_processing_list = mzml.data_processing_list;
-        self.scan_settings_list = mzml.scan_settings_list;
-        self.run = mzml.run;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn spectrum_count(&self) -> u64 {
-        self.decoder.spectrum_count()
-    }
-
-    #[inline]
-    pub fn chromatogram_count(&self) -> u64 {
-        self.decoder.chromatogram_count()
-    }
-
-    #[inline]
-    pub fn header(&self) -> &Header {
-        self.decoder.header()
-    }
-
-    #[inline]
-    pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
-        self.decoder.filter_record(index)
-    }
-
-    pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
-        self.decoder.filter_records()
-    }
-
-    pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
-        self.decoder.spectrum_array_refs(index)
-    }
-
-    pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
-        self.decoder.chromatogram_array_refs(index)
-    }
-
-    pub fn read_spectrum_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
-        self.decoder.read_spectrum_array(aref)
-    }
-
-    pub fn read_chromatogram_array(&mut self, aref: &ArrayRef) -> Result<Vec<f64>, String> {
-        self.decoder.read_chromatogram_array(aref)
-    }
-
-    pub fn to_mzml(&mut self) -> Result<MzML, String> {
-        self.decoder.to_mzml()
-    }
-
-    pub fn to_mzml_metadata_only(&self) -> Result<MzML, String> {
-        self.decoder.to_mzml_metadata_only()
-    }
-}
-
-impl<'a> SpectrumSource for Ion<'a> {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
+impl<'a, 'd> ScanIterator<'a, 'd> {
+    fn new(
+        filter_bytes: &'a [u8],
+        entry_bytes: &'a [u8],
+        aref_bytes: &'a [u8],
+        container: &'d mut dyn ContainerAccess,
+        mz_buf: &'d mut Vec<f64>,
+        int_buf: &'d mut Vec<f64>,
+        rt_min_s: f64,
+        rt_max_s: f64,
         ms_level: u8,
-        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
-    ) {
-        self.decoder
-            .for_each_scan_in_range(rt_min, rt_max, ms_level, callback);
+    ) -> Self {
+        Self {
+            filter_chunks: filter_bytes.chunks_exact(FILTER_INDEX_RECORD_SIZE),
+            entry_chunks: entry_bytes.chunks_exact(ENTRY_A_BYTES),
+            aref_bytes,
+            container,
+            mz_buf,
+            int_buf,
+            rt_min_s,
+            rt_max_s,
+            ms_level,
+        }
     }
-}
 
-impl<'a> SpectrumSource for Decoder<'a> {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
-    ) {
-        let rt_min_s = rt_min * 60.0;
-        let rt_max_s = rt_max * 60.0;
-        let count = self.header.spectrum_count as usize;
-        let filter_base = self.header.off_filter_index as usize;
-        let entry_base = self.header.off_spec_entries as usize;
-        let aref_base = self.header.off_spec_arrayrefs as usize;
+    fn run(&mut self, callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64])) {
+        for (filter_bytes, entry_bytes) in
+            self.filter_chunks.by_ref().zip(self.entry_chunks.by_ref())
+        {
+            let rt_s = f64::from_le_bytes(filter_bytes[0..8].try_into().unwrap());
+            if !rt_s.is_finite() || rt_s < self.rt_min_s || rt_s > self.rt_max_s {
+                continue;
+            }
 
-        for i in 0..count {
-            let fb = filter_base + i * FILTER_INDEX_RECORD_SIZE;
-            let Some(fs) = self.bytes.get(fb..fb + FILTER_INDEX_RECORD_SIZE) else {
+            let ms_level = filter_bytes[40];
+            if self.ms_level != 0 && ms_level != self.ms_level {
+                continue;
+            }
+
+            let Some((mz_ref, int_ref)) = parse_array_pair(entry_bytes, self.aref_bytes) else {
                 continue;
             };
-            let rt_s = f64::from_le_bytes(fs[0..8].try_into().unwrap());
-            if !rt_s.is_finite() || rt_s < rt_min_s || rt_s > rt_max_s {
+            if !decode_from_block(self.container, self.mz_buf, &mz_ref) {
                 continue;
             }
-            let ms = fs[40];
-            if ms_level != 0 && ms != ms_level {
+            if !decode_from_block(self.container, self.int_buf, &int_ref) {
                 continue;
             }
 
-            let ea = entry_base + i * ENTRY_A_BYTES;
-            let Some(es) = self.bytes.get(ea..ea + ENTRY_A_BYTES) else {
-                continue;
-            };
-            let ref_start = u64::from_le_bytes(es[0..8].try_into().unwrap()) as usize;
-            let ref_count = u64::from_le_bytes(es[8..16].try_into().unwrap()) as usize;
-
-            let mut mz_ref: Option<ArrayRef> = None;
-            let mut int_ref: Option<ArrayRef> = None;
-            for j in 0..ref_count {
-                let ab = aref_base + (ref_start + j) * ENTRY_A1_BYTES;
-                let Some(ar) = self.bytes.get(ab..ab + ENTRY_A1_BYTES) else {
-                    break;
-                };
-                let aref = parse_array_ref(ar);
-                match aref.array_type {
-                    ACC_MZ => mz_ref = Some(aref),
-                    ACC_INT => int_ref = Some(aref),
-                    _ => {}
-                }
-                if mz_ref.is_some() && int_ref.is_some() {
-                    break;
-                }
-            }
-
-            let (Some(mr), Some(ir)) = (mz_ref, int_ref) else {
-                continue;
-            };
-            if !decode_from_block(&mut self.spec_container, &mut self.mz_buf, &mr) {
-                continue;
-            }
-            if !decode_from_block(&mut self.spec_container, &mut self.int_buf, &ir) {
-                continue;
-            }
-            let n = self.mz_buf.len().min(self.int_buf.len());
-            if n == 0 {
+            let len = self.mz_buf.len().min(self.int_buf.len());
+            if len == 0 {
                 continue;
             }
 
             let meta = ScanMeta {
-                ms_level: ms,
-                polarity: fs[41],
-                base_peak_mz: f64::from_le_bytes(fs[8..16].try_into().unwrap()),
-                selected_ion_mz: f64::from_le_bytes(fs[16..24].try_into().unwrap()),
-                base_peak_int: f64::from_le_bytes(fs[24..32].try_into().unwrap()),
-                total_ion_current: f64::from_le_bytes(fs[32..40].try_into().unwrap()),
+                ms_level,
+                polarity: filter_bytes[41],
+                base_peak_mz: f64::from_le_bytes(filter_bytes[8..16].try_into().unwrap()),
+                selected_ion_mz: f64::from_le_bytes(filter_bytes[16..24].try_into().unwrap()),
+                base_peak_int: f64::from_le_bytes(filter_bytes[24..32].try_into().unwrap()),
+                total_ion_current: f64::from_le_bytes(filter_bytes[32..40].try_into().unwrap()),
             };
-            callback(rt_s / 60.0, &meta, &self.mz_buf[..n], &self.int_buf[..n]);
+            callback(
+                rt_s / 60.0,
+                &meta,
+                &self.mz_buf[..len],
+                &self.int_buf[..len],
+            );
         }
     }
 }
 
+trait BinaryArrayOwner {
+    fn binary_data_array_list_mut(&mut self) -> &mut Option<BinaryDataArrayList>;
+}
+
+impl BinaryArrayOwner for Spectrum {
+    #[inline]
+    fn binary_data_array_list_mut(&mut self) -> &mut Option<BinaryDataArrayList> {
+        &mut self.binary_data_array_list
+    }
+}
+
+impl BinaryArrayOwner for Chromatogram {
+    #[inline]
+    fn binary_data_array_list_mut(&mut self) -> &mut Option<BinaryDataArrayList> {
+        &mut self.binary_data_array_list
+    }
+}
+
+#[derive(Clone)]
+struct ArrayRefs {
+    len: usize,
+    inline: [ArrayRef; INLINE_ARRAY_REF_CAP],
+    heap: Option<Vec<ArrayRef>>,
+}
+
+impl ArrayRefs {
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            len: 0,
+            inline: [ArrayRef::default(); INLINE_ARRAY_REF_CAP],
+            heap: (capacity > INLINE_ARRAY_REF_CAP).then(|| Vec::with_capacity(capacity)),
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, value: ArrayRef) {
+        if let Some(heap) = self.heap.as_mut() {
+            heap.push(value);
+            self.len = heap.len();
+            return;
+        }
+        self.inline[self.len] = value;
+        self.len += 1;
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[ArrayRef] {
+        match self.heap.as_deref() {
+            Some(heap) => heap,
+            None => &self.inline[..self.len],
+        }
+    }
+
+    #[inline]
+    fn into_vec(self) -> Vec<ArrayRef> {
+        self.heap
+            .unwrap_or_else(|| self.inline[..self.len].to_vec())
+    }
+}
+
 #[inline]
-fn parse_filter_record(b: &[u8]) -> FilterRecord {
+fn parse_filter_record(bytes: &[u8]) -> FilterRecord {
     FilterRecord {
-        rt_seconds: f64::from_le_bytes(b[0..8].try_into().unwrap()),
-        base_peak_mz: f64::from_le_bytes(b[8..16].try_into().unwrap()),
-        selected_ion_mz: f64::from_le_bytes(b[16..24].try_into().unwrap()),
-        base_peak_int: f64::from_le_bytes(b[24..32].try_into().unwrap()),
-        total_ion_current: f64::from_le_bytes(b[32..40].try_into().unwrap()),
-        ms_level: b[40],
-        polarity: b[41],
+        rt_seconds: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        base_peak_mz: f64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+        selected_ion_mz: f64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+        base_peak_int: f64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        total_ion_current: f64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+        ms_level: bytes[40],
+        polarity: bytes[41],
     }
 }
 
@@ -648,33 +895,63 @@ fn read_array_refs_at(
     entry_base: usize,
     aref_base: usize,
     index: usize,
-) -> Option<Vec<ArrayRef>> {
-    let ea = entry_base + index * ENTRY_A_BYTES;
-    let entry = bytes.get(ea..ea + ENTRY_A_BYTES)?;
-    let ref_start = u64::from_le_bytes(entry[0..8].try_into().unwrap()) as usize;
-    let ref_count = u64::from_le_bytes(entry[8..16].try_into().unwrap()) as usize;
-    let mut refs = Vec::with_capacity(ref_count);
-    for j in 0..ref_count {
-        let ab = aref_base + (ref_start + j) * ENTRY_A1_BYTES;
-        refs.push(parse_array_ref(bytes.get(ab..ab + ENTRY_A1_BYTES)?));
+) -> Option<ArrayRefs> {
+    let entry_offset = index.checked_mul(ENTRY_A_BYTES)?.checked_add(entry_base)?;
+    let entry_end = entry_offset.checked_add(ENTRY_A_BYTES)?;
+    let entry = bytes.get(entry_offset..entry_end)?;
+    let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
+    let ref_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
+    let mut refs = ArrayRefs::with_capacity(ref_count);
+    for offset in 0..ref_count {
+        let pos = ref_start
+            .checked_add(offset)?
+            .checked_mul(ENTRY_A1_BYTES)?
+            .checked_add(aref_base)?;
+        let end = pos.checked_add(ENTRY_A1_BYTES)?;
+        refs.push(parse_array_ref(bytes.get(pos..end)?));
     }
     Some(refs)
 }
 
 #[inline]
-fn parse_array_ref(b: &[u8]) -> ArrayRef {
+fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
     ArrayRef {
-        element_offset: u64::from_le_bytes(b[0..8].try_into().unwrap()),
-        element_count: u64::from_le_bytes(b[8..16].try_into().unwrap()),
-        block_id: u32::from_le_bytes(b[16..20].try_into().unwrap()),
-        array_type: u32::from_le_bytes(b[20..24].try_into().unwrap()),
-        dtype: b[24],
+        element_offset: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        element_count: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+        block_id: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
+        array_type: u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
+        dtype: bytes[24],
     }
 }
 
 #[inline]
+fn parse_array_pair(entry_bytes: &[u8], aref_bytes: &[u8]) -> Option<(ArrayRef, ArrayRef)> {
+    let ref_start =
+        usize::try_from(u64::from_le_bytes(entry_bytes[0..8].try_into().unwrap())).ok()?;
+    let ref_count =
+        usize::try_from(u64::from_le_bytes(entry_bytes[8..16].try_into().unwrap())).ok()?;
+    let start = ref_start.checked_mul(ENTRY_A1_BYTES)?;
+    let span = ref_count.checked_mul(ENTRY_A1_BYTES)?;
+    let end = start.checked_add(span)?;
+    let mut mz_ref = None;
+    let mut int_ref = None;
+    for bytes in aref_bytes.get(start..end)?.chunks_exact(ENTRY_A1_BYTES) {
+        let array_ref = parse_array_ref(bytes);
+        match array_ref.array_type {
+            ACC_MZ => mz_ref = Some(array_ref),
+            ACC_INT => int_ref = Some(array_ref),
+            _ => {}
+        }
+        if let (Some(mz_ref), Some(int_ref)) = (mz_ref, int_ref) {
+            return Some((mz_ref, int_ref));
+        }
+    }
+    None
+}
+
+#[inline]
 fn decode_from_block(
-    container: &mut ContainerView<'_, DefaultProcessor>,
+    container: &mut dyn ContainerAccess,
     buf: &mut Vec<f64>,
     aref: &ArrayRef,
 ) -> bool {
@@ -703,39 +980,99 @@ fn dtype_stride(dtype: u8) -> usize {
     }
 }
 
+#[inline]
+fn reserve_exact_elements(buf: &mut Vec<f64>, len: usize) {
+    if buf.capacity() < len {
+        buf.reserve_exact(len - buf.capacity());
+    }
+}
+
 fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8) {
     buf.clear();
     match dtype {
         1 => {
-            let n = raw.len() / 8;
-            buf.reserve(n);
-            unsafe {
-                buf.set_len(n);
-                std::ptr::copy_nonoverlapping(raw.as_ptr(), buf.as_mut_ptr() as *mut u8, raw.len());
-            }
+            let len = raw.len() / 8;
+            reserve_exact_elements(buf, len);
+            buf.extend(
+                raw.chunks_exact(8)
+                    .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
+            );
         }
-        2 => buf.extend(
-            raw.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64),
-        ),
-        3 => buf.extend(
-            raw.chunks_exact(2)
-                .map(|c| f16_bits_to_f64(u16::from_le_bytes(c.try_into().unwrap()))),
-        ),
-        4 => buf.extend(
-            raw.chunks_exact(2)
-                .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f64),
-        ),
-        5 => buf.extend(
-            raw.chunks_exact(4)
-                .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64),
-        ),
-        6 => buf.extend(
-            raw.chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f64),
-        ),
+        2 => {
+            let len = raw.len() / 4;
+            reserve_exact_elements(buf, len);
+            buf.extend(
+                raw.chunks_exact(4)
+                    .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()) as f64),
+            );
+        }
+        3 => {
+            let len = raw.len() / 2;
+            reserve_exact_elements(buf, len);
+            buf.extend(
+                raw.chunks_exact(2)
+                    .map(|chunk| f16_bits_to_f64(u16::from_le_bytes(chunk.try_into().unwrap()))),
+            );
+        }
+        4 => {
+            let len = raw.len() / 2;
+            reserve_exact_elements(buf, len);
+            buf.extend(
+                raw.chunks_exact(2)
+                    .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap()) as f64),
+            );
+        }
+        5 => {
+            let len = raw.len() / 4;
+            reserve_exact_elements(buf, len);
+            buf.extend(
+                raw.chunks_exact(4)
+                    .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()) as f64),
+            );
+        }
+        6 => {
+            let len = raw.len() / 8;
+            reserve_exact_elements(buf, len);
+            buf.extend(
+                raw.chunks_exact(8)
+                    .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()) as f64),
+            );
+        }
         _ => {}
     }
+}
+
+fn attach_binaries<E: BinaryArrayOwner>(
+    bytes: &[u8],
+    entry_base: usize,
+    aref_base: usize,
+    entries: &mut [E],
+    container: &mut dyn ContainerAccess,
+    ctx: &'static str,
+) -> Result<(), String> {
+    for (index, entry) in entries.iter_mut().enumerate() {
+        let Some(refs) = read_array_refs_at(bytes, entry_base, aref_base, index) else {
+            continue;
+        };
+        if refs.is_empty() {
+            continue;
+        }
+        let binary_data_array_list = entry
+            .binary_data_array_list_mut()
+            .get_or_insert_with(BinaryDataArrayList::default);
+        for aref in refs.as_slice() {
+            let raw = container.get_item_from_block(
+                aref.block_id,
+                aref.element_offset,
+                aref.element_count,
+                dtype_stride(aref.dtype),
+                ctx,
+            )?;
+            attach_array(binary_data_array_list, aref.array_type, aref.dtype, raw);
+        }
+        binary_data_array_list.count = Some(binary_data_array_list.binary_data_arrays.len());
+    }
+    Ok(())
 }
 
 fn attach_array(bdal: &mut BinaryDataArrayList, array_type: u32, dtype: u8, raw: &[u8]) {
@@ -744,7 +1081,7 @@ fn attach_array(bdal: &mut BinaryDataArrayList, array_type: u32, dtype: u8, raw:
     let found = bdal
         .binary_data_arrays
         .iter_mut()
-        .find(|b| bda_matches(b, array_type));
+        .find(|array| bda_matches(array, array_type));
     let bda = match found {
         Some(existing) => existing,
         None => {
@@ -758,24 +1095,79 @@ fn attach_array(bdal: &mut BinaryDataArrayList, array_type: u32, dtype: u8, raw:
 
 fn raw_to_binary_data(raw: &[u8], dtype: u8) -> BinaryData {
     match dtype {
-        1 => BinaryData::F64(byte_cast(raw)),
-        2 => BinaryData::F32(byte_cast(raw)),
-        3 => BinaryData::F16(byte_cast(raw)),
-        4 => BinaryData::I16(byte_cast(raw)),
-        5 => BinaryData::I32(byte_cast(raw)),
-        6 => BinaryData::I64(byte_cast(raw)),
+        1 => BinaryData::F64(raw_to_f64_vec(raw)),
+        2 => BinaryData::F32(raw_to_f32_vec(raw)),
+        3 => BinaryData::F16(raw_to_u16_vec(raw)),
+        4 => BinaryData::I16(raw_to_i16_vec(raw)),
+        5 => BinaryData::I32(raw_to_i32_vec(raw)),
+        6 => BinaryData::I64(raw_to_i64_vec(raw)),
         _ => BinaryData::F64(Vec::new()),
     }
 }
 
 #[inline]
-fn byte_cast<T>(raw: &[u8]) -> Vec<T> {
-    let n = raw.len() / std::mem::size_of::<T>();
-    let mut out = Vec::with_capacity(n);
-    unsafe {
-        out.set_len(n);
-        std::ptr::copy_nonoverlapping(raw.as_ptr(), out.as_mut_ptr() as *mut u8, raw.len());
-    }
+fn raw_to_f64_vec(raw: &[u8]) -> Vec<f64> {
+    assert!(raw.len() % 8 == 0);
+    let mut out = Vec::with_capacity(raw.len() / 8);
+    out.extend(
+        raw.chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
+    );
+    out
+}
+
+#[inline]
+fn raw_to_f32_vec(raw: &[u8]) -> Vec<f32> {
+    assert!(raw.len() % 4 == 0);
+    let mut out = Vec::with_capacity(raw.len() / 4);
+    out.extend(
+        raw.chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap())),
+    );
+    out
+}
+
+#[inline]
+fn raw_to_u16_vec(raw: &[u8]) -> Vec<u16> {
+    assert!(raw.len() % 2 == 0);
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    out.extend(
+        raw.chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap())),
+    );
+    out
+}
+
+#[inline]
+fn raw_to_i16_vec(raw: &[u8]) -> Vec<i16> {
+    assert!(raw.len() % 2 == 0);
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    out.extend(
+        raw.chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap())),
+    );
+    out
+}
+
+#[inline]
+fn raw_to_i32_vec(raw: &[u8]) -> Vec<i32> {
+    assert!(raw.len() % 4 == 0);
+    let mut out = Vec::with_capacity(raw.len() / 4);
+    out.extend(
+        raw.chunks_exact(4)
+            .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap())),
+    );
+    out
+}
+
+#[inline]
+fn raw_to_i64_vec(raw: &[u8]) -> Vec<i64> {
+    assert!(raw.len() % 8 == 0);
+    let mut out = Vec::with_capacity(raw.len() / 8);
+    out.extend(
+        raw.chunks_exact(8)
+            .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap())),
+    );
     out
 }
 
@@ -814,7 +1206,7 @@ fn sync_numeric_meta(bda: &mut BinaryDataArray, nt: NumericType) {
         NumericType::Int64 => 1_000_522,
     };
     bda.cv_params
-        .retain(|p| !is_numeric_acc(parse_accession_tail(p.accession.as_deref())));
+        .retain(|param| !is_numeric_acc(parse_accession_tail(param.accession.as_deref())));
     bda.cv_params.push(CvParam {
         cv_ref: Some("MS".into()),
         accession: Some(format!("MS:{target:07}")),
@@ -843,7 +1235,7 @@ fn is_numeric_acc(tail: crate::ion::attr_meta::AccessionTail) -> bool {
 fn bda_matches(bda: &BinaryDataArray, kind: u32) -> bool {
     bda.cv_params
         .iter()
-        .any(|p| parse_accession_tail(p.accession.as_deref()).raw() == kind)
+        .any(|param| parse_accession_tail(param.accession.as_deref()).raw() == kind)
 }
 
 fn parse_run_source_file_refs(
@@ -860,7 +1252,8 @@ fn parse_run_source_file_refs(
         .ids_for(list_id, TagId::SourceFileRef)
         .iter()
         .filter_map(|&id| {
-            get_attr_text(owner_rows.get(id), ACC_ATTR_REF).map(|r| SourceFileRef { r#ref: r })
+            get_attr_text(owner_rows.get(id), ACC_ATTR_REF)
+                .map(|value| SourceFileRef { r#ref: value })
         })
         .collect();
     (!refs.is_empty()).then(|| SourceFileRefList {
@@ -908,7 +1301,10 @@ mod tests {
         let mut d = Decoder::open(BYTES).unwrap();
         let refs = d.spectrum_array_refs(0).unwrap();
         let mz_ref = refs.iter().find(|a| a.array_type == ACC_MZ).unwrap();
-        let mz = d.read_spectrum_array(mz_ref).unwrap();
+
+        let mut mz = Vec::new();
+        d.read_spectrum_array(mz_ref, &mut mz).unwrap();
+
         assert!(!mz.is_empty());
         assert!(mz.iter().all(|v| v.is_finite()));
     }
