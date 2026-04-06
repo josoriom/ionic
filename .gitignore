@@ -2,3 +2,5 @@ target/
 .DS_Store
 target/
 checks/
+pwiz/
+inputs/

@@ -353,7 +353,7 @@ fn assert_semantic_roundtrip_via_xml(src: &MzML, ctx: &str) {
     assert_mzml_semantic_eq(src, &reparsed);
 }
 
-fn assert_semantic_roundtrip_via_b000(src: &MzML, compression_level: u8, ctx: &str) {
+fn assert_semantic_roundtrip_via_ion(src: &MzML, compression_level: u8, ctx: &str) {
     let bytes = encode_bytes(src, compression_level, false);
     let decoded = decode(&bytes).unwrap_or_else(|e| panic!("decode failed for {ctx}: {e}"));
     assert_mzml_semantic_eq(src, &decoded);
@@ -3119,7 +3119,7 @@ fn pwiz_serializer_mzml_additional_real_fixtures_roundtrip_semantic() {
 
     for (label, src) in fixtures {
         assert_semantic_roundtrip_via_xml(src, label);
-        assert_semantic_roundtrip_via_b000(src, 9, label);
+        assert_semantic_roundtrip_via_ion(src, 9, label);
     }
 }
 
@@ -3136,7 +3136,7 @@ fn pwiz_reader_mzml_tiny2_fixture_exposes_known_unresolved_precursor_ref() {
 fn pwiz_serializer_mzml_small_zlib_roundtrip_semantic() {
     let src = small_zlib_pwiz_11();
     assert_semantic_roundtrip_via_xml(src, "small_zlib.pwiz.1.1");
-    assert_semantic_roundtrip_via_b000(src, 9, "small_zlib.pwiz.1.1");
+    assert_semantic_roundtrip_via_ion(src, 9, "small_zlib.pwiz.1.1");
 }
 
 #[test]
@@ -3228,7 +3228,7 @@ fn pwiz_serializer_mzml_emits_parseable_index_entries() {
 }
 
 #[test]
-fn pwiz_numeric_matrix_b000_roundtrip_preserves_rare_numeric_types() {
+fn pwiz_numeric_matrix_ion_roundtrip_preserves_rare_numeric_types() {
     let cases = [
         (
             NumericType::Float16,
@@ -3391,7 +3391,7 @@ fn pwiz_inheritance_default_data_processing_refs_roundtrip_semantic() {
     );
 
     assert_semantic_roundtrip_via_xml(&mzml, "dp-fallback-xml");
-    assert_semantic_roundtrip_via_b000(&mzml, 9, "dp-fallback-b000");
+    assert_semantic_roundtrip_via_ion(&mzml, 9, "dp-fallback-ion");
 }
 
 #[test]
@@ -3453,7 +3453,7 @@ fn pwiz_inheritance_scan_settings_and_source_file_refs_roundtrip_semantic() {
     );
 
     assert_semantic_roundtrip_via_xml(&mzml, "scan-settings-source-files-xml");
-    assert_semantic_roundtrip_via_b000(&mzml, 9, "scan-settings-source-files-b000");
+    assert_semantic_roundtrip_via_ion(&mzml, 9, "scan-settings-source-files-ion");
 }
 
 #[test]
@@ -3507,7 +3507,7 @@ fn pwiz_inheritance_instrument_software_ref_roundtrip_semantic() {
     );
 
     assert_semantic_roundtrip_via_xml(&mzml, "instrument-software-ref-xml");
-    assert_semantic_roundtrip_via_b000(&mzml, 9, "instrument-software-ref-b000");
+    assert_semantic_roundtrip_via_ion(&mzml, 9, "instrument-software-ref-ion");
     assert_semantic_roundtrip_full_pipeline(&mzml, 9, "instrument-software-ref-full");
 }
 
@@ -3562,7 +3562,7 @@ fn pwiz_inheritance_legacy_spectrum_description_roundtrip_semantic() {
     assert!(spectrum_by_id(&mzml, "S1").spectrum_description.is_some());
 
     assert_semantic_roundtrip_via_xml(&mzml, "legacy-spectrum-description-xml");
-    assert_semantic_roundtrip_via_b000(&mzml, 9, "legacy-spectrum-description-b000");
+    assert_semantic_roundtrip_via_ion(&mzml, 9, "legacy-spectrum-description-ion");
 }
 
 #[test]
@@ -3696,13 +3696,13 @@ fn pwiz_medium_fixture_manual_parse_smoke() {
 }
 
 #[test]
-fn pwiz_serializer_mzml_b000_roundtrip_tiny_11_level12() {
+fn pwiz_serializer_mzml_ion_roundtrip_tiny_11_level12() {
     let src = tiny_pwiz_11();
     let bytes = encode_bytes(src, 12, false);
     assert_eq!(
-        &bytes[..4],
-        b"B000",
-        "encoded header signature must be B000"
+        &bytes[..8],
+        b"START\0\0\0",
+        "encoded header signature must be START\\0\\0\\0"
     );
 
     let decoded = decode(&bytes).expect("decode should succeed");
@@ -3710,13 +3710,13 @@ fn pwiz_serializer_mzml_b000_roundtrip_tiny_11_level12() {
 }
 
 #[test]
-fn pwiz_serializer_mzml_b000_roundtrip_tiny_10_level0() {
+fn pwiz_serializer_mzml_ion_roundtrip_tiny_10_level0() {
     let src = tiny_pwiz_10();
     let bytes = encode_bytes(src, 0, false);
     assert_eq!(
-        &bytes[..4],
-        b"B000",
-        "encoded header signature must be B000"
+        &bytes[..8],
+        b"START\0\0\0",
+        "encoded header signature must be START\\0\\0\\0"
     );
 
     let decoded = decode(&bytes).expect("decode should succeed");
@@ -3724,7 +3724,7 @@ fn pwiz_serializer_mzml_b000_roundtrip_tiny_10_level0() {
 }
 
 #[test]
-fn pwiz_serializer_mzml_b000_f32_mode_keeps_structure() {
+fn pwiz_serializer_mzml_ion_f32_mode_keeps_structure() {
     let src = tiny_pwiz_11();
     let bytes = encode_bytes(src, 9, true);
     let decoded = decode(&bytes).expect("decode should succeed");
@@ -3733,7 +3733,7 @@ fn pwiz_serializer_mzml_b000_f32_mode_keeps_structure() {
 }
 
 #[test]
-fn pwiz_serializer_mzml_b000_config_matrix_identity_smoke() {
+fn pwiz_serializer_mzml_ion_config_matrix_identity_smoke() {
     let fixtures = [tiny_pwiz_10(), tiny_pwiz_11(), anpc_test_mzml()];
     let levels = [0_u8, 3_u8, 6_u8, 9_u8, 12_u8];
     let modes = [false, true];
@@ -4078,7 +4078,7 @@ fn pwiz_msdatafile_mzml_subset_parse_encode_decode_tiny10() {
 }
 
 #[test]
-fn pwiz_msdatafile_mzml_subset_parse_bin_to_mzml_parse_then_b000_roundtrip() {
+fn pwiz_msdatafile_mzml_subset_parse_bin_to_mzml_parse_then_ion_roundtrip() {
     let src = tiny_pwiz_11();
     let xml = bin_to_mzml(src).expect("bin_to_mzml should succeed");
     let reparsed = parse_xml(&xml, false);
@@ -4232,13 +4232,13 @@ fn pwiz_spectrum_list_cache_mzml_subset_repeated_chrom_access_is_stable() {
 }
 
 #[test]
-fn pwiz_binary_data_encoder_b000_header_signature_is_correct() {
+fn pwiz_binary_data_encoder_ion_header_signature_is_correct() {
     let bytes = encode_bytes(tiny_pwiz_11(), 12, false);
     assert!(
-        bytes.len() > 512,
+        bytes.len() > 1024,
         "encoded bytes should include header and payload"
     );
-    assert_eq!(&bytes[..4], b"B000");
+    assert_eq!(&bytes[..8], b"START\0\0\0");
 }
 
 #[test]
@@ -4529,7 +4529,7 @@ fn pwiz_mzml_invariants_declared_counts_are_consistent_for_core_fixtures() {
 }
 
 #[test]
-fn pwiz_mzml_invariants_declared_counts_are_consistent_after_b000_roundtrip() {
+fn pwiz_mzml_invariants_declared_counts_are_consistent_after_ion_roundtrip() {
     let out = decode(&encode_bytes(tiny_pwiz_11(), 12, false)).expect("decode should succeed");
     assert_declared_counts_consistent(&out);
 }
@@ -4718,7 +4718,7 @@ fn pwiz_decode_rejects_corrupted_offset_range() {
 }
 
 #[test]
-fn pwiz_binary_data_encoder_b000_roundtrip_preserves_source_file_ids() {
+fn pwiz_binary_data_encoder_ion_roundtrip_preserves_source_file_ids() {
     let src = tiny_pwiz_11();
     let bytes = encode_bytes(src, 12, false);
     let out = decode(&bytes).expect("decode should succeed");
@@ -4726,12 +4726,12 @@ fn pwiz_binary_data_encoder_b000_roundtrip_preserves_source_file_ids() {
     assert_eq!(
         top_level_source_file_ids(src),
         top_level_source_file_ids(&out),
-        "source file ids changed after b000 roundtrip"
+        "source file ids changed after ion roundtrip"
     );
 }
 
 #[test]
-fn pwiz_binary_data_encoder_b000_roundtrip_preserves_software_ids() {
+fn pwiz_binary_data_encoder_ion_roundtrip_preserves_software_ids() {
     let src = tiny_pwiz_11();
     let bytes = encode_bytes(src, 12, false);
     let out = decode(&bytes).expect("decode should succeed");
@@ -4739,7 +4739,7 @@ fn pwiz_binary_data_encoder_b000_roundtrip_preserves_software_ids() {
     assert_eq!(
         top_level_software_ids(src),
         top_level_software_ids(&out),
-        "software ids changed after b000 roundtrip"
+        "software ids changed after ion roundtrip"
     );
 }
 
@@ -4760,7 +4760,7 @@ fn pwiz_parse_and_roundtrip_parser_internal_fixture_anpc_regression_guard() {
 }
 
 #[test]
-fn pwiz_breaker_b000_roundtrip_scan_attributes_not_lost() {
+fn pwiz_breaker_ion_roundtrip_scan_attributes_not_lost() {
     let mut src = tiny_pwiz_11().clone();
 
     let source_file_id = src
@@ -4827,7 +4827,7 @@ fn pwiz_breaker_b000_roundtrip_scan_attributes_not_lost() {
 }
 
 #[test]
-fn pwiz_breaker_b000_roundtrip_spectrum_product_attributes_not_lost() {
+fn pwiz_breaker_ion_roundtrip_spectrum_product_attributes_not_lost() {
     let mut src = tiny_pwiz_11().clone();
 
     let source_file_id = src
@@ -4867,7 +4867,7 @@ fn pwiz_breaker_b000_roundtrip_spectrum_product_attributes_not_lost() {
     let out_first_spectrum = spectrum_by_id(&out, target_spectrum_id.as_str());
     let out_product = product_list_of_spectrum(out_first_spectrum)
         .and_then(|pl| pl.products.first())
-        .unwrap_or_else(|| panic!("spectrum product was dropped in b000 roundtrip"));
+        .unwrap_or_else(|| panic!("spectrum product was dropped in ion roundtrip"));
 
     assert_eq!(
         out_product.spectrum_ref.as_deref(),
@@ -4884,7 +4884,7 @@ fn pwiz_breaker_b000_roundtrip_spectrum_product_attributes_not_lost() {
 }
 
 #[test]
-fn pwiz_breaker_b000_roundtrip_chrom_product_attributes_not_lost() {
+fn pwiz_breaker_ion_roundtrip_chrom_product_attributes_not_lost() {
     let mut src = tiny_pwiz_11().clone();
 
     let source_file_id = src
@@ -4927,7 +4927,7 @@ fn pwiz_breaker_b000_roundtrip_chrom_product_attributes_not_lost() {
     let out_product = out_first_chromatogram
         .product
         .as_ref()
-        .unwrap_or_else(|| panic!("chromatogram product was dropped in b000 roundtrip"));
+        .unwrap_or_else(|| panic!("chromatogram product was dropped in ion roundtrip"));
 
     assert_eq!(
         out_product.spectrum_ref.as_deref(),
@@ -4944,7 +4944,7 @@ fn pwiz_breaker_b000_roundtrip_chrom_product_attributes_not_lost() {
 }
 
 #[test]
-fn pwiz_breaker_b000_roundtrip_scan_referenceable_param_group_refs_not_lost() {
+fn pwiz_breaker_ion_roundtrip_scan_referenceable_param_group_refs_not_lost() {
     let mut src = tiny_pwiz_11().clone();
     let ref_group_id = "pwiz-breaker-scan-ref-group";
     ensure_referenceable_param_group(&mut src, ref_group_id);
@@ -4969,12 +4969,12 @@ fn pwiz_breaker_b000_roundtrip_scan_referenceable_param_group_refs_not_lost() {
     let out_refs = &first_scan(out_first_spectrum).referenceable_param_group_refs;
     assert!(
         out_refs.iter().any(|r| r.r#ref == ref_group_id),
-        "scan referenceableParamGroupRef lost in b000 roundtrip"
+        "scan referenceableParamGroupRef lost in ion roundtrip"
     );
 }
 
 #[test]
-fn pwiz_breaker_b000_roundtrip_binary_data_array_refs_not_lost() {
+fn pwiz_breaker_ion_roundtrip_binary_data_array_refs_not_lost() {
     let mut src = tiny_pwiz_11().clone();
     let ref_group_id = "pwiz-breaker-bda-ref-group";
     ensure_referenceable_param_group(&mut src, ref_group_id);
@@ -5010,7 +5010,7 @@ fn pwiz_breaker_b000_roundtrip_binary_data_array_refs_not_lost() {
             .referenceable_param_group_refs
             .iter()
             .any(|r| r.r#ref == ref_group_id),
-        "binaryDataArray referenceableParamGroupRef lost in b000 roundtrip"
+        "binaryDataArray referenceableParamGroupRef lost in ion roundtrip"
     );
 }
 
