@@ -1,0 +1,15 @@
+[package]
+name = "mzml-diff"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+quick-xml = { workspace = true }
+rayon = { workspace = true }
+hashbrown = "0.16.1"
+blake3 = "1.5.5"
+
+[[bin]]
+name = "mzml-diff"
+path = "src/main.rs"
