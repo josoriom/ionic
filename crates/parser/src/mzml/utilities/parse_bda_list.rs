@@ -116,14 +116,12 @@ fn encoding_for_array(bda: &BinaryDataArray) -> BinaryArrayEncoding {
     };
     let is_zlib_compressed = has("MS:1000574");
     let (f64, f32, f16) = (has("MS:1000523"), has("MS:1000521"), has("MS:1000520"));
-    let (i64, i32, i16) = (has("MS:1000522"), has("MS:1001479"), has("MS:1000519"));
+    let (i64, i32) = (has("MS:1000522"), has("MS:1000519"));
 
     let numeric_type = if let Some(declared) = bda.numeric_type {
         declared
     } else if f16 && !f32 && !f64 {
         NumericType::Float16
-    } else if i16 && !i32 && !i64 {
-        NumericType::Int16
     } else if i32 && !i64 {
         NumericType::Int32
     } else if i64 && !f64 && !f32 {

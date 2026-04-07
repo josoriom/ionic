@@ -4,7 +4,7 @@ use crate::{
     ion::{
         attr_meta::{
             ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
-            ACC_ATTR_ENCODED_LENGTH,
+            ACC_ATTR_ENCODED_LENGTH, ACC_ATTR_REF,
         },
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, MetadataPolicy, OwnerRows},
@@ -12,7 +12,7 @@ use crate::{
             parse_cv_and_user_params,
         },
     },
-    mzml::schema::TagId,
+    mzml::{schema::TagId, structs::ReferenceableParamGroupRef},
 };
 
 const ACC_NUMERIC_INT32: &str = "MS:1000519";
@@ -81,7 +81,14 @@ fn parse_binary_data_array<'a, P: MetadataPolicy>(
         cv_params,
         user_params,
         binary: None,
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(array_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(rows_by_id.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
     }
 }
 

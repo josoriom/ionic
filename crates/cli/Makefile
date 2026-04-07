@@ -5,7 +5,7 @@ ARTIFACTS         := artifacts
 WORKSPACE_ROOT    := $(abspath $(CURDIR)/../..)
 WORKSPACE_TARGET  := $(WORKSPACE_ROOT)/target
 
-DOCKER_IMAGE      := rust:1-bullseye
+DOCKER_IMAGE	  := rust:1-bookworm
 
 WINDOWS_ARM64_IMAGE  := dockcross/windows-arm64:latest
 WINDOWS_ARM64_TARGET := aarch64-pc-windows-gnullvm
@@ -16,7 +16,7 @@ all: mac linux windows
 
 mac: macos-arm64 macos-x86_64
 linux: linux-amd64 linux-arm64
-windows: windows-amd64 windows-arm64
+windows: windows-amd64
 
 macos-arm64:
 	rustup target add aarch64-apple-darwin
@@ -67,10 +67,9 @@ windows-arm64:
 	docker run --rm --platform=linux/amd64 \
 	  -e CARGO_TARGET_DIR=/work/target-windows-arm64 \
 	  -v $$PWD/../..:/work -w /work/crates/cli $(WINDOWS_ARM64_IMAGE) \
-	  bash -lc 'set -euo pipefail; \
-	    export PATH="$$HOME/.cargo/bin:/usr/local/cargo/bin:$$PATH"; \
-	    command -v rustup >/dev/null 2>&1 || { curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal; . "$$HOME/.cargo/env"; }; \
+	  -- bash -lc 'set -euo pipefail; \
 	    rustup target add $(WINDOWS_ARM64_TARGET); \
+	    export CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER="$$CC"; \
 	    cargo build --manifest-path Cargo.toml --release --target $(WINDOWS_ARM64_TARGET)'
 	mkdir -p $(ARTIFACTS)/windows-arm64
 	cp $(WORKSPACE_ROOT)/target-windows-arm64/$(WINDOWS_ARM64_TARGET)/release/$(CARGO_BIN).exe $(ARTIFACTS)/windows-arm64/$(CARGO_BIN).exe

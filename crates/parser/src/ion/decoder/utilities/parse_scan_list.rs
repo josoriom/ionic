@@ -4,7 +4,7 @@ use crate::{
     ion::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF,
-            ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF,
+            ACC_ATTR_REF, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF,
         },
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
@@ -12,7 +12,10 @@ use crate::{
             parse_cv_and_user_params,
         },
     },
-    mzml::{schema::TagId, structs::Scan},
+    mzml::{
+        schema::TagId,
+        structs::{ReferenceableParamGroupRef, Scan},
+    },
 };
 
 #[inline]
@@ -72,18 +75,34 @@ pub(crate) fn parse_scan_list<'a>(
                     &policy,
                     &mut param_buffer,
                 ),
+                referenceable_param_group_refs: children_lookup
+                    .ids_for(scan_id, TagId::ReferenceableParamGroupRef)
+                    .iter()
+                    .filter_map(|&ref_id| {
+                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                    })
+                    .collect(),
                 cv_params,
                 user_params,
-                referenceable_param_group_refs: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
 
-    let (cv_params, user_params) = scan_list_id
+    let (cv_params, user_params, referenceable_param_group_refs) = scan_list_id
         .map(|id| {
             param_buffer.clear();
             children_lookup.get_param_rows_into(owner_rows, id, &policy, &mut param_buffer);
-            parse_cv_and_user_params(&param_buffer)
+            let (cv_params, user_params) = parse_cv_and_user_params(&param_buffer);
+            let refs = children_lookup
+                .ids_for(id, TagId::ReferenceableParamGroupRef)
+                .iter()
+                .filter_map(|&ref_id| {
+                    get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                        .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                })
+                .collect();
+            (cv_params, user_params, refs)
         })
         .unwrap_or_default();
 
@@ -91,6 +110,7 @@ pub(crate) fn parse_scan_list<'a>(
         count: Some(scans.len()),
         cv_params,
         user_params,
+        referenceable_param_group_refs,
         scans,
     })
 }

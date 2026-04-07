@@ -10,7 +10,7 @@ clap = { workspace = true, features = ["derive"] }
 ionic = { path = "../parser" }
 regex = { workspace = true }
 rayon = { workspace = true }
-mimalloc = { version = "0.1.48", features = ["secure"] }
+mimalloc = { version = "0.1.48" }
 
 [[bin]]
 name = "ionic"

@@ -1,4 +1,5 @@
 use crate::{
+    decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_ID, ACC_ATTR_NAME, ACC_ATTR_REF},
         utilities::{
@@ -7,7 +8,6 @@ use crate::{
             parse_cv_and_user_params,
         },
     },
-    decoder::decode::Metadatum,
     mzml::{
         schema::TagId,
         structs::{ReferenceableParamGroupRef, Sample, SampleList},
@@ -50,11 +50,14 @@ pub(crate) fn parse_sample_list<P: MetadataPolicy>(
             Sample {
                 id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
                 name: get_attr_text(rows, ACC_ATTR_NAME).unwrap_or_default(),
-                referenceable_param_group_ref: children_lookup
+                referenceable_param_group_refs: children_lookup
                     .ids_for(sample_id, TagId::ReferenceableParamGroupRef)
-                    .first()
-                    .and_then(|&ref_id| get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF))
-                    .map(|r| ReferenceableParamGroupRef { r#ref: r }),
+                    .iter()
+                    .filter_map(|&ref_id| {
+                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                    })
+                    .collect(),
                 cv_params,
                 user_params,
             }

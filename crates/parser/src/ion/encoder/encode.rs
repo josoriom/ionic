@@ -16,7 +16,7 @@ use crate::encoder::utilities::{
         ACCESSION_32BIT_FLOAT, ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY,
         ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY, ArrayPolicy, CompressedMetaSections,
         GlobalCounts, MetaCollector, PackedMeta, array_type_accession_from_binary_data_array,
-        build_ref_group_lookup, parse_accession_tail_raw,
+        parse_accession_tail_raw,
     },
 };
 
@@ -173,8 +173,7 @@ impl<'o> Encoder<'o> {
     pub fn encode(&mut self, mzml: &MzML) -> Result<(), String> {
         let spectra = Self::spectra(mzml);
         let chroms = Self::chromatograms(mzml);
-        let ref_groups = build_ref_group_lookup(mzml);
-        let mut collector = MetaCollector::new(&ref_groups);
+        let mut collector = MetaCollector::new();
 
         let spec_list_id = if mzml.run.spectrum_list.is_some() {
             collector.alloc()

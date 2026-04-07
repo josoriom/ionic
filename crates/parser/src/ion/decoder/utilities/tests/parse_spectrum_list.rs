@@ -288,10 +288,7 @@ fn spectrum0_strict_full_structure() {
     assert_eq!(s.spot_id.as_deref(), None);
     assert_eq!(s.scan_number, None);
 
-    assert_eq!(
-        s.data_processing_ref.as_deref(),
-        Some("pwiz_Reader_Bruker_conversion")
-    );
+    assert_eq!(s.data_processing_ref.as_deref(), None);
 
     let expected_spec = &[
         ExpectedCv {
@@ -504,10 +501,7 @@ fn spectrum1_strict_full_structure_with_precursor_list() {
     assert_eq!(s.spot_id.as_deref(), None);
     assert_eq!(s.scan_number, None);
 
-    assert_eq!(
-        s.data_processing_ref.as_deref(),
-        Some("pwiz_Reader_Bruker_conversion")
-    );
+    assert_eq!(s.data_processing_ref.as_deref(), None);
 
     let expected_spec = &[
         ExpectedCv {

@@ -5,7 +5,8 @@ use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParseError, attr, attr_usize, parse_isolation_window, parsing_workspace::ParsingWorkspace,
+        ParamCollector, ParseError, attr, attr_usize, parse_isolation_window,
+        parsing_workspace::ParsingWorkspace, read_cv_param, read_user_param,
     },
 };
 
@@ -19,20 +20,30 @@ pub(crate) fn parse_product_list<R: BufRead>(
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();
-        if tag != TagId::Product {
-            return Ok(false);
+        match tag {
+            TagId::CvParam => {
+                list.receive_cv(read_cv_param(&element));
+                Ok(true)
+            }
+            TagId::UserParam => {
+                list.receive_user(read_user_param(&element));
+                Ok(true)
+            }
+            TagId::Product if is_open => {
+                list.products.push(parse_product(ws, &element)?);
+                Ok(true)
+            }
+            TagId::Product => {
+                list.products.push(Product {
+                    spectrum_ref: attr(&element, b"spectrumRef"),
+                    source_file_ref: attr(&element, b"sourceFileRef"),
+                    external_spectrum_id: attr(&element, b"externalSpectrumID"),
+                    ..Default::default()
+                });
+                Ok(true)
+            }
+            _ => Ok(false),
         }
-        if is_open {
-            list.products.push(parse_product(ws, &element)?);
-        } else {
-            list.products.push(Product {
-                spectrum_ref: attr(&element, b"spectrumRef"),
-                source_file_ref: attr(&element, b"sourceFileRef"),
-                external_spectrum_id: attr(&element, b"externalSpectrumID"),
-                ..Default::default()
-            });
-        }
-        Ok(true)
     })?;
     Ok(list)
 }
@@ -49,11 +60,20 @@ pub(crate) fn parse_product<R: BufRead>(
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();
-        if tag == TagId::IsolationWindow && is_open {
-            product.isolation_window = Some(parse_isolation_window(ws, &element)?);
-            Ok(true)
-        } else {
-            Ok(false)
+        match tag {
+            TagId::CvParam => {
+                product.receive_cv(read_cv_param(&element));
+                Ok(true)
+            }
+            TagId::UserParam => {
+                product.receive_user(read_user_param(&element));
+                Ok(true)
+            }
+            TagId::IsolationWindow if is_open => {
+                product.isolation_window = Some(parse_isolation_window(ws, &element)?);
+                Ok(true)
+            }
+            _ => Ok(false),
         }
     })?;
     Ok(product)

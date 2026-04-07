@@ -150,6 +150,7 @@ fn parse_spectrum_description<R: BufRead>(
         description: SpectrumDescription::default(),
         scan_list: None,
         precursor_list: None,
+        product_list: None,
         ms_level_hint: None,
     };
     ws.for_each_child(start, |ws, event| {
@@ -184,6 +185,10 @@ fn parse_spectrum_description<R: BufRead>(
                 result.precursor_list = Some(parse_precursor_list(ws, &element)?);
                 Ok(true)
             }
+            TagId::ProductList if is_open => {
+                result.product_list = Some(parse_product_list(ws, &element)?);
+                Ok(true)
+            }
             TagId::Scan if is_open => {
                 let list = result.scan_list.get_or_insert_with(Default::default);
                 list.scans.push(parse_scan(ws, &element)?);
@@ -212,6 +217,7 @@ impl Spectrum {
         self.spectrum_description = Some(result.description);
         self.scan_list = self.scan_list.take().or(result.scan_list);
         self.precursor_list = self.precursor_list.take().or(result.precursor_list);
+        self.product_list = self.product_list.take().or(result.product_list);
         if self.ms_level.is_none() {
             self.ms_level = result.ms_level_hint;
         }
@@ -222,6 +228,7 @@ struct SpectrumDescriptionResult {
     description: SpectrumDescription,
     scan_list: Option<ScanList>,
     precursor_list: Option<PrecursorList>,
+    product_list: Option<ProductList>,
     ms_level_hint: Option<u32>,
 }
 
