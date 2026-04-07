@@ -1299,102 +1299,112 @@ fn write_binary_data_array(
     let cv_has_i32 = has_accession("MS:1000519");
     let cv_has_i16 = has_accession("MS:1000518");
 
-    let Some(binary) = bda.binary.as_ref() else {
-        return Ok(());
-    };
+    let encoded = if let Some(binary) = bda.binary.as_ref() {
+        if let Some(nt) = bda.numeric_type {
+            let ok = match (binary, nt) {
+                (BinaryData::F64(_), NumericType::Float64) => true,
+                (BinaryData::F32(_), NumericType::Float32) => true,
+                (BinaryData::F16(_), NumericType::Float16) => true,
+                (BinaryData::I64(_), NumericType::Int64) => true,
+                (BinaryData::I32(_), NumericType::Int32) => true,
+                (BinaryData::I16(_), NumericType::Int16) => true,
+                _ => false,
+            };
+            if !ok {
+                return Err("binary/numeric_type mismatch".into());
+            }
+        }
 
-    if let Some(nt) = bda.numeric_type {
-        let ok = match (binary, nt) {
-            (BinaryData::F64(_), NumericType::Float64) => true,
-            (BinaryData::F32(_), NumericType::Float32) => true,
-            (BinaryData::F16(_), NumericType::Float16) => true,
-            (BinaryData::I64(_), NumericType::Int64) => true,
-            (BinaryData::I32(_), NumericType::Int32) => true,
-            (BinaryData::I16(_), NumericType::Int16) => true,
-            _ => false,
+        let (mut raw_bytes, inferred_numeric_type) = match binary {
+            BinaryData::F64(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 8);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Float64)
+            }
+            BinaryData::F32(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 4);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Float32)
+            }
+            BinaryData::F16(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 2);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Float16)
+            }
+            BinaryData::I64(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 8);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Int64)
+            }
+            BinaryData::I32(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 4);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Int32)
+            }
+            BinaryData::I16(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 2);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Int16)
+            }
         };
-        if !ok {
-            return Err("binary/numeric_type mismatch".into());
-        }
-    }
 
-    let (mut raw_bytes, array_len, inferred_numeric_type) = match binary {
-        BinaryData::F64(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 8);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Float64)
+        if !cv_has_zlib && !cv_has_no_comp {
+            return Err(
+                "binaryDataArray missing compression cvParam (MS:1000576 or MS:1000574)".into(),
+            );
         }
-        BinaryData::F32(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 4);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Float32)
+        if cv_has_zlib && !raw_bytes.is_empty() {
+            raw_bytes = compress_to_vec_zlib(&raw_bytes, 6);
         }
-        BinaryData::F16(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 2);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Float16)
-        }
-        BinaryData::I64(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 8);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Int64)
-        }
-        BinaryData::I32(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 4);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Int32)
-        }
-        BinaryData::I16(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 2);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Int16)
-        }
-    };
 
-    if !cv_has_zlib && !cv_has_no_comp {
-        return Err(
-            "binaryDataArray missing compression cvParam (MS:1000576 or MS:1000574)".into(),
-        );
-    }
-    if cv_has_zlib && !raw_bytes.is_empty() {
-        raw_bytes = compress_to_vec_zlib(&raw_bytes, 6);
-    }
+        match inferred_numeric_type {
+            NumericType::Float64
+                if !(cv_has_f64 || bda.numeric_type == Some(NumericType::Float64)) =>
+            {
+                return Err("binaryDataArray F64 but missing cvParam MS:1000523".into());
+            }
+            NumericType::Float32
+                if !(cv_has_f32 || bda.numeric_type == Some(NumericType::Float32)) =>
+            {
+                return Err("binaryDataArray F32 but missing cvParam MS:1000521".into());
+            }
+            NumericType::Float16
+                if !(has_accession("MS:1000520")
+                    || bda.numeric_type == Some(NumericType::Float16)) =>
+            {
+                return Err("binaryDataArray F16 but missing cvParam MS:1000520".into());
+            }
+            NumericType::Int64 if !(cv_has_i64 || bda.numeric_type == Some(NumericType::Int64)) => {
+                return Err("binaryDataArray I64 but missing cvParam MS:1000522".into());
+            }
+            NumericType::Int32 if !(cv_has_i32 || bda.numeric_type == Some(NumericType::Int32)) => {
+                return Err("binaryDataArray I32 but missing cvParam MS:1000519".into());
+            }
+            NumericType::Int16 if !(cv_has_i16 || bda.numeric_type == Some(NumericType::Int16)) => {
+                return Err("binaryDataArray I16 but missing cvParam MS:1000518".into());
+            }
+            _ => {}
+        }
 
-    match inferred_numeric_type {
-        NumericType::Float64 if !(cv_has_f64 || bda.numeric_type == Some(NumericType::Float64)) => {
-            return Err("binaryDataArray F64 but missing cvParam MS:1000523".into());
+        if raw_bytes.is_empty() {
+            String::new()
+        } else {
+            STANDARD.encode(&raw_bytes)
         }
-        NumericType::Float32 if !(cv_has_f32 || bda.numeric_type == Some(NumericType::Float32)) => {
-            return Err("binaryDataArray F32 but missing cvParam MS:1000521".into());
-        }
-        NumericType::Int64 if !(cv_has_i64 || bda.numeric_type == Some(NumericType::Int64)) => {
-            return Err("binaryDataArray I64 but missing cvParam MS:1000522".into());
-        }
-        NumericType::Int32 if !(cv_has_i32 || bda.numeric_type == Some(NumericType::Int32)) => {
-            return Err("binaryDataArray I32 but missing cvParam MS:1000519".into());
-        }
-        NumericType::Int16 if !(cv_has_i16 || bda.numeric_type == Some(NumericType::Int16)) => {
-            return Err("binaryDataArray I16 but missing cvParam MS:1000518".into());
-        }
-        _ => {}
-    }
-
-    let encoded = if raw_bytes.is_empty() {
-        String::new()
     } else {
-        STANDARD.encode(&raw_bytes)
+        String::new()
     };
 
     let mut tag = BytesStart::new("binaryDataArray");
@@ -1445,7 +1455,6 @@ fn write_binary_data_array(
         .write_event(Event::End(BytesEnd::new("binaryDataArray")))
         .map_err(|e| e.to_string())?;
 
-    let _ = array_len;
     Ok(())
 }
 

@@ -279,7 +279,7 @@ fn tiny1_mzml0_99_0_header_sections() {
         "MS",
         "MS:1000541",
         "ReAdW",
-        Some("1"),
+        Some("1.0"),
     );
 
     let sw2 = &sw_list.software[2];

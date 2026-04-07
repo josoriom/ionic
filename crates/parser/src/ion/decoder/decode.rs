@@ -1253,23 +1253,41 @@ fn parse_run_source_file_refs(
     lookup: &ChildrenLookup,
     run_id: u32,
 ) -> Option<SourceFileRefList> {
-    let list_id = lookup
-        .ids_for(run_id, TagId::SourceFileRefList)
-        .first()
-        .copied()
-        .or_else(|| lookup.all_ids(TagId::SourceFileRefList).first().copied())?;
-    let refs: Vec<_> = lookup
-        .ids_for(list_id, TagId::SourceFileRef)
-        .iter()
-        .filter_map(|&id| {
-            get_attr_text(owner_rows.get(id), ACC_ATTR_REF)
-                .map(|value| SourceFileRef { r#ref: value })
-        })
-        .collect();
-    (!refs.is_empty()).then(|| SourceFileRefList {
-        count: Some(refs.len()),
-        source_file_refs: refs,
-    })
+    if let Some(&list_id) = lookup.ids_for(run_id, TagId::SourceFileRefList).first() {
+        let refs: Vec<_> = lookup
+            .ids_for(list_id, TagId::SourceFileRef)
+            .iter()
+            .filter_map(|&id| {
+                get_attr_text(owner_rows.get(id), ACC_ATTR_REF)
+                    .map(|value| SourceFileRef { r#ref: value })
+            })
+            .collect();
+        if !refs.is_empty() {
+            return Some(SourceFileRefList {
+                count: Some(refs.len()),
+                source_file_refs: refs,
+            });
+        }
+    }
+
+    if let Some(&list_id) = lookup.ids_for(run_id, TagId::SourceFileList).first() {
+        let refs: Vec<_> = lookup
+            .ids_for(list_id, TagId::SourceFile)
+            .iter()
+            .filter_map(|&id| {
+                get_attr_text(owner_rows.get(id), ACC_ATTR_ID)
+                    .map(|value| SourceFileRef { r#ref: value })
+            })
+            .collect();
+        if !refs.is_empty() {
+            return Some(SourceFileRefList {
+                count: Some(refs.len()),
+                source_file_refs: refs,
+            });
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

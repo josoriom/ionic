@@ -208,20 +208,40 @@ impl ValuePool {
         match value {
             None | Some("") => ValueEncoding { kind: 2, index: 0 },
             Some(text) => {
-                if let Ok(n) = text.parse::<f64>() {
-                    let index = self.numeric_count;
-                    self.numeric_values.push(n);
-                    self.numeric_count += 1;
-                    ValueEncoding { kind: 0, index }
-                } else {
-                    let index = self.string_count;
-                    let bytes = text.as_bytes();
-                    self.string_offsets.push(self.string_bytes.len() as u32);
-                    self.string_lengths.push(bytes.len() as u32);
-                    self.string_bytes.extend_from_slice(bytes);
-                    self.string_count += 1;
-                    ValueEncoding { kind: 1, index }
+                let looks_numeric = text.contains('.')
+                    || text.contains('e')
+                    || text.contains('E')
+                    || text.starts_with('-') && text[1..].contains('.');
+                if looks_numeric {
+                    if let Ok(n) = text.parse::<f64>() {
+                        let index = self.numeric_count;
+                        self.numeric_values.push(n);
+                        self.numeric_count += 1;
+                        return ValueEncoding { kind: 0, index };
+                    }
                 }
+                let index = self.string_count;
+                let bytes = text.as_bytes();
+                self.string_offsets.push(self.string_bytes.len() as u32);
+                self.string_lengths.push(bytes.len() as u32);
+                self.string_bytes.extend_from_slice(bytes);
+                self.string_count += 1;
+                ValueEncoding { kind: 1, index }
+            }
+        }
+    }
+
+    fn encode_as_string(&mut self, value: Option<&str>) -> ValueEncoding {
+        match value {
+            None | Some("") => ValueEncoding { kind: 2, index: 0 },
+            Some(text) => {
+                let index = self.string_count;
+                let bytes = text.as_bytes();
+                self.string_offsets.push(self.string_bytes.len() as u32);
+                self.string_lengths.push(bytes.len() as u32);
+                self.string_bytes.extend_from_slice(bytes);
+                self.string_count += 1;
+                ValueEncoding { kind: 1, index }
             }
         }
     }
@@ -464,7 +484,15 @@ impl PackedMetaBuilder {
         self.unit_accession_numbers
             .push(parse_accession_tail_raw(cv_param.unit_accession.as_deref()));
 
-        let enc = self.value_pool.encode(cv_param.value.as_deref());
+        let is_attr = cv_param.cv_ref.as_deref() == Some(CV_REF_ATTR)
+            || cv_ref_prefix_from_accession(cv_param.accession.as_deref()) == Some(CV_REF_ATTR);
+
+        let enc = if is_attr {
+            self.value_pool.encode_as_string(cv_param.value.as_deref())
+        } else {
+            self.value_pool.encode(cv_param.value.as_deref())
+        };
+
         self.value_kinds.push(enc.kind);
         self.value_indices.push(enc.index);
         self.row_count += 1;
@@ -507,10 +535,12 @@ fn empty_cv_param() -> CvParam {
 }
 
 fn encode_user_param_as_cv(p: &UserParam) -> CvParam {
-    let encoded = match &p.value {
-        Some(v) => format!("{}{USER_PARAM_NAME_VALUE_SEPARATOR}{v}", p.name),
-        None => format!("{}{USER_PARAM_NAME_VALUE_SEPARATOR}", p.name),
-    };
+    let value = p.value.as_deref().unwrap_or("");
+    let type_ = p.r#type.as_deref().unwrap_or("");
+    let encoded = format!(
+        "{}{}{}{}{}",
+        p.name, USER_PARAM_NAME_VALUE_SEPARATOR, value, USER_PARAM_NAME_VALUE_SEPARATOR, type_
+    );
     CvParam {
         cv_ref: None,
         accession: None,
@@ -1667,15 +1697,16 @@ mod tests {
         let p = UserParam {
             name: "my-param".to_string(),
             value: Some("42".to_string()),
-            r#type: None,
+            r#type: Some("xsd:float".to_string()),
             unit_cv_ref: None,
             unit_name: None,
             unit_accession: None,
         };
         let encoded = encode_user_param_as_cv(&p).value.unwrap();
-        let parts: Vec<&str> = encoded.splitn(2, USER_PARAM_NAME_VALUE_SEPARATOR).collect();
+        let parts: Vec<&str> = encoded.splitn(3, USER_PARAM_NAME_VALUE_SEPARATOR).collect();
         assert_eq!(parts[0], "my-param");
         assert_eq!(parts[1], "42");
+        assert_eq!(parts[2], "xsd:float");
     }
 
     #[test]
