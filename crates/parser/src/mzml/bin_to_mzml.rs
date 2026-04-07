@@ -324,6 +324,9 @@ fn write_sample_list(writer: &mut Writer<Vec<u8>>, list: &SampleList) -> Result<
         .write_event(Event::Start(tag))
         .map_err(|e| e.to_string())?;
 
+    write_cv_params(writer, &list.cv_params)?;
+    write_user_params(writer, &list.user_params)?;
+
     for s in &list.samples {
         let mut s_tag = BytesStart::new("sample");
         s_tag.push_attribute(("id", s.id.as_str()));
@@ -334,7 +337,7 @@ fn write_sample_list(writer: &mut Writer<Vec<u8>>, list: &SampleList) -> Result<
             .write_event(Event::Start(s_tag))
             .map_err(|e| e.to_string())?;
 
-        if let Some(r) = &s.referenceable_param_group_ref {
+        for r in &s.referenceable_param_group_refs {
             write_referenceable_param_group_ref(writer, r)?;
         }
 
@@ -500,38 +503,41 @@ fn write_component_list_fallback_from_instrument_cv(
         .write_event(Event::Start(tag))
         .map_err(|e| e.to_string())?;
 
-    write_component(writer, "source", Some(1), &[], &[], &[])?;
-    for p in params {
-        let acc = p.accession.as_deref().unwrap_or("");
-        if matches!(acc, "MS:1000073" | "MS:1000057") {
-            write_cv_param(writer, p)?;
-        }
-    }
-    writer
-        .write_event(Event::End(BytesEnd::new("source")))
-        .map_err(|e| e.to_string())?;
+    let source_cvs: Vec<CvParam> = params
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.accession.as_deref().unwrap_or(""),
+                "MS:1000073" | "MS:1000057"
+            )
+        })
+        .cloned()
+        .collect();
+    write_component(writer, "source", Some(1), &[], &source_cvs, &[])?;
 
-    write_component(writer, "analyzer", Some(2), &[], &[], &[])?;
-    for p in params {
-        let acc = p.accession.as_deref().unwrap_or("");
-        if matches!(acc, "MS:1000081" | "MS:1000084") {
-            write_cv_param(writer, p)?;
-        }
-    }
-    writer
-        .write_event(Event::End(BytesEnd::new("analyzer")))
-        .map_err(|e| e.to_string())?;
+    let analyzer_cvs: Vec<CvParam> = params
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.accession.as_deref().unwrap_or(""),
+                "MS:1000081" | "MS:1000084"
+            )
+        })
+        .cloned()
+        .collect();
+    write_component(writer, "analyzer", Some(2), &[], &analyzer_cvs, &[])?;
 
-    write_component(writer, "detector", Some(3), &[], &[], &[])?;
-    for p in params {
-        let acc = p.accession.as_deref().unwrap_or("");
-        if matches!(acc, "MS:1000114" | "MS:1000116") {
-            write_cv_param(writer, p)?;
-        }
-    }
-    writer
-        .write_event(Event::End(BytesEnd::new("detector")))
-        .map_err(|e| e.to_string())?;
+    let detector_cvs: Vec<CvParam> = params
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.accession.as_deref().unwrap_or(""),
+                "MS:1000114" | "MS:1000116"
+            )
+        })
+        .cloned()
+        .collect();
+    write_component(writer, "detector", Some(3), &[], &detector_cvs, &[])?;
 
     writer
         .write_event(Event::End(BytesEnd::new("componentList")))
@@ -587,6 +593,8 @@ fn write_software_list(writer: &mut Writer<Vec<u8>>, list: &SoftwareList) -> Res
         writer
             .write_event(Event::Start(sw_tag))
             .map_err(|e| e.to_string())?;
+
+        write_referenceable_param_group_refs(writer, &sw.referenceable_param_group_refs)?;
 
         for sp in &sw.software_param {
             let mut sp_tag = BytesStart::new("softwareParam");
@@ -772,27 +780,6 @@ fn write_run(
     Ok(())
 }
 
-#[inline]
-fn binary_len(b: &BinaryData) -> usize {
-    match b {
-        BinaryData::F64(v) => v.len(),
-        BinaryData::F32(v) => v.len(),
-        BinaryData::F16(v) => v.len(),
-        BinaryData::I64(v) => v.len(),
-        BinaryData::I32(v) => v.len(),
-        BinaryData::I16(v) => v.len(),
-    }
-}
-
-#[inline]
-fn default_len_from_bdal(bdal: &BinaryDataArrayList) -> Option<usize> {
-    let b = bdal.binary_data_arrays.first()?;
-    if let Some(n) = b.array_length {
-        return Some(n);
-    }
-    b.binary.as_ref().map(binary_len)
-}
-
 fn write_spectrum_list(
     writer: &mut Writer<Vec<u8>>,
     list: &SpectrumList,
@@ -804,8 +791,7 @@ fn write_spectrum_list(
     let count_s = count.to_string();
     tag.push_attribute(("count", count_s.as_str()));
 
-    let dpr = nonempty(list.default_data_processing_ref.as_deref()).or(fallback_default_dp);
-    if let Some(dp) = nonempty(dpr) {
+    if let Some(dp) = nonempty(list.default_data_processing_ref.as_deref()) {
         tag.push_attribute(("defaultDataProcessingRef", dp));
     }
 
@@ -829,15 +815,6 @@ fn write_spectrum(
     fallback_default_dp: Option<&str>,
     idx: &mut IndexAcc,
 ) -> Result<(), String> {
-    let default_len = s
-        .default_array_length
-        .or_else(|| {
-            s.binary_data_array_list
-                .as_ref()
-                .and_then(default_len_from_bdal)
-        })
-        .unwrap_or(0);
-
     let mut tag = BytesStart::new("spectrum");
 
     if let Some(idx0) = s.index {
@@ -850,8 +827,10 @@ fn write_spectrum(
         .unwrap_or(s.id.as_str());
     tag.push_attribute(("id", id_to_write));
 
-    let len_s = default_len.to_string();
-    tag.push_attribute(("defaultArrayLength", len_s.as_str()));
+    if let Some(default_len) = s.default_array_length {
+        let len_s = default_len.to_string();
+        tag.push_attribute(("defaultArrayLength", len_s.as_str()));
+    }
 
     if let Some(sn) = s.scan_number {
         let sn_s = sn.to_string();
@@ -861,8 +840,7 @@ fn write_spectrum(
         tag.push_attribute(("nativeID", v));
     }
 
-    let dpr = nonempty(s.data_processing_ref.as_deref()).or(fallback_default_dp);
-    if let Some(v) = nonempty(dpr) {
+    if let Some(v) = nonempty(s.data_processing_ref.as_deref()) {
         tag.push_attribute(("dataProcessingRef", v));
     }
 
@@ -963,12 +941,9 @@ fn write_scan_list(writer: &mut Writer<Vec<u8>>, list: &ScanList) -> Result<(), 
         .write_event(Event::Start(tag))
         .map_err(|e| e.to_string())?;
 
+    write_referenceable_param_group_refs(writer, &list.referenceable_param_group_refs)?;
     write_cv_params(writer, &list.cv_params)?;
     write_user_params(writer, &list.user_params)?;
-
-    const ACC_POSITIVE_SCAN: &str = "MS:1000130";
-    const ACC_FULL_SCAN: &str = "MS:1000498";
-    const ACC_FILTER_STRING: &str = "MS:1000512";
 
     for s in &list.scans {
         let mut st = BytesStart::new("scan");
@@ -990,55 +965,7 @@ fn write_scan_list(writer: &mut Writer<Vec<u8>>, list: &ScanList) -> Result<(), 
             .map_err(|e| e.to_string())?;
 
         write_referenceable_param_group_refs(writer, &s.referenceable_param_group_refs)?;
-
-        let has_pos = s
-            .cv_params
-            .iter()
-            .any(|p| p.accession.as_deref() == Some(ACC_POSITIVE_SCAN));
-        let has_full = s
-            .cv_params
-            .iter()
-            .any(|p| p.accession.as_deref() == Some(ACC_FULL_SCAN));
-        let has_any_ref = !s.referenceable_param_group_refs.is_empty();
-
-        let inferred_ref: Option<&'static str> = if !has_any_ref && has_pos && has_full {
-            let filter_val = s
-                .cv_params
-                .iter()
-                .find(|p| p.accession.as_deref() == Some(ACC_FILTER_STRING))
-                .and_then(|p| p.value.as_deref())
-                .unwrap_or("");
-
-            let is_ms2 = filter_val.to_ascii_lowercase().contains("ms2");
-            Some(if is_ms2 {
-                "CommonMS2SpectrumParams"
-            } else {
-                "CommonMS1SpectrumParams"
-            })
-        } else {
-            None
-        };
-
-        if let Some(rid) = inferred_ref {
-            let mut t = BytesStart::new("referenceableParamGroupRef");
-            t.push_attribute(("ref", rid));
-            writer
-                .write_event(Event::Empty(t))
-                .map_err(|e| e.to_string())?;
-        }
-
-        let suppress_common = has_any_ref || inferred_ref.is_some();
-
-        for cv in &s.cv_params {
-            if suppress_common {
-                let acc = cv.accession.as_deref().unwrap_or("");
-                if acc == ACC_POSITIVE_SCAN || acc == ACC_FULL_SCAN {
-                    continue;
-                }
-            }
-            write_cv_param(writer, cv)?;
-        }
-
+        write_cv_params(writer, &s.cv_params)?;
         write_user_params(writer, &s.user_params)?;
 
         if let Some(swl) = &s.scan_window_list {
@@ -1185,6 +1112,7 @@ fn write_selected_ion_list(
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
 fn write_product_list(writer: &mut Writer<Vec<u8>>, list: &ProductList) -> Result<(), String> {
     let count = list.count.unwrap_or(list.products.len());
     let mut tag = BytesStart::new("productList");
@@ -1194,6 +1122,9 @@ fn write_product_list(writer: &mut Writer<Vec<u8>>, list: &ProductList) -> Resul
     writer
         .write_event(Event::Start(tag))
         .map_err(|e| e.to_string())?;
+
+    write_cv_params(writer, &list.cv_params)?;
+    write_user_params(writer, &list.user_params)?;
 
     for p in &list.products {
         write_product(writer, p)?;
@@ -1251,8 +1182,7 @@ fn write_chromatogram_list(
     let count_s = count.to_string();
     tag.push_attribute(("count", count_s.as_str()));
 
-    let dpr = nonempty(list.default_data_processing_ref.as_deref()).or(fallback_default_dp);
-    if let Some(dp) = nonempty(dpr) {
+    if let Some(dp) = nonempty(list.default_data_processing_ref.as_deref()) {
         tag.push_attribute(("defaultDataProcessingRef", dp));
     }
 
@@ -1277,15 +1207,6 @@ fn write_chromatogram(
     fallback_default_dp: Option<&str>,
     idx: &mut IndexAcc,
 ) -> Result<(), String> {
-    let default_len = c
-        .default_array_length
-        .or_else(|| {
-            c.binary_data_array_list
-                .as_ref()
-                .and_then(default_len_from_bdal)
-        })
-        .unwrap_or(0);
-
     let mut tag = BytesStart::new("chromatogram");
     tag.push_attribute(("id", c.id.as_str()));
     if let Some(v) = nonempty(c.native_id.as_deref()) {
@@ -1295,11 +1216,13 @@ fn write_chromatogram(
         let idx_s = idx0.to_string();
         tag.push_attribute(("index", idx_s.as_str()));
     }
-    let len_s = default_len.to_string();
-    tag.push_attribute(("defaultArrayLength", len_s.as_str()));
 
-    let dpr = nonempty(c.data_processing_ref.as_deref()).or(fallback_default_dp);
-    if let Some(v) = nonempty(dpr) {
+    if let Some(default_len) = c.default_array_length {
+        let len_s = default_len.to_string();
+        tag.push_attribute(("defaultArrayLength", len_s.as_str()));
+    }
+
+    if let Some(v) = nonempty(c.data_processing_ref.as_deref()) {
         tag.push_attribute(("dataProcessingRef", v));
     }
 
@@ -1359,7 +1282,7 @@ fn write_binary_data_array_list(
 fn write_binary_data_array(
     writer: &mut Writer<Vec<u8>>,
     bda: &BinaryDataArray,
-    fallback_default_dp: Option<&str>,
+    _fallback_default_dp: Option<&str>,
 ) -> Result<(), String> {
     let has_accession = |acc: &str| {
         bda.cv_params
@@ -1367,18 +1290,15 @@ fn write_binary_data_array(
             .any(|p| p.accession.as_deref() == Some(acc))
     };
 
-    let cv_has_zlib = has_accession("MS:1000574"); // zlib compression
-    let cv_has_no_comp = has_accession("MS:1000576"); // no compression
+    let cv_has_zlib = has_accession("MS:1000574");
+    let cv_has_no_comp = has_accession("MS:1000576");
 
-    let cv_has_f64 = has_accession("MS:1000523"); // 64-bit float
-    let cv_has_f32 = has_accession("MS:1000521"); // 32-bit float
-    let cv_has_i64 = has_accession("MS:1000522"); // 64-bit integer
-    let cv_has_i32 = has_accession("MS:1000519"); // 32-bit integer
-    let cv_has_i16 = has_accession("MS:1000518"); // 16-bit integer
+    let cv_has_f64 = has_accession("MS:1000523");
+    let cv_has_f32 = has_accession("MS:1000521");
+    let cv_has_i64 = has_accession("MS:1000522");
+    let cv_has_i32 = has_accession("MS:1000519");
+    let cv_has_i16 = has_accession("MS:1000518");
 
-    // let binary = bda.binary.as_ref().ok_or_else(|| {
-    //     "binaryDataArray.binary is None -> would produce empty <binary>. Populate BinaryDataArray.binary.".to_string()
-    // })?;
     let Some(binary) = bda.binary.as_ref() else {
         return Ok(());
     };
@@ -1479,20 +1399,19 @@ fn write_binary_data_array(
 
     let mut tag = BytesStart::new("binaryDataArray");
 
-    let al = bda.array_length.unwrap_or(array_len);
-    if al > 0 {
-        let al_s = al.to_string();
-        tag.push_attribute(("arrayLength", al_s.as_str()));
+    if let Some(al) = bda.array_length {
+        if al > 0 {
+            let al_s = al.to_string();
+            tag.push_attribute(("arrayLength", al_s.as_str()));
+        }
     }
 
     let el = encoded.len();
     let el_s = el.to_string();
     tag.push_attribute(("encodedLength", el_s.as_str()));
 
-    if let Some(dp) = bda.data_processing_ref.as_deref().or(fallback_default_dp) {
-        if !dp.is_empty() {
-            tag.push_attribute(("dataProcessingRef", dp));
-        }
+    if let Some(dp) = nonempty(bda.data_processing_ref.as_deref()) {
+        tag.push_attribute(("dataProcessingRef", dp));
     }
 
     writer
@@ -1525,6 +1444,8 @@ fn write_binary_data_array(
     writer
         .write_event(Event::End(BytesEnd::new("binaryDataArray")))
         .map_err(|e| e.to_string())?;
+
+    let _ = array_len;
     Ok(())
 }
 
