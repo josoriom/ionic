@@ -9,7 +9,7 @@ use crate::{
         },
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
-            common::{get_attr_text, get_attr_u32, xy_lengths_from_bdal},
+            common::{get_attr_text, get_attr_u32},
             parse_binary_data_array_list, parse_cv_and_user_params, parse_precursor_list,
             parse_product_list, parse_scan_list,
         },
@@ -56,7 +56,6 @@ pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
                 children_lookup,
                 spectrum_id,
                 index as u32,
-                default_data_processing_ref.as_deref(),
                 policy,
                 &mut param_buffer,
             )
@@ -76,7 +75,6 @@ fn parse_spectrum<'a, P: MetadataPolicy>(
     children_lookup: &ChildrenLookup,
     spectrum_id: u32,
     fallback_index: u32,
-    default_data_processing_ref: Option<&str>,
     policy: &P,
     param_buffer: &mut Vec<&'a Metadatum>,
 ) -> Spectrum {
@@ -112,20 +110,14 @@ fn parse_spectrum<'a, P: MetadataPolicy>(
 
     let binary_data_array_list =
         parse_binary_data_array_list(owner_rows, children_lookup, spectrum_id);
-    let (x_len, y_len) = xy_lengths_from_bdal(binary_data_array_list.as_ref());
 
     Spectrum {
         id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
         index: get_attr_u32(rows, ACC_ATTR_INDEX).or(Some(fallback_index)),
         scan_number: get_attr_u32(rows, ACC_ATTR_SCAN_NUMBER),
-        default_array_length: get_attr_u32(rows, ACC_ATTR_DEFAULT_ARRAY_LENGTH)
-            .map(|v| v as usize)
-            .or(x_len)
-            .or(y_len)
-            .or(Some(0)),
+        default_array_length: get_attr_u32(rows, ACC_ATTR_DEFAULT_ARRAY_LENGTH).map(|v| v as usize),
         native_id: get_attr_text(rows, ACC_ATTR_NATIVE_ID),
-        data_processing_ref: get_attr_text(rows, ACC_ATTR_DATA_PROCESSING_REF)
-            .or_else(|| default_data_processing_ref.map(ToString::to_string)),
+        data_processing_ref: get_attr_text(rows, ACC_ATTR_DATA_PROCESSING_REF),
         source_file_ref: get_attr_text(rows, ACC_ATTR_SOURCE_FILE_REF),
         spot_id: get_attr_text(rows, ACC_ATTR_SPOT_ID),
         ms_level,

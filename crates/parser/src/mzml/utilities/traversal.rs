@@ -90,6 +90,15 @@ impl_param_collector!(ReferenceableParamGroup {
     cv: cv_params,
     user: user_params
 });
+impl_param_collector!(SampleList {
+    cv: cv_params,
+    user: user_params
+});
+impl_param_collector!(PrecursorList {
+    cv: cv_params,
+    user: user_params
+});
+
 impl_param_collector!(Sample {
     cv: cv_params,
     user: user_params,
@@ -104,6 +113,14 @@ impl_param_collector!(Software {
     user: user_params,
     sw: software_param,
     ref: referenceable_param_group_refs
+});
+impl_param_collector!(ProductList {
+    cv: cv_params,
+    user: user_params
+});
+impl_param_collector!(Product {
+    cv: cv_params,
+    user: user_params
 });
 impl_param_collector!(ProcessingMethod { cv: cv_param,  user: user_param,   ref: referenceable_param_group_ref      });
 impl_param_collector!(ScanSettings     { cv: cv_params, user: user_params,  ref: referenceable_param_group_refs     });

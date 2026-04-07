@@ -10,7 +10,7 @@ use crate::{
         },
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
-            common::{get_attr_text, get_attr_u32, xy_lengths_from_bdal},
+            common::{get_attr_text, get_attr_u32},
             parse_binary_data_array_list::parse_binary_data_array_list,
             parse_cv_and_user_params,
         },
@@ -61,7 +61,6 @@ pub(crate) fn parse_chromatogram_list<P: MetadataPolicy>(
                 children_lookup,
                 chromatogram_id,
                 index as u32,
-                default_data_processing_ref.as_deref(),
                 policy,
                 &mut param_buffer,
             )
@@ -81,7 +80,6 @@ fn parse_chromatogram<'a, P: MetadataPolicy>(
     children_lookup: &ChildrenLookup,
     chromatogram_id: u32,
     fallback_index: u32,
-    default_data_processing_ref: Option<&str>,
     policy: &P,
     param_buffer: &mut Vec<&'a Metadatum>,
 ) -> Chromatogram {
@@ -93,19 +91,13 @@ fn parse_chromatogram<'a, P: MetadataPolicy>(
 
     let binary_data_array_list =
         parse_binary_data_array_list(owner_rows, children_lookup, chromatogram_id);
-    let (x_len, y_len) = xy_lengths_from_bdal(binary_data_array_list.as_ref());
 
     Chromatogram {
         id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
         native_id: get_attr_text(rows, ACC_ATTR_NATIVE_ID),
         index: get_attr_u32(rows, ACC_ATTR_INDEX).or(Some(fallback_index)),
-        default_array_length: get_attr_u32(rows, ACC_ATTR_DEFAULT_ARRAY_LENGTH)
-            .map(|v| v as usize)
-            .or(x_len)
-            .or(y_len)
-            .or(Some(0)),
-        data_processing_ref: get_attr_text(rows, ACC_ATTR_DATA_PROCESSING_REF)
-            .or_else(|| default_data_processing_ref.map(ToString::to_string)),
+        default_array_length: get_attr_u32(rows, ACC_ATTR_DEFAULT_ARRAY_LENGTH).map(|v| v as usize),
+        data_processing_ref: get_attr_text(rows, ACC_ATTR_DATA_PROCESSING_REF),
         referenceable_param_group_refs: children_lookup
             .ids_for(chromatogram_id, TagId::ReferenceableParamGroupRef)
             .iter()

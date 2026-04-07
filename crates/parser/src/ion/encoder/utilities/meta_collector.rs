@@ -11,8 +11,9 @@ use crate::{
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
             ACC_ATTR_ID, ACC_ATTR_INDEX, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_LABEL,
             ACC_ATTR_LOCATION, ACC_ATTR_NAME, ACC_ATTR_ORDER, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
-            ACC_ATTR_START_TIME_STAMP, ACC_ATTR_VERSION, AccessionTail, CV_REF_ATTR, attr_cv_param,
-            cv_ref_code_from_str, parse_accession_tail,
+            ACC_ATTR_SCAN_SETTINGS_REF, ACC_ATTR_SOFTWARE_REF, ACC_ATTR_START_TIME_STAMP,
+            ACC_ATTR_VERSION, AccessionTail, CV_REF_ATTR, attr_cv_param, cv_ref_code_from_str,
+            parse_accession_tail,
         },
         utilities::assign_attributes,
     },
@@ -909,6 +910,7 @@ fn flatten_precursor_list_opt(
         ACC_ATTR_COUNT,
         Some(pl.precursors.len() as u32),
     );
+    writer.push_cv_and_user_params(pl_id, parent, &pl.cv_params, &pl.user_params);
     for p in &pl.precursors {
         flatten_precursor(writer, p, pl_id, ctx);
     }
@@ -929,6 +931,7 @@ fn flatten_product_list_opt(
         ACC_ATTR_COUNT,
         Some(pl.products.len() as u32),
     );
+    writer.push_cv_and_user_params(pl_id, parent, &pl.cv_params, &pl.user_params);
     for p in &pl.products {
         flatten_product(writer, p, pl_id, ctx);
     }
@@ -1229,13 +1232,19 @@ fn append_samples_meta(
     let Some(list) = &mzml.sample_list else {
         return 0;
     };
-    for sample in &list.samples {
+    let list_id = ctx.alloc();
+    for (i, sample) in list.samples.iter().enumerate() {
         append_meta_buffer(buffers, |writer| {
+            if i == 0 {
+                writer.touch(TagId::SampleList, list_id, 0);
+                writer.push_cv_and_user_params(list_id, 0, &list.cv_params, &list.user_params);
+            }
             let sid = ctx.alloc();
-            writer.touch(TagId::Sample, sid, 0);
-            writer.push_str_attr(TagId::Sample, sid, 0, ACC_ATTR_ID, &sample.id);
-            writer.push_str_attr(TagId::Sample, sid, 0, ACC_ATTR_NAME, &sample.name);
+            writer.touch(TagId::Sample, sid, list_id);
+            writer.push_str_attr(TagId::Sample, sid, list_id, ACC_ATTR_ID, &sample.id);
+            writer.push_str_attr(TagId::Sample, sid, list_id, ACC_ATTR_NAME, &sample.name);
             writer.push_ref_group_params(sid, &sample.referenceable_param_group_refs, ctx);
+            writer.push_cv_and_user_params(sid, list_id, &sample.cv_params, &sample.user_params);
         });
     }
     list.samples.len() as u32
@@ -1271,8 +1280,22 @@ fn append_instruments_meta(
             let id = ctx.alloc();
             writer.touch(TagId::Instrument, id, 0);
             writer.push_str_attr(TagId::Instrument, id, 0, ACC_ATTR_ID, &inst.id);
+            if let Some(ssr) = &inst.scan_settings_ref {
+                writer.push_str_attr(
+                    TagId::Instrument,
+                    id,
+                    0,
+                    ACC_ATTR_SCAN_SETTINGS_REF,
+                    &ssr.r#ref,
+                );
+            }
             writer.push_ref_group_params(id, &inst.referenceable_param_group_ref, ctx);
             writer.push_cv_and_user_params(id, 0, &inst.cv_param, &inst.user_param);
+            if let Some(sw) = &inst.software_ref {
+                let sw_id = ctx.alloc();
+                writer.touch(TagId::SoftwareRef, sw_id, id);
+                writer.push_str_attr(TagId::SoftwareRef, sw_id, id, ACC_ATTR_REF, &sw.r#ref);
+            }
             if let Some(cl) = &inst.component_list {
                 for s in &cl.source {
                     emit_instrument_component(
@@ -1374,9 +1397,28 @@ fn append_data_processing_list_meta(
             let dp_id = ctx.alloc();
             writer.touch(TagId::DataProcessing, dp_id, 0);
             writer.push_str_attr(TagId::DataProcessing, dp_id, 0, ACC_ATTR_ID, &dp.id);
+            if let Some(sw) = dp.software_ref.as_deref() {
+                writer.push_str_attr(TagId::DataProcessing, dp_id, 0, ACC_ATTR_SOFTWARE_REF, sw);
+            }
             for pm in &dp.processing_method {
                 let pm_id = ctx.alloc();
                 writer.touch(TagId::ProcessingMethod, pm_id, dp_id);
+                writer.push_optional_u32_attr(
+                    TagId::ProcessingMethod,
+                    pm_id,
+                    dp_id,
+                    ACC_ATTR_ORDER,
+                    pm.order,
+                );
+                if let Some(sw) = pm.software_ref.as_deref() {
+                    writer.push_str_attr(
+                        TagId::ProcessingMethod,
+                        pm_id,
+                        dp_id,
+                        ACC_ATTR_SOFTWARE_REF,
+                        sw,
+                    );
+                }
                 writer.push_ref_group_params(pm_id, &pm.referenceable_param_group_ref, ctx);
                 writer.push_cv_and_user_params(pm_id, dp_id, &pm.cv_param, &pm.user_param);
             }
