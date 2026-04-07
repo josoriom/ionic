@@ -1,7 +1,7 @@
 use crate::{
     decoder::decode::Metadatum,
     ion::{
-        attr_meta::{ACC_ATTR_COUNT, ACC_ATTR_ID, ACC_ATTR_LOCATION, ACC_ATTR_NAME},
+        attr_meta::{ACC_ATTR_COUNT, ACC_ATTR_ID, ACC_ATTR_LOCATION, ACC_ATTR_NAME, ACC_ATTR_REF},
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
             common::{get_attr_text, get_attr_u32},
@@ -10,7 +10,10 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{Contact, FileContent, FileDescription, SourceFile, SourceFileList},
+        structs::{
+            Contact, FileContent, FileDescription, ReferenceableParamGroupRef, SourceFile,
+            SourceFileList,
+        },
     },
 };
 
@@ -83,7 +86,14 @@ fn parse_file_content<'a, P: MetadataPolicy>(
     let (cv_params, user_params) = parse_cv_and_user_params(param_buffer);
 
     FileContent {
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(content_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
         cv_params,
         user_params,
     }
@@ -124,7 +134,14 @@ fn parse_source_file_list<'a, P: MetadataPolicy>(
                 id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
                 name: get_attr_text(rows, ACC_ATTR_NAME).unwrap_or_default(),
                 location: get_attr_text(rows, ACC_ATTR_LOCATION).unwrap_or_default(),
-                referenceable_param_group_ref: Vec::new(),
+                referenceable_param_group_ref: children_lookup
+                    .ids_for(source_file_id, TagId::ReferenceableParamGroupRef)
+                    .iter()
+                    .filter_map(|&ref_id| {
+                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                    })
+                    .collect(),
                 cv_param,
                 user_param,
             }
@@ -154,7 +171,14 @@ fn parse_contacts<'a, P: MetadataPolicy>(
             let (cv_params, user_params) = parse_cv_and_user_params(param_buffer);
 
             Contact {
-                referenceable_param_group_refs: Vec::new(),
+                referenceable_param_group_refs: children_lookup
+                    .ids_for(contact_id, TagId::ReferenceableParamGroupRef)
+                    .iter()
+                    .filter_map(|&ref_id| {
+                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                    })
+                    .collect(),
                 cv_params,
                 user_params,
             }

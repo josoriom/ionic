@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::{collections::HashMap, slice};
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
@@ -21,8 +20,7 @@ use crate::{
         schema::TagId,
         structs::{
             BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, Precursor, Product,
-            ReferenceableParamGroup, ReferenceableParamGroupRef, ScanList, Spectrum,
-            SpectrumDescription,
+            ReferenceableParamGroupRef, ScanList, Spectrum, SpectrumDescription,
         },
     },
 };
@@ -35,14 +33,14 @@ pub(crate) const ACCESSION_64BIT_FLOAT: u32 = 1_000_523;
 
 const USER_PARAM_NAME_VALUE_SEPARATOR: char = '\0';
 
-pub(crate) struct MetaCollector<'m> {
-    ctx: TraversalCtx<'m>,
+pub(crate) struct MetaCollector {
+    ctx: TraversalCtx,
 }
 
-impl<'m> MetaCollector<'m> {
-    pub(crate) fn new(ref_groups: &'m HashMap<&'m str, &'m ReferenceableParamGroup>) -> Self {
+impl MetaCollector {
+    pub(crate) fn new() -> Self {
         Self {
-            ctx: TraversalCtx::new(ref_groups),
+            ctx: TraversalCtx::new(),
         }
     }
 
@@ -162,16 +160,14 @@ impl IdAllocator {
     }
 }
 
-pub(crate) struct TraversalCtx<'l> {
+pub(crate) struct TraversalCtx {
     nodes: IdAllocator,
-    ref_groups: &'l HashMap<&'l str, &'l ReferenceableParamGroup>,
 }
 
-impl<'l> TraversalCtx<'l> {
-    fn new(ref_groups: &'l HashMap<&'l str, &'l ReferenceableParamGroup>) -> Self {
+impl TraversalCtx {
+    fn new() -> Self {
         Self {
             nodes: IdAllocator::new(),
-            ref_groups,
         }
     }
     #[inline]
@@ -233,7 +229,7 @@ impl ValuePool {
 struct MetaParamRow {
     cv_param: CvParam,
     tag_id: u8,
-    owner_id: u32,
+    id: u32,
     parent_id: u32,
 }
 
@@ -252,28 +248,22 @@ impl MetaParamBuffer {
         self.rows.clear();
     }
 
-    fn push(&mut self, tag: TagId, owner_id: u32, parent_id: u32, cv_param: CvParam) {
+    fn push(&mut self, tag: TagId, id: u32, parent_id: u32, cv_param: CvParam) {
         self.rows.push(MetaParamRow {
             cv_param,
             tag_id: tag as u8,
-            owner_id,
+            id,
             parent_id,
         });
     }
 
-    fn extend_cv_params(
-        &mut self,
-        tag: TagId,
-        owner_id: u32,
-        parent_id: u32,
-        cv_params: &[CvParam],
-    ) {
+    fn extend_cv_params(&mut self, tag: TagId, id: u32, parent_id: u32, cv_params: &[CvParam]) {
         self.rows.reserve(cv_params.len());
         for cv_param in cv_params {
             self.rows.push(MetaParamRow {
                 cv_param: cv_param.clone(),
                 tag_id: tag as u8,
-                owner_id,
+                id,
                 parent_id,
             });
         }
@@ -282,7 +272,7 @@ impl MetaParamBuffer {
     fn extend_user_params(
         &mut self,
         tag: TagId,
-        owner_id: u32,
+        id: u32,
         parent_id: u32,
         user_params: &[UserParam],
     ) {
@@ -291,7 +281,7 @@ impl MetaParamBuffer {
             self.rows.push(MetaParamRow {
                 cv_param: encode_user_param_as_cv(user_param),
                 tag_id: tag as u8,
-                owner_id,
+                id,
                 parent_id,
             });
         }
@@ -318,86 +308,80 @@ pub(crate) struct MetaParamWriter<'b> {
 }
 
 impl<'b> MetaParamWriter<'b> {
-    fn push_one(&mut self, tag: TagId, owner_id: u32, parent_id: u32, cv_param: CvParam) {
-        self.buffer.push(tag, owner_id, parent_id, cv_param);
+    fn push_one(&mut self, tag: TagId, id: u32, parent_id: u32, cv_param: CvParam) {
+        self.buffer.push(tag, id, parent_id, cv_param);
     }
-    fn push_many(&mut self, tag: TagId, owner_id: u32, parent_id: u32, cv_params: &[CvParam]) {
+    fn push_many(&mut self, tag: TagId, id: u32, parent_id: u32, cv_params: &[CvParam]) {
+        self.buffer.extend_cv_params(tag, id, parent_id, cv_params);
+    }
+    fn push_user_params(&mut self, tag: TagId, id: u32, parent_id: u32, user_params: &[UserParam]) {
         self.buffer
-            .extend_cv_params(tag, owner_id, parent_id, cv_params);
+            .extend_user_params(tag, id, parent_id, user_params);
     }
-    fn push_user_params(
-        &mut self,
-        tag: TagId,
-        owner_id: u32,
-        parent_id: u32,
-        user_params: &[UserParam],
-    ) {
-        self.buffer
-            .extend_user_params(tag, owner_id, parent_id, user_params);
-    }
-    fn touch(&mut self, tag: TagId, owner_id: u32, parent_id: u32) {
-        self.push_one(tag, owner_id, parent_id, empty_cv_param());
+    fn touch(&mut self, tag: TagId, id: u32, parent_id: u32) {
+        self.push_one(tag, id, parent_id, empty_cv_param());
     }
     fn push_str_attr(
         &mut self,
         tag: TagId,
-        owner_id: u32,
+        id: u32,
         parent_id: u32,
         tail: AccessionTail,
         value: &str,
     ) {
         if !value.is_empty() {
-            self.push_one(tag, owner_id, parent_id, attr_cv_param(tail, value));
+            self.push_one(tag, id, parent_id, attr_cv_param(tail, value));
         }
     }
     fn push_optional_u32_attr(
         &mut self,
         tag: TagId,
-        owner_id: u32,
+        id: u32,
         parent_id: u32,
         tail: AccessionTail,
         value: Option<u32>,
     ) {
         if let Some(n) = value {
-            self.push_one(
-                tag,
-                owner_id,
-                parent_id,
-                attr_cv_param(tail, &n.to_string()),
-            );
+            self.push_one(tag, id, parent_id, attr_cv_param(tail, &n.to_string()));
         }
     }
     fn push_cv_and_user_params(
         &mut self,
-        owner_id: u32,
+        id: u32,
         parent_id: u32,
         cv_params: &[CvParam],
         user_params: &[UserParam],
     ) {
-        self.push_many(TagId::CvParam, owner_id, parent_id, cv_params);
-        self.push_user_params(TagId::UserParam, owner_id, parent_id, user_params);
+        self.push_many(TagId::CvParam, id, parent_id, cv_params);
+        self.push_user_params(TagId::UserParam, id, parent_id, user_params);
     }
+
     fn push_ref_group_params(
         &mut self,
-        owner_id: u32,
-        parent_id: u32,
+        id: u32,
         group_refs: &[ReferenceableParamGroupRef],
-        ref_groups: &HashMap<&str, &ReferenceableParamGroup>,
+        ctx: &mut TraversalCtx,
     ) {
         for gr in group_refs {
-            if let Some(group) = ref_groups.get(gr.r#ref.as_str()) {
-                self.push_many(TagId::CvParam, owner_id, parent_id, &group.cv_params);
-            }
+            let ref_id = ctx.alloc();
+            self.touch(TagId::ReferenceableParamGroupRef, ref_id, id);
+            self.push_str_attr(
+                TagId::ReferenceableParamGroupRef,
+                ref_id,
+                id,
+                ACC_ATTR_REF,
+                &gr.r#ref,
+            );
         }
     }
     fn push_schema_attrs<T: Serialize>(
         &mut self,
         tag: TagId,
-        owner_id: u32,
+        id: u32,
         parent_id: u32,
         schema_value: &T,
     ) {
-        for attr in assign_attributes(schema_value, tag, owner_id, parent_id) {
+        for attr in assign_attributes(schema_value, tag, id, parent_id) {
             let tail_raw = parse_accession_tail_raw(attr.accession.as_deref());
             if tail_raw == 0 {
                 continue;
@@ -412,7 +396,7 @@ impl<'b> MetaParamWriter<'b> {
             }
             self.push_one(
                 tag,
-                owner_id,
+                id,
                 parent_id,
                 attr_cv_param(AccessionTail::from_raw(tail_raw), &text),
             );
@@ -457,14 +441,14 @@ impl PackedMetaBuilder {
 
     fn flush_buffer(&mut self, buffer: &MetaParamBuffer) {
         for row in &buffer.rows {
-            self.push_row(row.tag_id, row.owner_id, row.parent_id, &row.cv_param);
+            self.push_row(row.tag_id, row.id, row.parent_id, &row.cv_param);
         }
         self.end_item();
     }
 
-    fn push_row(&mut self, tag_id: u8, owner_id: u32, parent_id: u32, cv_param: &CvParam) {
+    fn push_row(&mut self, tag_id: u8, id: u32, parent_id: u32, cv_param: &CvParam) {
         self.tag_ids.push(tag_id);
-        self.ids.push(owner_id);
+        self.ids.push(id);
         self.parent_indices.push(parent_id);
 
         let cv_ref = cv_ref_prefix_from_accession(cv_param.accession.as_deref())
@@ -580,19 +564,6 @@ pub(crate) fn array_type_accession_from_binary_data_array(bda: &BinaryDataArray)
         }
     }
     0
-}
-
-pub(crate) fn build_ref_group_lookup<'m>(
-    mzml: &'m MzML,
-) -> HashMap<&'m str, &'m ReferenceableParamGroup> {
-    mzml.referenceable_param_group_list
-        .as_ref()
-        .map_or_else(HashMap::new, |list| {
-            list.referenceable_param_groups
-                .iter()
-                .map(|g| (g.id.as_str(), g))
-                .collect()
-        })
 }
 
 fn emit_binary_data_array_cv_params(
@@ -743,7 +714,7 @@ pub(crate) trait MzmlListItem: Serialize {
         &self,
         writer: &mut MetaParamWriter<'_>,
         item_id: u32,
-        ctx: &mut TraversalCtx<'_>,
+        ctx: &mut TraversalCtx,
         policy: ArrayPolicy,
     );
 }
@@ -771,7 +742,7 @@ impl MzmlListItem for Spectrum {
         &self,
         writer: &mut MetaParamWriter<'_>,
         id: u32,
-        ctx: &mut TraversalCtx<'_>,
+        ctx: &mut TraversalCtx,
         policy: ArrayPolicy,
     ) {
         flatten_spectrum_children(writer, self, id, ctx, policy);
@@ -801,7 +772,7 @@ impl MzmlListItem for Chromatogram {
         &self,
         writer: &mut MetaParamWriter<'_>,
         id: u32,
-        ctx: &mut TraversalCtx<'_>,
+        ctx: &mut TraversalCtx,
         policy: ArrayPolicy,
     ) {
         flatten_chromatogram_children(writer, self, id, ctx, policy);
@@ -812,7 +783,7 @@ fn pack_item_list_meta<T, L>(
     items: &[T],
     list_node_id: u32,
     list_schema: Option<&L>,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     policy: ArrayPolicy,
 ) -> PackedMeta
 where
@@ -838,7 +809,7 @@ where
                 Some(i as u32),
             );
         }
-        writer.push_ref_group_params(item_id, list_node_id, item.group_refs(), ctx.ref_groups);
+        writer.push_ref_group_params(item_id, item.group_refs(), ctx);
         writer.push_cv_and_user_params(item_id, list_node_id, item.cv_params(), item.user_params());
         item.flatten_children(writer, item_id, ctx, policy);
     })
@@ -848,7 +819,7 @@ fn flatten_spectrum_children(
     writer: &mut MetaParamWriter<'_>,
     spectrum: &Spectrum,
     spectrum_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     policy: ArrayPolicy,
 ) {
     if let Some(desc) = &spectrum.spectrum_description {
@@ -870,16 +841,11 @@ fn flatten_legacy_spectrum_description(
     writer: &mut MetaParamWriter<'_>,
     desc: &SpectrumDescription,
     spectrum_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let desc_id = ctx.alloc();
     writer.touch(TagId::SpectrumDescription, desc_id, spectrum_id);
-    writer.push_ref_group_params(
-        desc_id,
-        spectrum_id,
-        &desc.referenceable_param_group_refs,
-        ctx.ref_groups,
-    );
+    writer.push_ref_group_params(desc_id, &desc.referenceable_param_group_refs, ctx);
     writer.push_cv_and_user_params(desc_id, spectrum_id, &desc.cv_params, &desc.user_params);
     flatten_scan_list_opt(writer, desc.scan_list.as_ref(), desc_id, ctx);
     flatten_precursor_list_opt(writer, desc.precursor_list.as_ref(), desc_id, ctx);
@@ -890,7 +856,7 @@ fn flatten_chromatogram_children(
     writer: &mut MetaParamWriter<'_>,
     chrom: &Chromatogram,
     chrom_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     policy: ArrayPolicy,
 ) {
     if let Some(p) = &chrom.precursor {
@@ -912,7 +878,7 @@ fn flatten_scan_list_opt(
     writer: &mut MetaParamWriter<'_>,
     sl: Option<&ScanList>,
     parent: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let Some(sl) = sl else { return };
     let sl_id = ctx.alloc();
@@ -931,7 +897,7 @@ fn flatten_precursor_list_opt(
     writer: &mut MetaParamWriter<'_>,
     pl: Option<&crate::mzml::structs::PrecursorList>,
     parent: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let Some(pl) = pl else { return };
     let pl_id = ctx.alloc();
@@ -951,7 +917,7 @@ fn flatten_product_list_opt(
     writer: &mut MetaParamWriter<'_>,
     pl: Option<&crate::mzml::structs::ProductList>,
     parent: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let Some(pl) = pl else { return };
     let pl_id = ctx.alloc();
@@ -971,7 +937,7 @@ fn flatten_binary_data_array_list(
     writer: &mut MetaParamWriter<'_>,
     bda_list: Option<&BinaryDataArrayList>,
     parent_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     policy: ArrayPolicy,
 ) {
     let Some(list) = bda_list else { return };
@@ -987,6 +953,7 @@ fn flatten_binary_data_array_list(
         let bda_id = ctx.alloc();
         writer.touch(TagId::BinaryDataArray, bda_id, list_id);
         writer.push_schema_attrs(TagId::BinaryDataArray, bda_id, list_id, bda);
+        writer.push_ref_group_params(bda_id, &bda.referenceable_param_group_refs, ctx);
         emit_binary_data_array_cv_params(writer, bda_id, list_id, bda, policy);
     }
 }
@@ -995,7 +962,7 @@ fn flatten_precursor(
     writer: &mut MetaParamWriter<'_>,
     precursor: &Precursor,
     parent_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let p_id = ctx.alloc();
     writer.touch(TagId::Precursor, p_id, parent_id);
@@ -1003,6 +970,7 @@ fn flatten_precursor(
     if let Some(iw) = &precursor.isolation_window {
         let iw_id = ctx.alloc();
         writer.touch(TagId::IsolationWindow, iw_id, p_id);
+        writer.push_ref_group_params(iw_id, &iw.referenceable_param_group_refs, ctx);
         writer.push_cv_and_user_params(iw_id, p_id, &iw.cv_params, &iw.user_params);
     }
     if let Some(sil) = &precursor.selected_ion_list {
@@ -1017,12 +985,14 @@ fn flatten_precursor(
         for si in &sil.selected_ions {
             let si_id = ctx.alloc();
             writer.touch(TagId::SelectedIon, si_id, sil_id);
+            writer.push_ref_group_params(si_id, &si.referenceable_param_group_refs, ctx);
             writer.push_cv_and_user_params(si_id, sil_id, &si.cv_params, &si.user_params);
         }
     }
     if let Some(act) = &precursor.activation {
         let act_id = ctx.alloc();
         writer.touch(TagId::Activation, act_id, p_id);
+        writer.push_ref_group_params(act_id, &act.referenceable_param_group_refs, ctx);
         writer.push_cv_and_user_params(act_id, p_id, &act.cv_params, &act.user_params);
     }
 }
@@ -1031,7 +1001,7 @@ fn flatten_product(
     writer: &mut MetaParamWriter<'_>,
     product: &Product,
     parent_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let prod_id = ctx.alloc();
     writer.touch(TagId::Product, prod_id, parent_id);
@@ -1040,6 +1010,7 @@ fn flatten_product(
     if let Some(iw) = &product.isolation_window {
         let iw_id = ctx.alloc();
         writer.touch(TagId::IsolationWindow, iw_id, prod_id);
+        writer.push_ref_group_params(iw_id, &iw.referenceable_param_group_refs, ctx);
         writer.push_cv_and_user_params(iw_id, prod_id, &iw.cv_params, &iw.user_params);
     }
 }
@@ -1048,12 +1019,13 @@ fn flatten_scan_list(
     writer: &mut MetaParamWriter<'_>,
     scan_list: &ScanList,
     sl_id: u32,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     for scan in &scan_list.scans {
         let scan_id = ctx.alloc();
         writer.touch(TagId::Scan, scan_id, sl_id);
         writer.push_schema_attrs(TagId::Scan, scan_id, sl_id, scan);
+        writer.push_ref_group_params(scan_id, &scan.referenceable_param_group_refs, ctx);
         writer.push_cv_and_user_params(scan_id, sl_id, &scan.cv_params, &scan.user_params);
         if let Some(swl) = &scan.scan_window_list {
             let swl_id = ctx.alloc();
@@ -1073,7 +1045,7 @@ fn flatten_scan_list(
     }
 }
 
-fn pack_global_meta(mzml: &MzML, ctx: &mut TraversalCtx<'_>) -> (PackedMeta, GlobalCounts) {
+fn pack_global_meta(mzml: &MzML, ctx: &mut TraversalCtx) -> (PackedMeta, GlobalCounts) {
     let mut buffers: Vec<MetaParamBuffer> = Vec::new();
 
     let n_file_description = append_file_description_meta(mzml, ctx, &mut buffers);
@@ -1106,7 +1078,7 @@ fn pack_global_meta(mzml: &MzML, ctx: &mut TraversalCtx<'_>) -> (PackedMeta, Glo
 
 fn append_file_description_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(fd) = &mzml.file_description else {
@@ -1119,12 +1091,7 @@ fn append_file_description_meta(
 
         writer.touch(TagId::FileDescription, fd_id, 0);
         writer.touch(TagId::FileContent, fc_id, fd_id);
-        writer.push_ref_group_params(
-            fc_id,
-            fd_id,
-            &fd.file_content.referenceable_param_group_refs,
-            ctx.ref_groups,
-        );
+        writer.push_ref_group_params(fc_id, &fd.file_content.referenceable_param_group_refs, ctx);
         writer.push_cv_and_user_params(
             fc_id,
             fd_id,
@@ -1153,34 +1120,20 @@ fn append_file_description_meta(
                 ACC_ATTR_LOCATION,
                 &sf.location,
             );
-            writer.push_ref_group_params(
-                sf_id,
-                sfl_id,
-                &sf.referenceable_param_group_ref,
-                ctx.ref_groups,
-            );
+            writer.push_ref_group_params(sf_id, &sf.referenceable_param_group_ref, ctx);
             writer.push_cv_and_user_params(sf_id, sfl_id, &sf.cv_param, &sf.user_param);
         }
         for contact in &fd.contacts {
             let c_id = ctx.alloc();
             writer.touch(TagId::Contact, c_id, fd_id);
-            writer.push_ref_group_params(
-                c_id,
-                fd_id,
-                &contact.referenceable_param_group_refs,
-                ctx.ref_groups,
-            );
+            writer.push_ref_group_params(c_id, &contact.referenceable_param_group_refs, ctx);
             writer.push_cv_and_user_params(c_id, fd_id, &contact.cv_params, &contact.user_params);
         }
     });
     1
 }
 
-fn append_run_meta(
-    mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
-    buffers: &mut Vec<MetaParamBuffer>,
-) -> u32 {
+fn append_run_meta(mzml: &MzML, ctx: &mut TraversalCtx, buffers: &mut Vec<MetaParamBuffer>) -> u32 {
     let run = &mzml.run;
     append_meta_buffer(buffers, |writer| {
         let run_id = ctx.alloc();
@@ -1244,7 +1197,7 @@ fn append_run_meta(
 
 fn append_ref_param_groups_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.referenceable_param_group_list else {
@@ -1269,7 +1222,7 @@ fn append_ref_param_groups_meta(
 
 fn append_samples_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.sample_list else {
@@ -1281,9 +1234,7 @@ fn append_samples_meta(
             writer.touch(TagId::Sample, sid, 0);
             writer.push_str_attr(TagId::Sample, sid, 0, ACC_ATTR_ID, &sample.id);
             writer.push_str_attr(TagId::Sample, sid, 0, ACC_ATTR_NAME, &sample.name);
-            if let Some(gr) = &sample.referenceable_param_group_ref {
-                writer.push_ref_group_params(sid, 0, slice::from_ref(gr), ctx.ref_groups);
-            }
+            writer.push_ref_group_params(sid, &sample.referenceable_param_group_refs, ctx);
         });
     }
     list.samples.len() as u32
@@ -1297,18 +1248,18 @@ fn emit_instrument_component(
     group_refs: &[ReferenceableParamGroupRef],
     cv_params: &[CvParam],
     user_params: &[UserParam],
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
 ) {
     let comp_id = ctx.alloc();
     writer.touch(tag, comp_id, parent_id);
     writer.push_optional_u32_attr(tag, comp_id, parent_id, ACC_ATTR_ORDER, order);
-    writer.push_ref_group_params(comp_id, parent_id, group_refs, ctx.ref_groups);
+    writer.push_ref_group_params(comp_id, group_refs, ctx);
     writer.push_cv_and_user_params(comp_id, parent_id, cv_params, user_params);
 }
 
 fn append_instruments_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.instrument_list else {
@@ -1316,23 +1267,18 @@ fn append_instruments_meta(
     };
     for inst in &list.instrument {
         append_meta_buffer(buffers, |writer| {
-            let iid = ctx.alloc();
-            writer.touch(TagId::Instrument, iid, 0);
-            writer.push_str_attr(TagId::Instrument, iid, 0, ACC_ATTR_ID, &inst.id);
-            writer.push_ref_group_params(
-                iid,
-                0,
-                &inst.referenceable_param_group_ref,
-                ctx.ref_groups,
-            );
-            writer.push_cv_and_user_params(iid, 0, &inst.cv_param, &inst.user_param);
+            let id = ctx.alloc();
+            writer.touch(TagId::Instrument, id, 0);
+            writer.push_str_attr(TagId::Instrument, id, 0, ACC_ATTR_ID, &inst.id);
+            writer.push_ref_group_params(id, &inst.referenceable_param_group_ref, ctx);
+            writer.push_cv_and_user_params(id, 0, &inst.cv_param, &inst.user_param);
             if let Some(cl) = &inst.component_list {
                 for s in &cl.source {
                     emit_instrument_component(
                         writer,
                         TagId::ComponentSource,
                         s.order,
-                        iid,
+                        id,
                         &s.referenceable_param_group_ref,
                         &s.cv_param,
                         &s.user_param,
@@ -1344,7 +1290,7 @@ fn append_instruments_meta(
                         writer,
                         TagId::ComponentAnalyzer,
                         a.order,
-                        iid,
+                        id,
                         &a.referenceable_param_group_ref,
                         &a.cv_param,
                         &a.user_param,
@@ -1356,7 +1302,7 @@ fn append_instruments_meta(
                         writer,
                         TagId::ComponentDetector,
                         d.order,
-                        iid,
+                        id,
                         &d.referenceable_param_group_ref,
                         &d.cv_param,
                         &d.user_param,
@@ -1371,7 +1317,7 @@ fn append_instruments_meta(
 
 fn append_software_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.software_list else {
@@ -1415,7 +1361,7 @@ fn append_software_list_meta(
 
 fn append_data_processing_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.data_processing_list else {
@@ -1429,12 +1375,7 @@ fn append_data_processing_list_meta(
             for pm in &dp.processing_method {
                 let pm_id = ctx.alloc();
                 writer.touch(TagId::ProcessingMethod, pm_id, dp_id);
-                writer.push_ref_group_params(
-                    pm_id,
-                    dp_id,
-                    &pm.referenceable_param_group_ref,
-                    ctx.ref_groups,
-                );
+                writer.push_ref_group_params(pm_id, &pm.referenceable_param_group_ref, ctx);
                 writer.push_cv_and_user_params(pm_id, dp_id, &pm.cv_param, &pm.user_param);
             }
         });
@@ -1444,7 +1385,7 @@ fn append_data_processing_list_meta(
 
 fn append_scan_settings_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.scan_settings_list else {
@@ -1488,23 +1429,13 @@ fn append_scan_settings_list_meta(
                     );
                 }
             }
-            writer.push_ref_group_params(
-                ss_id,
-                0,
-                &ss.referenceable_param_group_refs,
-                ctx.ref_groups,
-            );
+            writer.push_ref_group_params(ss_id, &ss.referenceable_param_group_refs, ctx);
             writer.push_cv_and_user_params(ss_id, 0, &ss.cv_params, &ss.user_params);
             if let Some(tl) = &ss.target_list {
                 for target in &tl.targets {
                     let t_id = ctx.alloc();
                     writer.touch(TagId::Target, t_id, ss_id);
-                    writer.push_ref_group_params(
-                        t_id,
-                        ss_id,
-                        &target.referenceable_param_group_refs,
-                        ctx.ref_groups,
-                    );
+                    writer.push_ref_group_params(t_id, &target.referenceable_param_group_refs, ctx);
                     writer.push_cv_and_user_params(
                         t_id,
                         ss_id,
@@ -1520,7 +1451,7 @@ fn append_scan_settings_list_meta(
 
 fn append_cv_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx<'_>,
+    ctx: &mut TraversalCtx,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(cv_list) = &mzml.cv_list else {
@@ -1609,11 +1540,11 @@ mod tests {
     }
 
     #[test]
-    fn meta_param_buffer_push_records_owner_id() {
+    fn meta_param_buffer_push_records_id() {
         let mut buffer = MetaParamBuffer::new();
         buffer.push(TagId::CvParam, 1, 0, empty_cv_param());
         assert_eq!(buffer.rows.len(), 1);
-        assert_eq!(buffer.rows[0].owner_id, 1);
+        assert_eq!(buffer.rows[0].id, 1);
     }
 
     #[test]
@@ -1638,7 +1569,7 @@ mod tests {
                 unit_accession: None,
             },
             tag_id: TagId::CvParam as u8,
-            owner_id: 1,
+            id: 1,
             parent_id: 0,
         });
         buffer.normalize_attr_cv_values();
@@ -1660,7 +1591,7 @@ mod tests {
                 unit_accession: None,
             },
             tag_id: TagId::CvParam as u8,
-            owner_id: 1,
+            id: 1,
             parent_id: 0,
         });
         buffer.normalize_attr_cv_values();
@@ -1739,8 +1670,7 @@ mod tests {
 
     #[test]
     fn collector_alloc_starts_at_one_and_increments() {
-        let ref_groups = HashMap::new();
-        let mut collector = MetaCollector::new(&ref_groups);
+        let mut collector = MetaCollector::new();
         assert_eq!(collector.alloc(), 1);
         assert_eq!(collector.alloc(), 2);
         assert_eq!(collector.alloc(), 3);
@@ -1749,8 +1679,7 @@ mod tests {
     #[test]
     fn collector_global_meta_on_empty_mzml_produces_run_buffer() {
         let mzml = MzML::default();
-        let ref_groups = build_ref_group_lookup(&mzml);
-        let mut collector = MetaCollector::new(&ref_groups);
+        let mut collector = MetaCollector::new();
         let (meta, counts) = collector.collect_global_meta(&mzml);
         assert_eq!(counts.n_run, 1);
         assert!(!meta.ids.is_empty());
@@ -1758,8 +1687,7 @@ mod tests {
 
     #[test]
     fn collector_spectrum_meta_on_empty_list_produces_empty_packed_meta() {
-        let ref_groups = HashMap::new();
-        let mut collector = MetaCollector::new(&ref_groups);
+        let mut collector = MetaCollector::new();
         let spectra: &[Spectrum] = &[];
         let policy = ArrayPolicy {
             x_array_accession: ACCESSION_MZ_ARRAY,
@@ -1819,12 +1747,5 @@ mod tests {
             force_f32: false,
         };
         assert!(!policy.should_force_f32(ACCESSION_MZ_ARRAY));
-    }
-
-    #[test]
-    fn build_ref_group_lookup_empty_mzml() {
-        let mzml = MzML::default();
-        let lookup = build_ref_group_lookup(&mzml);
-        assert!(lookup.is_empty());
     }
 }

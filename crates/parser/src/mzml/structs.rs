@@ -254,7 +254,7 @@ pub struct SampleList {
 pub struct Sample {
     pub id: String,
     pub name: String,
-    pub referenceable_param_group_ref: Option<ReferenceableParamGroupRef>,
+    pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
     pub cv_params: Vec<CvParam>,
     pub user_params: Vec<UserParam>,
 }
@@ -376,6 +376,7 @@ pub struct ScanList {
     pub count: Option<usize>,
     pub cv_params: Vec<CvParam>,
     pub user_params: Vec<UserParam>,
+    pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
     pub scans: Vec<Scan>,
 }
 

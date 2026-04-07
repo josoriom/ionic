@@ -334,7 +334,7 @@ fn write_sample_list(writer: &mut Writer<Vec<u8>>, list: &SampleList) -> Result<
             .write_event(Event::Start(s_tag))
             .map_err(|e| e.to_string())?;
 
-        if let Some(r) = &s.referenceable_param_group_ref {
+        for r in &s.referenceable_param_group_refs {
             write_referenceable_param_group_ref(writer, r)?;
         }
 

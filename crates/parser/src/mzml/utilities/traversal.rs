@@ -77,7 +77,7 @@ impl_param_collector!(ReferenceableParamGroup {
 impl_param_collector!(Sample {
     cv: cv_params,
     user: user_params,
-    ref_opt: referenceable_param_group_ref
+    ref: referenceable_param_group_refs
 });
 impl_param_collector!(Instrument       { cv: cv_param,  user: user_param,   ref: referenceable_param_group_ref      });
 impl_param_collector!(Source           { cv: cv_param,  user: user_param,   ref: referenceable_param_group_ref      });

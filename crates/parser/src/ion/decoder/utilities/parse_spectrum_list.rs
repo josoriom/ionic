@@ -5,7 +5,7 @@ use crate::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF, ACC_ATTR_DEFAULT_ARRAY_LENGTH,
             ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_ID, ACC_ATTR_INDEX, ACC_ATTR_NATIVE_ID,
-            ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPOT_ID,
+            ACC_ATTR_REF, ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPOT_ID,
         },
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
@@ -14,7 +14,7 @@ use crate::{
             parse_product_list, parse_scan_list,
         },
     },
-    mzml::schema::TagId,
+    mzml::{schema::TagId, structs::ReferenceableParamGroupRef},
 };
 
 const ACC_MS_LEVEL: &str = "MS:1000511";
@@ -129,7 +129,14 @@ fn parse_spectrum<'a, P: MetadataPolicy>(
         source_file_ref: get_attr_text(rows, ACC_ATTR_SOURCE_FILE_REF),
         spot_id: get_attr_text(rows, ACC_ATTR_SPOT_ID),
         ms_level,
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(spectrum_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
         cv_params,
         user_params,
         spectrum_description,
@@ -158,7 +165,14 @@ fn parse_description<'a, P: MetadataPolicy>(
     let (cv_params, user_params) = parse_cv_and_user_params(param_buffer);
 
     Some(SpectrumDescription {
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(description_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
         cv_params,
         user_params,
         scan_list: parse_scan_list(owner_rows, children_lookup, description_id),

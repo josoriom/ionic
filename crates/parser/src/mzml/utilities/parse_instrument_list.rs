@@ -45,7 +45,6 @@ fn parse_instrument_with_body<R: BufRead>(
     let mut instrument = Instrument {
         id: attr(start, b"id").unwrap_or_default(),
         scan_settings_ref: attr(start, b"scanSettingsRef").map(|r| ScanSettingsRef { r#ref: r }),
-        software_ref: attr(start, b"softwareRef").map(|r| InstrumentSoftwareRef { r#ref: r }),
         ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {
@@ -67,6 +66,12 @@ fn parse_instrument_with_body<R: BufRead>(
                 instrument.component_list = Some(parse_component_list(ws, &element)?);
                 Ok(true)
             }
+            TagId::SoftwareRef => {
+                instrument.software_ref = Some(InstrumentSoftwareRef {
+                    r#ref: attr(&element, b"ref").unwrap_or_default(),
+                });
+                Ok(true)
+            }
             _ => Ok(false),
         }
     })?;
@@ -77,7 +82,6 @@ fn parse_instrument_empty(start: &BytesStart<'_>) -> Instrument {
     Instrument {
         id: attr(start, b"id").unwrap_or_default(),
         scan_settings_ref: attr(start, b"scanSettingsRef").map(|r| ScanSettingsRef { r#ref: r }),
-        software_ref: attr(start, b"softwareRef").map(|r| InstrumentSoftwareRef { r#ref: r }),
         ..Default::default()
     }
 }

@@ -5,7 +5,8 @@ use crate::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF, ACC_ATTR_DEFAULT_ARRAY_LENGTH,
             ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_ID,
-            ACC_ATTR_INDEX, ACC_ATTR_NATIVE_ID, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF,
+            ACC_ATTR_INDEX, ACC_ATTR_NATIVE_ID, ACC_ATTR_REF, ACC_ATTR_SOURCE_FILE_REF,
+            ACC_ATTR_SPECTRUM_REF,
         },
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
@@ -16,7 +17,10 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{Activation, IsolationWindow, Precursor, Product, SelectedIon, SelectedIonList},
+        structs::{
+            Activation, IsolationWindow, Precursor, Product, ReferenceableParamGroupRef,
+            SelectedIon, SelectedIonList,
+        },
     },
 };
 
@@ -102,7 +106,14 @@ fn parse_chromatogram<'a, P: MetadataPolicy>(
             .or(Some(0)),
         data_processing_ref: get_attr_text(rows, ACC_ATTR_DATA_PROCESSING_REF)
             .or_else(|| default_data_processing_ref.map(ToString::to_string)),
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(chromatogram_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
         cv_params,
         user_params,
         precursor: parse_precursor(
@@ -219,7 +230,14 @@ fn parse_isolation_window<'a, P: MetadataPolicy>(
     let (cv_params, user_params) = parse_cv_and_user_params(param_buffer);
 
     Some(IsolationWindow {
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(isolation_window_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
         cv_params,
         user_params,
     })
@@ -243,7 +261,14 @@ fn parse_activation<'a, P: MetadataPolicy>(
     let (cv_params, user_params) = parse_cv_and_user_params(param_buffer);
 
     Some(Activation {
-        referenceable_param_group_refs: Vec::new(),
+        referenceable_param_group_refs: children_lookup
+            .ids_for(activation_id, TagId::ReferenceableParamGroupRef)
+            .iter()
+            .filter_map(|&ref_id| {
+                get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                    .map(|r| ReferenceableParamGroupRef { r#ref: r })
+            })
+            .collect(),
         cv_params,
         user_params,
     })
@@ -271,7 +296,14 @@ fn parse_selected_ion_list<'a, P: MetadataPolicy>(
             let (cv_params, user_params) = parse_cv_and_user_params(param_buffer);
 
             SelectedIon {
-                referenceable_param_group_refs: Vec::new(),
+                referenceable_param_group_refs: children_lookup
+                    .ids_for(selected_ion_id, TagId::ReferenceableParamGroupRef)
+                    .iter()
+                    .filter_map(|&ref_id| {
+                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                    })
+                    .collect(),
                 cv_params,
                 user_params,
             }
