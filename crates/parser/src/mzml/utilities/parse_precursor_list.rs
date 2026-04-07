@@ -5,7 +5,10 @@ use crate::mzml::utilities::{attr, attr_usize};
 use crate::mzml::{
     schema::TagId,
     structs::*,
-    utilities::{ParseError, parsing_workspace::ParsingWorkspace},
+    utilities::{
+        ParamCollector, ParseError, parsing_workspace::ParsingWorkspace, read_cv_param,
+        read_user_param,
+    },
 };
 
 pub(crate) fn parse_precursor_list<R: BufRead>(
@@ -18,20 +21,30 @@ pub(crate) fn parse_precursor_list<R: BufRead>(
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();
-        if tag != TagId::Precursor {
-            return Ok(false);
+        match tag {
+            TagId::CvParam => {
+                list.receive_cv(read_cv_param(&element));
+                Ok(true)
+            }
+            TagId::UserParam => {
+                list.receive_user(read_user_param(&element));
+                Ok(true)
+            }
+            TagId::Precursor if is_open => {
+                list.precursors.push(parse_precursor(ws, &element)?);
+                Ok(true)
+            }
+            TagId::Precursor => {
+                list.precursors.push(Precursor {
+                    spectrum_ref: attr(&element, b"spectrumRef"),
+                    source_file_ref: attr(&element, b"sourceFileRef"),
+                    external_spectrum_id: attr(&element, b"externalSpectrumID"),
+                    ..Default::default()
+                });
+                Ok(true)
+            }
+            _ => Ok(false),
         }
-        if is_open {
-            list.precursors.push(parse_precursor(ws, &element)?);
-        } else {
-            list.precursors.push(Precursor {
-                spectrum_ref: attr(&element, b"spectrumRef"),
-                source_file_ref: attr(&element, b"sourceFileRef"),
-                external_spectrum_id: attr(&element, b"externalSpectrumID"),
-                ..Default::default()
-            });
-        }
-        Ok(true)
     })?;
     Ok(list)
 }

@@ -1,4 +1,5 @@
 use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
+use crate::ion::attr_meta::ACC_ATTR_DEFAULT_SOURCE_FILE_REF;
 use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
@@ -683,7 +684,16 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                     ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF,
                 )
                 .or_else(|| get_attr_text(rows, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF)),
+                default_source_file_ref: get_attr_text(rows, ACC_ATTR_DEFAULT_SOURCE_FILE_REF),
                 sample_ref: get_attr_text(rows, ACC_ATTR_SAMPLE_REF),
+                referenceable_param_group_refs: global_lookup
+                    .ids_for(run_id, TagId::ReferenceableParamGroupRef)
+                    .iter()
+                    .filter_map(|&ref_id| {
+                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
+                    })
+                    .collect(),
                 cv_params,
                 user_params,
                 source_file_ref_list,
