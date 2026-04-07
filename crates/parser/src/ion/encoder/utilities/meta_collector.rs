@@ -889,6 +889,7 @@ fn flatten_scan_list_opt(
         ACC_ATTR_COUNT,
         Some(sl.scans.len() as u32),
     );
+    writer.push_ref_group_params(sl_id, &sl.referenceable_param_group_refs, ctx);
     writer.push_cv_and_user_params(sl_id, parent, &sl.cv_params, &sl.user_params);
     flatten_scan_list(writer, sl, sl_id, ctx);
 }
@@ -1335,6 +1336,7 @@ fn append_software_list_meta(
             if let Some(v) = version {
                 writer.push_str_attr(TagId::Software, swid, 0, ACC_ATTR_VERSION, v);
             }
+            writer.push_ref_group_params(swid, &sw.referenceable_param_group_refs, ctx);
             for sp in &sw.software_param {
                 let pid = ctx.alloc();
                 writer.touch(TagId::SoftwareParam, pid, swid);

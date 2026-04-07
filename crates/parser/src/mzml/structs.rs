@@ -321,6 +321,7 @@ pub struct Software {
     pub software_param: Vec<SoftwareParam>,
     pub cv_param: Vec<CvParam>,
     pub user_params: Vec<UserParam>,
+    pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
 }
 
 /// <softwareParam>

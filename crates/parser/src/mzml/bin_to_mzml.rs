@@ -588,6 +588,8 @@ fn write_software_list(writer: &mut Writer<Vec<u8>>, list: &SoftwareList) -> Res
             .write_event(Event::Start(sw_tag))
             .map_err(|e| e.to_string())?;
 
+        write_referenceable_param_group_refs(writer, &sw.referenceable_param_group_refs)?;
+
         for sp in &sw.software_param {
             let mut sp_tag = BytesStart::new("softwareParam");
             if let Some(v) = &sp.cv_ref {
@@ -963,6 +965,7 @@ fn write_scan_list(writer: &mut Writer<Vec<u8>>, list: &ScanList) -> Result<(), 
         .write_event(Event::Start(tag))
         .map_err(|e| e.to_string())?;
 
+    write_referenceable_param_group_refs(writer, &list.referenceable_param_group_refs)?;
     write_cv_params(writer, &list.cv_params)?;
     write_user_params(writer, &list.user_params)?;
 

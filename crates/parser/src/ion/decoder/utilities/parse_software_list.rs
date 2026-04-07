@@ -10,7 +10,7 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{Software, SoftwareList, SoftwareParam},
+        structs::{ReferenceableParamGroupRef, Software, SoftwareList, SoftwareParam},
     },
 };
 
@@ -72,7 +72,6 @@ pub(crate) fn parse_software_list<P: MetadataPolicy>(
     })
 }
 
-#[inline]
 fn parse_software<'a, P: MetadataPolicy>(
     children_lookup: &ChildrenLookup,
     owner_rows: &'a OwnerRows<'a>,
@@ -92,12 +91,22 @@ fn parse_software<'a, P: MetadataPolicy>(
     let software_param =
         parse_software_params(children_lookup, owner_rows, software_id, version.as_deref());
 
+    let referenceable_param_group_refs = children_lookup
+        .ids_for(software_id, TagId::ReferenceableParamGroupRef)
+        .iter()
+        .filter_map(|&ref_id| {
+            get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
+                .map(|r| ReferenceableParamGroupRef { r#ref: r })
+        })
+        .collect();
+
     Software {
         id,
         version,
         software_param,
         cv_param,
         user_params,
+        referenceable_param_group_refs,
     }
 }
 

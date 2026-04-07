@@ -31,6 +31,10 @@ pub(crate) fn parse_scan_list<R: BufRead>(
                 scan_list.receive_user(read_user_param(&element));
                 Ok(true)
             }
+            TagId::ReferenceableParamGroupRef => {
+                scan_list.receive_ref_group(read_ref_group_ref(&element));
+                Ok(true)
+            }
             TagId::Scan => {
                 if is_open {
                     scan_list.scans.push(parse_scan(ws, &element)?);
