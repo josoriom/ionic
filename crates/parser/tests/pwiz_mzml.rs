@@ -5,9 +5,9 @@ use std::{
     sync::OnceLock,
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ionic::{
-    ion::{encode, Decoder, WritingMode},
+    ion::{Decoder, WritingMode, encode},
     mzml::{
         bin_to_mzml::bin_to_mzml,
         parse_mzml::{parse_indexed_mzml, parse_mzml},
@@ -888,17 +888,16 @@ fn contact_signature(ctx: &SemanticCtx<'_>, contact: &Contact) -> String {
 }
 
 fn sample_signature(ctx: &SemanticCtx<'_>, sample: &Sample) -> String {
-    let refs = sample
-        .referenceable_param_group_ref
-        .as_ref()
-        .map(|value| vec![value.clone()])
-        .unwrap_or_default();
     format!(
         "{:?}",
         (
             normalized_text(Some(sample.id.as_str())),
             normalized_text(Some(sample.name.as_str())),
-            ctx.effective_param_signatures(&refs, &sample.cv_params, &sample.user_params),
+            ctx.effective_param_signatures(
+                &sample.referenceable_param_group_refs,
+                &sample.cv_params,
+                &sample.user_params,
+            ),
         )
     )
 }
@@ -2337,13 +2336,11 @@ fn assert_all_refs_resolved(mzml: &MzML) {
 
     if let Some(sample_list) = mzml.sample_list.as_ref() {
         for (index, sample) in sample_list.samples.iter().enumerate() {
-            if let Some(group_ref) = sample.referenceable_param_group_ref.as_ref() {
-                assert_referenceable_param_group_refs_resolved(
-                    std::slice::from_ref(group_ref),
-                    &ref_group_ids,
-                    &format!("sample[{index}]"),
-                );
-            }
+            assert_referenceable_param_group_refs_resolved(
+                &sample.referenceable_param_group_refs,
+                &ref_group_ids,
+                &format!("sample[{index}]"),
+            );
         }
     }
 
@@ -2901,11 +2898,7 @@ fn find_name_value_indices(mzml: &MzML, key: &str, value: &str) -> Vec<usize> {
             let has_pair = id_name_value_pairs(&s.id)
                 .into_iter()
                 .any(|(k, v)| k == key && v == value);
-            if has_pair {
-                Some(i)
-            } else {
-                None
-            }
+            if has_pair { Some(i) } else { None }
         })
         .collect()
 }
@@ -3192,16 +3185,20 @@ fn pwiz_reader_indexed_mzml_test_fixture_preserves_raw_index_entries() {
         indexed.index_list.chromatogram[1].id_ref.as_deref(),
         Some("BPC")
     );
-    assert!(indexed
-        .index_list
-        .spectrum
-        .iter()
-        .all(|offset| offset.offset > 0));
-    assert!(indexed
-        .index_list
-        .chromatogram
-        .iter()
-        .all(|offset| offset.offset > 0));
+    assert!(
+        indexed
+            .index_list
+            .spectrum
+            .iter()
+            .all(|offset| offset.offset > 0)
+    );
+    assert!(
+        indexed
+            .index_list
+            .chromatogram
+            .iter()
+            .all(|offset| offset.offset > 0)
+    );
     assert!(indexed.index_list_offset.is_some());
 }
 
@@ -4286,16 +4283,18 @@ fn pwiz_io_mzml_subset_namespaces_parse_correctly() {
     assert_eq!(spectra(m10).len(), 4);
     assert_eq!(spectra(m11).len(), 4);
 
-    assert!(m10
-        .cv_list
-        .as_ref()
-        .map(|c| !c.cv.is_empty())
-        .unwrap_or(false));
-    assert!(m11
-        .cv_list
-        .as_ref()
-        .map(|c| !c.cv.is_empty())
-        .unwrap_or(false));
+    assert!(
+        m10.cv_list
+            .as_ref()
+            .map(|c| !c.cv.is_empty())
+            .unwrap_or(false)
+    );
+    assert!(
+        m11.cv_list
+            .as_ref()
+            .map(|c| !c.cv.is_empty())
+            .unwrap_or(false)
+    );
 }
 
 #[test]
