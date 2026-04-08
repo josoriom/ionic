@@ -174,7 +174,7 @@ fn parse_value(
             let length = string_lengths[index] as usize;
             if offset
                 .checked_add(length)
-                .map_or(true, |end| end > string_data.len())
+                .is_none_or(|end| end > string_data.len())
             {
                 return Err("string slice out of bounds".to_string());
             }

@@ -212,13 +212,13 @@ impl ValuePool {
                     || text.contains('e')
                     || text.contains('E')
                     || text.starts_with('-') && text[1..].contains('.');
-                if looks_numeric {
-                    if let Ok(n) = text.parse::<f64>() {
-                        let index = self.numeric_count;
-                        self.numeric_values.push(n);
-                        self.numeric_count += 1;
-                        return ValueEncoding { kind: 0, index };
-                    }
+                if looks_numeric
+                    && let Ok(n) = text.parse::<f64>()
+                {
+                    let index = self.numeric_count;
+                    self.numeric_values.push(n);
+                    self.numeric_count += 1;
+                    return ValueEncoding { kind: 0, index };
                 }
                 let index = self.string_count;
                 let bytes = text.as_bytes();
@@ -315,7 +315,7 @@ impl MetaParamBuffer {
     fn normalize_attr_cv_values(&mut self) {
         for row in &mut self.rows {
             if row.cv_param.cv_ref.as_deref() == Some(CV_REF_ATTR) {
-                let absent = row.cv_param.value.as_deref().map_or(true, str::is_empty);
+                let absent = row.cv_param.value.as_deref().is_none_or(str::is_empty);
                 if absent && !row.cv_param.name.is_empty() {
                     row.cv_param.value = Some(std::mem::take(&mut row.cv_param.name));
                 }
@@ -823,11 +823,11 @@ where
 {
     pack_meta_for_each(items.len(), |writer, i| {
         let item = &items[i];
-        if i == 0 && list_node_id != 0 {
-            if let Some(schema) = list_schema {
-                writer.touch(T::list_tag(), list_node_id, 0);
-                writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
-            }
+        if i == 0 && list_node_id != 0
+            && let Some(schema) = list_schema
+        {
+            writer.touch(T::list_tag(), list_node_id, 0);
+            writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
         }
         let item_id = ctx.alloc();
         writer.push_schema_attrs(T::item_tag(), item_id, list_node_id, item);
@@ -1280,6 +1280,7 @@ fn append_samples_meta(
     list.samples.len() as u32
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_instrument_component(
     writer: &mut MetaParamWriter<'_>,
     tag: TagId,

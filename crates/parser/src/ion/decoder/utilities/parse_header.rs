@@ -362,14 +362,14 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         ));
     }
 
-    if h.len_spec_arrayrefs % 32 != 0 {
+    if !h.len_spec_arrayrefs.is_multiple_of(32) {
         failures.push(format!(
             "condition 7: len_spec_arrayrefs ({}) is not a multiple of 32",
             h.len_spec_arrayrefs
         ));
     }
 
-    if h.len_chrom_arrayrefs % 32 != 0 {
+    if !h.len_chrom_arrayrefs.is_multiple_of(32) {
         failures.push(format!(
             "condition 8: len_chrom_arrayrefs ({}) is not a multiple of 32",
             h.len_chrom_arrayrefs

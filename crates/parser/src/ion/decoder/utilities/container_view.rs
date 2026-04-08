@@ -224,7 +224,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         while self
             .cached_bytes
             .checked_add(needed)
-            .map_or(true, |total| total > self.max_cached_bytes)
+            .is_none_or(|total| total > self.max_cached_bytes)
         {
             if self.lru_tail == LRU_NONE {
                 break;
