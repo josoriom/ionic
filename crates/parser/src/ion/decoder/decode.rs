@@ -4,14 +4,14 @@ use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerAccess, ContainerView, DefaultProcessor},
-    parse_header::{Header, parse_header},
-    spectrum_source::{SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range},
+    parse_header::{parse_header, Header},
+    spectrum_source::{f16_bits_to_f64, for_each_spectra_in_range, SpectrumSource},
 };
 use crate::ion::{
     attr_meta::{
-        ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
+        parse_accession_tail, ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
         ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
-        ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
+        ACC_ATTR_START_TIME_STAMP,
     },
     utilities::{
         children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
@@ -342,6 +342,7 @@ impl<'a> Decoder<'a> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum IonBackend<'a> {
     Decoder(Decoder<'a>),
     Materialized,
@@ -455,10 +456,10 @@ impl<'a> Ion<'a> {
     }
 
     #[inline]
-    pub fn header(&self) -> &Header {
+    pub fn header(&self) -> Option<&Header> {
         match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.header(),
-            IonBackend::Materialized => panic!("header is unavailable for mzML-backed Ion"),
+            IonBackend::Decoder(decoder) => Some(decoder.header()),
+            IonBackend::Materialized => None,
         }
     }
 
@@ -699,7 +700,6 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                 source_file_ref_list,
                 spectrum_list,
                 chromatogram_list,
-                ..Default::default()
             },
         })
     }
@@ -749,6 +749,7 @@ struct ScanIterator<'a, 'd> {
 }
 
 impl<'a, 'd> ScanIterator<'a, 'd> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         filter_bytes: &'a [u8],
         entry_bytes: &'a [u8],
@@ -773,6 +774,7 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn run(&mut self, callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64])) {
         for (filter_bytes, entry_bytes) in
             self.filter_chunks.by_ref().zip(self.entry_chunks.by_ref())
@@ -1078,16 +1080,21 @@ fn attach_binaries<E: BinaryArrayOwner>(
                 dtype_stride(aref.dtype),
                 ctx,
             )?;
-            attach_array(binary_data_array_list, aref.array_type, aref.dtype, raw);
+            attach_array(binary_data_array_list, aref.array_type, aref.dtype, raw)?;
         }
         binary_data_array_list.count = Some(binary_data_array_list.binary_data_arrays.len());
     }
     Ok(())
 }
 
-fn attach_array(bdal: &mut BinaryDataArrayList, array_type: u32, dtype: u8, raw: &[u8]) {
-    let binary = raw_to_binary_data(raw, dtype);
-    let numeric_type = dtype_to_numeric_type(dtype);
+fn attach_array(
+    bdal: &mut BinaryDataArrayList,
+    array_type: u32,
+    dtype: u8,
+    raw: &[u8],
+) -> Result<(), String> {
+    let binary = raw_to_binary_data(raw, dtype)?;
+    let numeric_type = dtype_to_numeric_type(dtype)?;
     let found = bdal
         .binary_data_arrays
         .iter_mut()
@@ -1101,95 +1108,126 @@ fn attach_array(bdal: &mut BinaryDataArrayList, array_type: u32, dtype: u8, raw:
     };
     bda.binary = Some(binary);
     sync_numeric_meta(bda, numeric_type);
+    Ok(())
 }
 
-fn raw_to_binary_data(raw: &[u8], dtype: u8) -> BinaryData {
+fn raw_to_binary_data(raw: &[u8], dtype: u8) -> Result<BinaryData, String> {
     match dtype {
-        1 => BinaryData::F64(raw_to_f64_vec(raw)),
-        2 => BinaryData::F32(raw_to_f32_vec(raw)),
-        3 => BinaryData::F16(raw_to_u16_vec(raw)),
-        4 => BinaryData::I16(raw_to_i16_vec(raw)),
-        5 => BinaryData::I32(raw_to_i32_vec(raw)),
-        6 => BinaryData::I64(raw_to_i64_vec(raw)),
-        _ => BinaryData::F64(Vec::new()),
+        1 => Ok(BinaryData::F64(raw_to_f64_vec(raw)?)),
+        2 => Ok(BinaryData::F32(raw_to_f32_vec(raw)?)),
+        3 => Ok(BinaryData::F16(raw_to_u16_vec(raw)?)),
+        4 => Ok(BinaryData::I16(raw_to_i16_vec(raw)?)),
+        5 => Ok(BinaryData::I32(raw_to_i32_vec(raw)?)),
+        6 => Ok(BinaryData::I64(raw_to_i64_vec(raw)?)),
+        _ => Err(format!("unsupported dtype {dtype} in binary array")),
     }
 }
 
 #[inline]
-fn raw_to_f64_vec(raw: &[u8]) -> Vec<f64> {
-    assert!(raw.len() % 8 == 0);
+fn raw_to_f64_vec(raw: &[u8]) -> Result<Vec<f64>, String> {
+    if !raw.len().is_multiple_of(8) {
+        return Err(format!(
+            "f64 array: byte length {} is not a multiple of 8",
+            raw.len()
+        ));
+    }
     let mut out = Vec::with_capacity(raw.len() / 8);
     out.extend(
         raw.chunks_exact(8)
             .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
     );
-    out
+    Ok(out)
 }
 
 #[inline]
-fn raw_to_f32_vec(raw: &[u8]) -> Vec<f32> {
-    assert!(raw.len() % 4 == 0);
+fn raw_to_f32_vec(raw: &[u8]) -> Result<Vec<f32>, String> {
+    if !raw.len().is_multiple_of(4) {
+        return Err(format!(
+            "f32 array: byte length {} is not a multiple of 4",
+            raw.len()
+        ));
+    }
     let mut out = Vec::with_capacity(raw.len() / 4);
     out.extend(
         raw.chunks_exact(4)
             .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap())),
     );
-    out
+    Ok(out)
 }
 
 #[inline]
-fn raw_to_u16_vec(raw: &[u8]) -> Vec<u16> {
-    assert!(raw.len() % 2 == 0);
+fn raw_to_u16_vec(raw: &[u8]) -> Result<Vec<u16>, String> {
+    if !raw.len().is_multiple_of(2) {
+        return Err(format!(
+            "u16 array: byte length {} is not a multiple of 2",
+            raw.len()
+        ));
+    }
     let mut out = Vec::with_capacity(raw.len() / 2);
     out.extend(
         raw.chunks_exact(2)
             .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap())),
     );
-    out
+    Ok(out)
 }
 
 #[inline]
-fn raw_to_i16_vec(raw: &[u8]) -> Vec<i16> {
-    assert!(raw.len() % 2 == 0);
+fn raw_to_i16_vec(raw: &[u8]) -> Result<Vec<i16>, String> {
+    if !raw.len().is_multiple_of(2) {
+        return Err(format!(
+            "i16 array: byte length {} is not a multiple of 2",
+            raw.len()
+        ));
+    }
     let mut out = Vec::with_capacity(raw.len() / 2);
     out.extend(
         raw.chunks_exact(2)
             .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap())),
     );
-    out
+    Ok(out)
 }
 
 #[inline]
-fn raw_to_i32_vec(raw: &[u8]) -> Vec<i32> {
-    assert!(raw.len() % 4 == 0);
+fn raw_to_i32_vec(raw: &[u8]) -> Result<Vec<i32>, String> {
+    if !raw.len().is_multiple_of(4) {
+        return Err(format!(
+            "i32 array: byte length {} is not a multiple of 4",
+            raw.len()
+        ));
+    }
     let mut out = Vec::with_capacity(raw.len() / 4);
     out.extend(
         raw.chunks_exact(4)
             .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap())),
     );
-    out
+    Ok(out)
 }
 
 #[inline]
-fn raw_to_i64_vec(raw: &[u8]) -> Vec<i64> {
-    assert!(raw.len() % 8 == 0);
+fn raw_to_i64_vec(raw: &[u8]) -> Result<Vec<i64>, String> {
+    if !raw.len().is_multiple_of(8) {
+        return Err(format!(
+            "i64 array: byte length {} is not a multiple of 8",
+            raw.len()
+        ));
+    }
     let mut out = Vec::with_capacity(raw.len() / 8);
     out.extend(
         raw.chunks_exact(8)
             .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap())),
     );
-    out
+    Ok(out)
 }
 
-fn dtype_to_numeric_type(dtype: u8) -> NumericType {
+fn dtype_to_numeric_type(dtype: u8) -> Result<NumericType, String> {
     match dtype {
-        1 => NumericType::Float64,
-        2 => NumericType::Float32,
-        3 => NumericType::Float16,
-        4 => NumericType::Int16,
-        5 => NumericType::Int32,
-        6 => NumericType::Int64,
-        _ => NumericType::Float64,
+        1 => Ok(NumericType::Float64),
+        2 => Ok(NumericType::Float32),
+        3 => Ok(NumericType::Float16),
+        4 => Ok(NumericType::Int16),
+        5 => Ok(NumericType::Int32),
+        6 => Ok(NumericType::Int64),
+        _ => Err(format!("unsupported dtype {dtype} for numeric type")),
     }
 }
 
@@ -1235,10 +1273,7 @@ fn sync_numeric_meta(bda: &mut BinaryDataArray, nt: NumericType) {
 
 #[inline]
 fn is_numeric_acc(tail: crate::ion::attr_meta::AccessionTail) -> bool {
-    matches!(
-        tail.raw(),
-        1_000_520 | 1_000_521 | 1_000_523 | 1_000_518 | 1_000_519 | 1_000_522
-    )
+    matches!(tail.raw(), 1_000_518..=1_000_523)
 }
 
 #[inline]
@@ -1370,15 +1405,13 @@ mod tests {
         let mzml = d.to_mzml().unwrap();
         let sl = mzml.run.spectrum_list.as_ref().unwrap();
         assert!(!sl.spectra.is_empty());
-        assert!(
-            sl.spectra[0]
-                .binary_data_array_list
-                .as_ref()
-                .unwrap()
-                .binary_data_arrays
-                .iter()
-                .any(|b| b.binary.is_some())
-        );
+        assert!(sl.spectra[0]
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays
+            .iter()
+            .any(|b| b.binary.is_some()));
     }
 
     #[test]
@@ -1467,14 +1500,12 @@ mod tests {
         let mzml = ion.to_mzml().unwrap();
         let sl = mzml.run.spectrum_list.as_ref().unwrap();
         assert!(!sl.spectra.is_empty());
-        assert!(
-            sl.spectra[0]
-                .binary_data_array_list
-                .as_ref()
-                .unwrap()
-                .binary_data_arrays
-                .iter()
-                .any(|b| b.binary.is_some())
-        );
+        assert!(sl.spectra[0]
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays
+            .iter()
+            .any(|b| b.binary.is_some()));
     }
 }

@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
 use crate::{
-    BinaryData, FilterRecord, NumericType,
-    encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
+    encoder::utilities::{encoder_output::EncoderOutput, FileHeader},
     ion::encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor, FilterType},
     mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
+    BinaryData, FilterRecord, NumericType,
 };
 
 use crate::encoder::utilities::{
@@ -13,10 +13,9 @@ use crate::encoder::utilities::{
         write_i32_slice_le, write_i64_slice_le, write_u16_slice_le, write_u32_le, write_u64_le,
     },
     meta_collector::{
-        ACCESSION_32BIT_FLOAT, ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY,
-        ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY, ArrayPolicy, CompressedMetaSections,
-        GlobalCounts, MetaCollector, PackedMeta, array_type_accession_from_binary_data_array,
-        parse_accession_tail_raw,
+        array_type_accession_from_binary_data_array, parse_accession_tail_raw, ArrayPolicy,
+        CompressedMetaSections, GlobalCounts, MetaCollector, PackedMeta, ACCESSION_32BIT_FLOAT,
+        ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY, ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY,
     },
 };
 
@@ -83,39 +82,36 @@ impl FilterRecord {
 fn extract_filter_record(spectrum: &Spectrum) -> FilterRecord {
     let mut record = FilterRecord::unknown();
 
-    if let Some(sl) = &spectrum.scan_list {
-        if let Some(scan) = sl.scans.first() {
-            for cv in &scan.cv_params {
-                let tail = parse_accession_tail_raw(cv.accession.as_deref());
-                if tail == ACC_SCAN_START_TIME {
-                    if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
-                        let unit = parse_accession_tail_raw(cv.unit_accession.as_deref());
-                        record.rt_seconds = if unit == ACC_UNIT_MINUTE {
-                            val * 60.0
-                        } else {
-                            val
-                        };
-                    }
-                }
+    if let Some(sl) = &spectrum.scan_list
+        && let Some(scan) = sl.scans.first()
+    {
+        for cv in &scan.cv_params {
+            let tail = parse_accession_tail_raw(cv.accession.as_deref());
+            if tail == ACC_SCAN_START_TIME
+                && let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
+            {
+                let unit = parse_accession_tail_raw(cv.unit_accession.as_deref());
+                record.rt_seconds = if unit == ACC_UNIT_MINUTE {
+                    val * 60.0
+                } else {
+                    val
+                };
             }
         }
     }
 
-    if let Some(pl) = &spectrum.precursor_list {
-        if let Some(precursor) = pl.precursors.first() {
-            if let Some(sil) = &precursor.selected_ion_list {
-                if let Some(si) = sil.selected_ions.first() {
-                    for cv in &si.cv_params {
-                        let tail = parse_accession_tail_raw(cv.accession.as_deref());
-                        if tail == ACC_SELECTED_ION_MZ {
-                            if let Some(val) =
-                                cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
-                            {
-                                record.selected_ion_mz = val;
-                            }
-                        }
-                    }
-                }
+    if let Some(pl) = &spectrum.precursor_list
+        && let Some(precursor) = pl.precursors.first()
+        && let Some(sil) = &precursor.selected_ion_list
+        && let Some(si) = sil.selected_ions.first()
+    {
+        for cv in &si.cv_params {
+            let tail = parse_accession_tail_raw(cv.accession.as_deref());
+            if tail == ACC_SELECTED_ION_MZ
+                && let Some(val) =
+                    cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
+            {
+                record.selected_ion_mz = val;
             }
         }
     }
@@ -568,6 +564,27 @@ fn declared_float_precision_is_64bit(bda: &BinaryDataArray) -> Option<bool> {
     }
 }
 
+fn validate_array_dtype(data: ArrayData<'_>, dtype: u8) -> Result<(), String> {
+    let ok = matches!(
+        (dtype, data),
+        (FILE_DTYPE_F16, ArrayData::F16(_))
+            | (FILE_DTYPE_F32, ArrayData::F32(_))
+            | (FILE_DTYPE_F32, ArrayData::F64(_))
+            | (FILE_DTYPE_F64, ArrayData::F64(_))
+            | (FILE_DTYPE_F64, ArrayData::F32(_))
+            | (FILE_DTYPE_I16, ArrayData::I16(_))
+            | (FILE_DTYPE_I32, ArrayData::I32(_))
+            | (FILE_DTYPE_I64, ArrayData::I64(_))
+    );
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "write_array_data: incompatible dtype {dtype} for the given array data variant"
+        ))
+    }
+}
+
 fn write_array_data(buf: &mut Vec<u8>, data: ArrayData<'_>, dtype: u8) {
     match (dtype, data) {
         (FILE_DTYPE_F16, ArrayData::F16(e)) => write_u16_slice_le(buf, e),
@@ -586,7 +603,9 @@ fn write_array_data(buf: &mut Vec<u8>, data: ArrayData<'_>, dtype: u8) {
         (FILE_DTYPE_I16, ArrayData::I16(e)) => write_i16_slice_le(buf, e),
         (FILE_DTYPE_I32, ArrayData::I32(e)) => write_i32_slice_le(buf, e),
         (FILE_DTYPE_I64, ArrayData::I64(e)) => write_i64_slice_le(buf, e),
-        _ => {}
+        // SAFETY: `validate_array_dtype` is always called before this function.
+        // This branch is unreachable when the caller validates first.
+        _ => unreachable!("write_array_data called with unvalidated dtype/data combination"),
     }
 }
 
@@ -677,6 +696,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                     seen_array_type_accessions.insert(acc);
                 }
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
+                validate_array_dtype(data, dtype)?;
                 let elem_bytes = element_byte_size_for_dtype(dtype);
                 let (block_id, elem_offset) = container_builder.add_item_to_box(
                     data.element_count() * elem_bytes,
@@ -749,6 +769,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
                     seen_array_type_accessions.insert(acc);
                 }
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
+                validate_array_dtype(data, dtype)?;
                 let elem_bytes = element_byte_size_for_dtype(dtype);
                 let (block_id, elem_offset) = container_builder.add_item_to_box(
                     data.element_count() * elem_bytes,

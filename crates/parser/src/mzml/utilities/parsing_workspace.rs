@@ -1,12 +1,12 @@
 use crate::mzml::schema::TagId;
 use crate::mzml::utilities::{
-    ParamCollector, drain_until_close, read_ref_group_ref, read_software_param, read_user_param,
-    tag_id_from_bytes,
+    drain_until_close, read_ref_group_ref, read_software_param, read_user_param, tag_id_from_bytes,
+    ParamCollector,
 };
-use crate::mzml::utilities::{ParseError, read_cv_param};
-use quick_xml::Reader;
+use crate::mzml::utilities::{read_cv_param, ParseError};
 use quick_xml::events::{BytesStart, Event};
-use std::{io::BufRead, str::from_utf8_unchecked};
+use quick_xml::Reader;
+use std::io::BufRead;
 
 #[allow(dead_code)] // Coming soon!
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Default)]
@@ -68,7 +68,7 @@ impl<R: BufRead> ParsingWorkspace<R> {
                     let raw_name: Vec<u8> = e.name().as_ref().to_vec();
                     let handled = on_child(self, ChildEvent::Open(tag, e))?;
                     if !handled {
-                        let tag_str = unsafe { from_utf8_unchecked(&raw_name) };
+                        let tag_str = std::str::from_utf8(&raw_name).unwrap_or("<invalid utf-8>");
                         match self.policy {
                             StrictnessPolicy::Error => {
                                 return Err(ParseError::UnexpectedTag {
@@ -92,7 +92,9 @@ impl<R: BufRead> ParsingWorkspace<R> {
                 Event::End(e) if e.name().as_ref() == closing.as_slice() => break Ok(()),
                 Event::Eof => {
                     let offset = self.xml_reader.buffer_position();
-                    let ctx = unsafe { from_utf8_unchecked(&closing) }.to_string();
+                    let ctx = std::str::from_utf8(&closing)
+                        .unwrap_or("<invalid utf-8>")
+                        .to_string();
                     break Err(ParseError::UnexpectedEof {
                         context: ctx,
                         byte_offset: offset,

@@ -1,9 +1,9 @@
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 
 use miniz_oxide::deflate::compress_to_vec_zlib;
-use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::Writer;
 
 use crate::mzml::structs::*;
 
@@ -19,7 +19,7 @@ struct IndexOffsetAcc {
 }
 
 #[inline]
-fn nonempty<'a>(s: Option<&'a str>) -> Option<&'a str> {
+fn nonempty(s: Option<&str>) -> Option<&str> {
     match s {
         Some(v) if !v.is_empty() => Some(v),
         _ => None,
@@ -92,7 +92,12 @@ pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, String> {
 
     write_cv_list(&mut writer, cvl)?;
 
-    write_file_description(&mut writer, &mzml.file_description.as_ref().unwrap())?;
+    write_file_description(
+        &mut writer,
+        mzml.file_description
+            .as_ref()
+            .ok_or_else(|| "mzML is missing required <fileDescription> element".to_string())?,
+    )?;
 
     if let Some(rpgl) = &mzml.referenceable_param_group_list {
         write_referenceable_param_group_list(&mut writer, rpgl)?;
@@ -371,10 +376,10 @@ fn write_instrument_list(
     for ic in &list.instrument {
         let mut ic_tag = BytesStart::new("instrumentConfiguration");
         ic_tag.push_attribute(("id", ic.id.as_str()));
-        if let Some(ssr) = &ic.scan_settings_ref {
-            if let Some(v) = nonempty(Some(ssr.r#ref.as_str())) {
-                ic_tag.push_attribute(("scanSettingsRef", v));
-            }
+        if let Some(ssr) = &ic.scan_settings_ref
+            && let Some(v) = nonempty(Some(ssr.r#ref.as_str()))
+        {
+            ic_tag.push_attribute(("scanSettingsRef", v));
         }
 
         writer
@@ -698,15 +703,15 @@ fn write_scan_settings_list(
 
     for ss in &list.scan_settings {
         let mut ss_tag = BytesStart::new("scanSettings");
-        if let Some(id) = ss.id.as_deref() {
-            if !id.is_empty() {
-                ss_tag.push_attribute(("id", id));
-            }
+        if let Some(id) = ss.id.as_deref()
+            && !id.is_empty()
+        {
+            ss_tag.push_attribute(("id", id));
         }
-        if let Some(r) = ss.instrument_configuration_ref.as_deref() {
-            if !r.is_empty() {
-                ss_tag.push_attribute(("instrumentConfigurationRef", r));
-            }
+        if let Some(r) = ss.instrument_configuration_ref.as_deref()
+            && !r.is_empty()
+        {
+            ss_tag.push_attribute(("instrumentConfigurationRef", r));
         }
 
         writer
@@ -875,22 +880,22 @@ fn write_spectrum(
         write_spectrum_description(writer, sd)?;
     }
 
-    if !sd_has_scan_list {
-        if let Some(sl) = &s.scan_list {
-            write_scan_list(writer, sl)?;
-        }
+    if !sd_has_scan_list
+        && let Some(sl) = &s.scan_list
+    {
+        write_scan_list(writer, sl)?;
     }
 
-    if !sd_has_precursor_list {
-        if let Some(pl) = &s.precursor_list {
-            write_precursor_list(writer, pl)?;
-        }
+    if !sd_has_precursor_list
+        && let Some(pl) = &s.precursor_list
+    {
+        write_precursor_list(writer, pl)?;
     }
 
-    if !sd_has_product_list {
-        if let Some(pr) = &s.product_list {
-            write_product_list(writer, pr)?;
-        }
+    if !sd_has_product_list
+        && let Some(pr) = &s.product_list
+    {
+        write_product_list(writer, pr)?;
     }
 
     if let Some(bdal) = &s.binary_data_array_list {
@@ -1301,15 +1306,15 @@ fn write_binary_data_array(
 
     let encoded = if let Some(binary) = bda.binary.as_ref() {
         if let Some(nt) = bda.numeric_type {
-            let ok = match (binary, nt) {
-                (BinaryData::F64(_), NumericType::Float64) => true,
-                (BinaryData::F32(_), NumericType::Float32) => true,
-                (BinaryData::F16(_), NumericType::Float16) => true,
-                (BinaryData::I64(_), NumericType::Int64) => true,
-                (BinaryData::I32(_), NumericType::Int32) => true,
-                (BinaryData::I16(_), NumericType::Int16) => true,
-                _ => false,
-            };
+            let ok = matches!(
+                (binary, nt),
+                (BinaryData::F64(_), NumericType::Float64)
+                    | (BinaryData::F32(_), NumericType::Float32)
+                    | (BinaryData::F16(_), NumericType::Float16)
+                    | (BinaryData::I64(_), NumericType::Int64)
+                    | (BinaryData::I32(_), NumericType::Int32)
+                    | (BinaryData::I16(_), NumericType::Int16)
+            );
             if !ok {
                 return Err("binary/numeric_type mismatch".into());
             }
@@ -1409,11 +1414,11 @@ fn write_binary_data_array(
 
     let mut tag = BytesStart::new("binaryDataArray");
 
-    if let Some(al) = bda.array_length {
-        if al > 0 {
-            let al_s = al.to_string();
-            tag.push_attribute(("arrayLength", al_s.as_str()));
-        }
+    if let Some(al) = bda.array_length
+        && al > 0
+    {
+        let al_s = al.to_string();
+        tag.push_attribute(("arrayLength", al_s.as_str()));
     }
 
     let el = encoded.len();
