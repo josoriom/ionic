@@ -1,0 +1,871 @@
+[meta]
+source = "mzML1.1.1.xsd"
+version = "1.1.1"
+
+[[types]]
+name = "AnalyzerComponentType"
+extends = "ComponentType"
+
+[[types]]
+name = "BinaryDataArrayListType"
+
+[[types.elements]]
+name = "binaryDataArray"
+min_occurs = 2
+type_ref = "BinaryDataArrayType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "BinaryDataArrayType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "binary"
+min_occurs = 1
+type_ref = "xs:base64Binary"
+
+[[types.attributes]]
+name = "arrayLength"
+required = false
+type_ref = "nonNegativeInteger"
+
+[[types.attributes]]
+name = "dataProcessingRef"
+required = false
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "encodedLength"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "CVListType"
+
+[[types.elements]]
+name = "cv"
+min_occurs = 1
+type_ref = "CVType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "CVParamType"
+
+[[types.attributes]]
+name = "cvRef"
+required = true
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "accession"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "value"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "name"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "unitAccession"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "unitName"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "unitCvRef"
+required = false
+type_ref = "IDREF"
+
+[[types]]
+name = "CVType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types.attributes]]
+name = "fullName"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "version"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "URI"
+required = true
+type_ref = "anyURI"
+
+[[types]]
+name = "ChromatogramListType"
+
+[[types.elements]]
+name = "chromatogram"
+min_occurs = 1
+type_ref = "ChromatogramType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types.attributes]]
+name = "defaultDataProcessingRef"
+required = true
+type_ref = "IDREF"
+
+[[types]]
+name = "ChromatogramType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "precursor"
+min_occurs = 0
+type_ref = "PrecursorType"
+
+[[types.elements]]
+name = "product"
+min_occurs = 0
+type_ref = "ProductType"
+
+[[types.elements]]
+name = "binaryDataArrayList"
+min_occurs = 1
+type_ref = "BinaryDataArrayListType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "index"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types.attributes]]
+name = "defaultArrayLength"
+required = true
+type_ref = "int"
+
+[[types.attributes]]
+name = "dataProcessingRef"
+required = false
+type_ref = "IDREF"
+
+[[types]]
+name = "ComponentListType"
+
+[[types.elements]]
+name = "source"
+min_occurs = 1
+type_ref = "SourceComponentType"
+
+[[types.elements]]
+name = "analyzer"
+min_occurs = 1
+type_ref = "AnalyzerComponentType"
+
+[[types.elements]]
+name = "detector"
+min_occurs = 1
+type_ref = "DetectorComponentType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "ComponentType"
+extends = "ParamGroupType"
+
+[[types.attributes]]
+name = "order"
+required = true
+type_ref = "int"
+
+[[types]]
+name = "DataProcessingListType"
+
+[[types.elements]]
+name = "dataProcessing"
+min_occurs = 1
+type_ref = "DataProcessingType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "DataProcessingType"
+
+[[types.elements]]
+name = "processingMethod"
+min_occurs = 1
+type_ref = "ProcessingMethodType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types]]
+name = "DetectorComponentType"
+extends = "ComponentType"
+
+[[types]]
+name = "FileDescriptionType"
+
+[[types.elements]]
+name = "fileContent"
+min_occurs = 1
+type_ref = "ParamGroupType"
+
+[[types.elements]]
+name = "sourceFileList"
+min_occurs = 0
+type_ref = "SourceFileListType"
+
+[[types.elements]]
+name = "contact"
+min_occurs = 0
+type_ref = "ParamGroupType"
+
+[[types]]
+name = "InstrumentConfigurationListType"
+
+[[types.elements]]
+name = "instrumentConfiguration"
+min_occurs = 1
+type_ref = "InstrumentConfigurationType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "InstrumentConfigurationType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "componentList"
+min_occurs = 0
+type_ref = "ComponentListType"
+
+[[types.elements]]
+name = "softwareRef"
+min_occurs = 0
+type_ref = "SoftwareRefType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types.attributes]]
+name = "scanSettingsRef"
+required = false
+type_ref = "IDREF"
+
+[[types]]
+name = "ParamGroupType"
+
+[[types.elements]]
+name = "referenceableParamGroupRef"
+min_occurs = 0
+type_ref = "ReferenceableParamGroupRefType"
+
+[[types.elements]]
+name = "cvParam"
+min_occurs = 0
+type_ref = "CVParamType"
+
+[[types.elements]]
+name = "userParam"
+min_occurs = 0
+type_ref = "UserParamType"
+
+[[types]]
+name = "PrecursorListType"
+
+[[types.elements]]
+name = "precursor"
+min_occurs = 1
+type_ref = "PrecursorType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "PrecursorType"
+
+[[types.elements]]
+name = "isolationWindow"
+min_occurs = 0
+type_ref = "ParamGroupType"
+
+[[types.elements]]
+name = "selectedIonList"
+min_occurs = 0
+type_ref = "SelectedIonListType"
+
+[[types.elements]]
+name = "activation"
+min_occurs = 1
+type_ref = "ParamGroupType"
+
+[[types.attributes]]
+name = "spectrumRef"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "sourceFileRef"
+required = false
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "externalSpectrumID"
+required = false
+type_ref = "string"
+
+[[types]]
+name = "ProcessingMethodType"
+extends = "ParamGroupType"
+
+[[types.attributes]]
+name = "order"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types.attributes]]
+name = "softwareRef"
+required = true
+type_ref = "IDREF"
+
+[[types]]
+name = "ProductListType"
+
+[[types.elements]]
+name = "product"
+min_occurs = 1
+type_ref = "ProductType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "ProductType"
+
+[[types.elements]]
+name = "isolationWindow"
+min_occurs = 0
+type_ref = "ParamGroupType"
+
+[[types]]
+name = "ReferenceableParamGroupListType"
+
+[[types.elements]]
+name = "referenceableParamGroup"
+min_occurs = 1
+type_ref = "ReferenceableParamGroupType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "ReferenceableParamGroupRefType"
+
+[[types.attributes]]
+name = "ref"
+required = true
+type_ref = "IDREF"
+
+[[types]]
+name = "ReferenceableParamGroupType"
+
+[[types.elements]]
+name = "cvParam"
+min_occurs = 0
+type_ref = "CVParamType"
+
+[[types.elements]]
+name = "userParam"
+min_occurs = 0
+type_ref = "UserParamType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types]]
+name = "RunType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "spectrumList"
+min_occurs = 0
+type_ref = "SpectrumListType"
+
+[[types.elements]]
+name = "chromatogramList"
+min_occurs = 0
+type_ref = "ChromatogramListType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "defaultInstrumentConfigurationRef"
+required = true
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "defaultSourceFileRef"
+required = false
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "sampleRef"
+required = false
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "startTimeStamp"
+required = false
+type_ref = "dateTime"
+
+[[types]]
+name = "SampleListType"
+
+[[types.elements]]
+name = "sample"
+min_occurs = 1
+type_ref = "SampleType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "SampleType"
+extends = "ParamGroupType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types.attributes]]
+name = "name"
+required = false
+type_ref = "string"
+
+[[types]]
+name = "ScanListType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "scan"
+min_occurs = 1
+type_ref = "ScanType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "ScanSettingsListType"
+
+[[types.elements]]
+name = "scanSettings"
+min_occurs = 1
+type_ref = "ScanSettingsType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "ScanSettingsType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "sourceFileRefList"
+min_occurs = 0
+type_ref = "SourceFileRefListType"
+
+[[types.elements]]
+name = "targetList"
+min_occurs = 0
+type_ref = "TargetListType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types]]
+name = "ScanType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "scanWindowList"
+min_occurs = 0
+type_ref = "ScanWindowListType"
+
+[[types.attributes]]
+name = "spectrumRef"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "sourceFileRef"
+required = false
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "externalSpectrumID"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "instrumentConfigurationRef"
+required = false
+type_ref = "IDREF"
+
+[[types]]
+name = "ScanWindowListType"
+
+[[types.elements]]
+name = "scanWindow"
+min_occurs = 1
+type_ref = "ParamGroupType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "int"
+
+[[types]]
+name = "SelectedIonListType"
+
+[[types.elements]]
+name = "selectedIon"
+min_occurs = 1
+type_ref = "ParamGroupType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "SoftwareListType"
+
+[[types.elements]]
+name = "software"
+min_occurs = 1
+type_ref = "SoftwareType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "SoftwareRefType"
+
+[[types.attributes]]
+name = "ref"
+required = true
+type_ref = "IDREF"
+
+[[types]]
+name = "SoftwareType"
+extends = "ParamGroupType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types.attributes]]
+name = "version"
+required = true
+type_ref = "string"
+
+[[types]]
+name = "SourceComponentType"
+extends = "ComponentType"
+
+[[types]]
+name = "SourceFileListType"
+
+[[types.elements]]
+name = "sourceFile"
+min_occurs = 1
+type_ref = "SourceFileType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "SourceFileRefListType"
+
+[[types.elements]]
+name = "sourceFileRef"
+min_occurs = 0
+type_ref = "SourceFileRefType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "SourceFileRefType"
+
+[[types.attributes]]
+name = "ref"
+required = true
+type_ref = "IDREF"
+
+[[types]]
+name = "SourceFileType"
+extends = "ParamGroupType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "ID"
+
+[[types.attributes]]
+name = "name"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "location"
+required = true
+type_ref = "anyURI"
+
+[[types]]
+name = "SpectrumListType"
+
+[[types.elements]]
+name = "spectrum"
+min_occurs = 0
+type_ref = "SpectrumType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types.attributes]]
+name = "defaultDataProcessingRef"
+required = true
+type_ref = "IDREF"
+
+[[types]]
+name = "SpectrumType"
+extends = "ParamGroupType"
+
+[[types.elements]]
+name = "scanList"
+min_occurs = 0
+type_ref = "ScanListType"
+
+[[types.elements]]
+name = "precursorList"
+min_occurs = 0
+type_ref = "PrecursorListType"
+
+[[types.elements]]
+name = "productList"
+min_occurs = 0
+type_ref = "ProductListType"
+
+[[types.elements]]
+name = "binaryDataArrayList"
+min_occurs = 0
+type_ref = "BinaryDataArrayListType"
+
+[[types.attributes]]
+name = "id"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "spotID"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "index"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types.attributes]]
+name = "defaultArrayLength"
+required = true
+type_ref = "int"
+
+[[types.attributes]]
+name = "dataProcessingRef"
+required = false
+type_ref = "IDREF"
+
+[[types.attributes]]
+name = "sourceFileRef"
+required = false
+type_ref = "IDREF"
+
+[[types]]
+name = "TargetListType"
+
+[[types.elements]]
+name = "target"
+min_occurs = 1
+type_ref = "ParamGroupType"
+
+[[types.attributes]]
+name = "count"
+required = true
+type_ref = "nonNegativeInteger"
+
+[[types]]
+name = "UserParamType"
+
+[[types.attributes]]
+name = "name"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "type"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "value"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "unitAccession"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "unitName"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "unitCvRef"
+required = false
+type_ref = "IDREF"
+
+[[types]]
+name = "mzMLType"
+
+[[types.elements]]
+name = "cvList"
+min_occurs = 1
+type_ref = "CVListType"
+
+[[types.elements]]
+name = "fileDescription"
+min_occurs = 1
+type_ref = "FileDescriptionType"
+
+[[types.elements]]
+name = "referenceableParamGroupList"
+min_occurs = 0
+type_ref = "ReferenceableParamGroupListType"
+
+[[types.elements]]
+name = "sampleList"
+min_occurs = 0
+type_ref = "SampleListType"
+
+[[types.elements]]
+name = "softwareList"
+min_occurs = 1
+type_ref = "SoftwareListType"
+
+[[types.elements]]
+name = "scanSettingsList"
+min_occurs = 0
+type_ref = "ScanSettingsListType"
+
+[[types.elements]]
+name = "instrumentConfigurationList"
+min_occurs = 1
+type_ref = "InstrumentConfigurationListType"
+
+[[types.elements]]
+name = "dataProcessingList"
+min_occurs = 1
+type_ref = "DataProcessingListType"
+
+[[types.elements]]
+name = "run"
+min_occurs = 1
+type_ref = "RunType"
+
+[[types.attributes]]
+name = "accession"
+required = false
+type_ref = "string"
+
+[[types.attributes]]
+name = "version"
+required = true
+type_ref = "string"
+
+[[types.attributes]]
+name = "id"
+required = false
+type_ref = "string"
+
