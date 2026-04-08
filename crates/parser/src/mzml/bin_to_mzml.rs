@@ -4,6 +4,7 @@ use base64::Engine;
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
+use sha1::{Digest, Sha1};
 
 use crate::mzml::structs::*;
 
@@ -105,17 +106,17 @@ pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, String> {
     if let Some(sl) = &mzml.sample_list {
         write_sample_list(&mut writer, sl)?;
     }
-    if let Some(il) = &mzml.instrument_list {
-        write_instrument_list(&mut writer, il)?;
-    }
     if let Some(sw) = &mzml.software_list {
         write_software_list(&mut writer, sw)?;
     }
-    if let Some(dpl) = &mzml.data_processing_list {
-        write_data_processing_list(&mut writer, dpl)?;
-    }
     if let Some(ssl) = &mzml.scan_settings_list {
         write_scan_settings_list(&mut writer, ssl)?;
+    }
+    if let Some(il) = &mzml.instrument_list {
+        write_instrument_list(&mut writer, il)?;
+    }
+    if let Some(dpl) = &mzml.data_processing_list {
+        write_data_processing_list(&mut writer, dpl)?;
     }
 
     let fallback_default_dp = mzml
@@ -133,6 +134,7 @@ pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, String> {
 
     let index_list_offset = write_index_list_with_offset(&mut writer, &idx)?;
     write_index_list_offset(&mut writer, index_list_offset)?;
+    write_file_checksum(&mut writer)?;
 
     writer
         .write_event(Event::End(BytesEnd::new("indexedmzML")))
@@ -223,7 +225,11 @@ fn write_file_description(
         .write_event(Event::End(BytesEnd::new("fileContent")))
         .map_err(|e| e.to_string())?;
 
-    write_source_file_list(writer, &fd.source_file_list)?;
+    // XSD requires at least one <sourceFile> child if <sourceFileList> is
+    // present.  Omit the element entirely when the list is empty.
+    if !fd.source_file_list.source_file.is_empty() {
+        write_source_file_list(writer, &fd.source_file_list)?;
+    }
 
     for c in &fd.contacts {
         writer
@@ -1716,5 +1722,35 @@ fn write_index_list_offset(writer: &mut Writer<Vec<u8>>, off: u64) -> Result<(),
     writer
         .write_event(Event::End(BytesEnd::new("indexListOffset")))
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Write `<fileChecksum>` with the SHA-1 hex digest of all bytes emitted so
+/// far (from the start of the document through the end of the open tag).
+///
+/// Per the mzML 1.1.2 indexed wrapper XSD:
+///   "SHA-1 checksum from beginning of file to end of 'fileChecksum' open tag."
+fn write_file_checksum(writer: &mut Writer<Vec<u8>>) -> Result<(), String> {
+    // Write the open tag so its bytes are part of the hash input.
+    writer
+        .write_event(Event::Start(BytesStart::new("fileChecksum")))
+        .map_err(|e| e.to_string())?;
+
+    // Hash everything written so far (including "<fileChecksum>").
+    let digest = Sha1::digest(writer.get_ref());
+    let hex: String = digest.iter().fold(String::with_capacity(40), |mut acc, b| {
+        use std::fmt::Write;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+
+    writer
+        .write_event(Event::Text(BytesText::new(&hex)))
+        .map_err(|e| e.to_string())?;
+
+    writer
+        .write_event(Event::End(BytesEnd::new("fileChecksum")))
+        .map_err(|e| e.to_string())?;
+
     Ok(())
 }

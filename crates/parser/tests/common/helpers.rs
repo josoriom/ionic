@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 //! Synthetic MzML builder helpers.
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
 
 use super::binary_ext::BinaryDataExt;
@@ -387,6 +387,124 @@ pub(crate) fn make_chromatogram_f64(id: &str, time: Vec<f64>, intensity: Vec<f64
                 ),
             ],
         }),
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Optional-section builders (for XSD compliance tests)
+// ---------------------------------------------------------------------------
+
+/// Build a minimal [`SoftwareList`] with a single software entry.
+pub fn minimal_software_list() -> SoftwareList {
+    SoftwareList {
+        count: Some(1),
+        software: vec![Software {
+            id: "test-sw".to_string(),
+            version: Some("1.0".to_string()),
+            ..Default::default()
+        }],
+    }
+}
+
+/// Build a minimal [`InstrumentList`] with a single instrument configuration.
+pub fn minimal_instrument_list() -> InstrumentList {
+    InstrumentList {
+        count: Some(1),
+        instrument: vec![Instrument {
+            id: "test-ic".to_string(),
+            ..Default::default()
+        }],
+    }
+}
+
+/// Build a minimal [`ScanSettingsList`] with a single scan settings entry.
+pub fn minimal_scan_settings_list() -> ScanSettingsList {
+    ScanSettingsList {
+        count: Some(1),
+        scan_settings: vec![ScanSettings {
+            id: Some("test-ss".to_string()),
+            ..Default::default()
+        }],
+    }
+}
+
+/// Build a minimal [`DataProcessingList`] with a single data processing entry
+/// that references the software from [`minimal_software_list`].
+pub fn minimal_data_processing_list() -> DataProcessingList {
+    DataProcessingList {
+        count: Some(1),
+        data_processing: vec![DataProcessing {
+            id: "test-dp".to_string(),
+            software_ref: Some("test-sw".to_string()),
+            processing_method: vec![ProcessingMethod {
+                order: Some(0),
+                software_ref: Some("test-sw".to_string()),
+                ..Default::default()
+            }],
+        }],
+    }
+}
+
+/// Build a [`MzML`] with **all** optional sections populated — ideal for
+/// testing that the writer emits children of `<mzML>` in XSD-mandated order.
+pub fn full_mzml_all_optional_fields() -> MzML {
+    MzML {
+        cv_list: Some(default_cv_list_like_writer()),
+        file_description: Some(minimal_file_description()),
+        referenceable_param_group_list: Some(ReferenceableParamGroupList {
+            count: Some(1),
+            referenceable_param_groups: vec![ReferenceableParamGroup {
+                id: "test-rpg".to_string(),
+                cv_params: vec![synthetic_ms_cv("MS:1000511", Some("1"))],
+                user_params: Vec::new(),
+            }],
+        }),
+        sample_list: Some(SampleList {
+            count: Some(1),
+            samples: vec![Sample {
+                id: "test-sample".to_string(),
+                name: "test".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        software_list: Some(minimal_software_list()),
+        scan_settings_list: Some(minimal_scan_settings_list()),
+        instrument_list: Some(minimal_instrument_list()),
+        data_processing_list: Some(minimal_data_processing_list()),
+        run: Run {
+            id: "test-run".to_string(),
+            default_instrument_configuration_ref: Some("test-ic".to_string()),
+            spectrum_list: Some(SpectrumList {
+                count: Some(1),
+                default_data_processing_ref: Some("test-dp".to_string()),
+                spectra: vec![Spectrum {
+                    id: "scan=1".to_string(),
+                    index: Some(0),
+                    default_array_length: Some(3),
+                    binary_data_array_list: Some(BinaryDataArrayList {
+                        count: Some(2),
+                        binary_data_arrays: vec![
+                            synthetic_binary_data_array(
+                                "MS:1000514",
+                                NumericType::Float64,
+                                BinaryData::F64(vec![100.0, 200.0, 300.0]),
+                                Some(3),
+                            ),
+                            synthetic_binary_data_array(
+                                "MS:1000515",
+                                NumericType::Float64,
+                                BinaryData::F64(vec![10.0, 20.0, 30.0]),
+                                Some(3),
+                            ),
+                        ],
+                    }),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
