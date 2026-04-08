@@ -1,12 +1,12 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 use common::{chromatogram_arrays, chromatogram_by_id, first_chrom_array_values_by_accession};
 
 #[test]
 fn tiny_11_identity_and_shapes() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let cl = mzml
         .run
         .chromatogram_list
@@ -23,7 +23,7 @@ fn tiny_11_identity_and_shapes() {
 
 #[test]
 fn tiny_10_identity_and_native_ids() {
-    let mzml = fixtures::tiny_pwiz_10();
+    let mzml = test_files::tiny_pwiz_10();
     let tic = chromatogram_by_id(mzml, "tic");
     assert_eq!(tic.native_id.as_deref(), Some("tic native"));
     assert_eq!(tic.default_array_length, Some(15));
@@ -34,7 +34,7 @@ fn tiny_10_identity_and_native_ids() {
 
 #[test]
 fn small_11_identity() {
-    let mzml = fixtures::small_pwiz_11();
+    let mzml = test_files::small_pwiz_11();
     let cl = mzml
         .run
         .chromatogram_list
@@ -47,7 +47,7 @@ fn small_11_identity() {
 
 #[test]
 fn tiny_11_tic_pairwise_values() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let tic = chromatogram_by_id(mzml, "tic");
     let t = first_chrom_array_values_by_accession(tic, "MS:1000595");
     let i = first_chrom_array_values_by_accession(tic, "MS:1000515");
@@ -66,7 +66,7 @@ fn tiny_11_tic_pairwise_values() {
 
 #[test]
 fn tiny_11_sic_pairwise_values() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let sic = chromatogram_by_id(mzml, "sic");
     let t = first_chrom_array_values_by_accession(sic, "MS:1000595");
     let i = first_chrom_array_values_by_accession(sic, "MS:1000515");

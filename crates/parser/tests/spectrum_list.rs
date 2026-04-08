@@ -1,15 +1,15 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 use common::{
-    find_array_by_accession, find_name_value_indices, find_spot_id_indices,
-    first_array_values_by_accession, spectrum_arrays, spectrum_by_id, BinaryDataExt,
+    BinaryDataExt, find_array_by_accession, find_name_value_indices, find_spot_id_indices,
+    first_array_values_by_accession, spectrum_arrays, spectrum_by_id,
 };
 
 #[test]
 fn tiny_11_identity_and_counts() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let sl = mzml
         .run
         .spectrum_list
@@ -26,7 +26,7 @@ fn tiny_11_identity_and_counts() {
 
 #[test]
 fn tiny_10_identity_and_counts() {
-    let mzml = fixtures::tiny_pwiz_10();
+    let mzml = test_files::tiny_pwiz_10();
     let sl = mzml
         .run
         .spectrum_list
@@ -40,7 +40,7 @@ fn tiny_10_identity_and_counts() {
 
 #[test]
 fn small_11_first_last_identity() {
-    let mzml = fixtures::small_pwiz_11();
+    let mzml = test_files::small_pwiz_11();
     let sl = mzml
         .run
         .spectrum_list
@@ -61,7 +61,7 @@ fn small_11_first_last_identity() {
 
 #[test]
 fn tiny_11_binary_payload_shapes() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s19 = spectrum_by_id(mzml, "scan=19");
     assert_eq!(s19.default_array_length, Some(15));
     let a19 = spectrum_arrays(s19);
@@ -107,7 +107,7 @@ fn tiny_11_binary_payload_shapes() {
 
 #[test]
 fn tiny_11_precursor_ref_integrity() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s20 = spectrum_by_id(mzml, "scan=20");
     let precursor_list = s20
         .precursor_list
@@ -122,7 +122,7 @@ fn tiny_11_precursor_ref_integrity() {
 
 #[test]
 fn tiny_11_find_name_value_equivalence() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     assert_eq!(find_name_value_indices(mzml, "scan", "19"), vec![0]);
     assert_eq!(find_name_value_indices(mzml, "scan", "20"), vec![1]);
     assert_eq!(find_name_value_indices(mzml, "scan", "21"), vec![2]);
@@ -134,7 +134,7 @@ fn tiny_11_find_name_value_equivalence() {
 
 #[test]
 fn tiny_11_spot_id_lookup_equivalence() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     assert!(
         find_spot_id_indices(mzml, "A1").is_empty(),
         "partial spot id should not match"
@@ -144,7 +144,7 @@ fn tiny_11_spot_id_lookup_equivalence() {
 
 #[test]
 fn tiny_11_scan_param_group_ref_equivalence() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s19 = spectrum_by_id(mzml, "scan=19");
     let s20 = spectrum_by_id(mzml, "scan=20");
     assert_eq!(s19.referenceable_param_group_refs.len(), 1);
@@ -161,7 +161,7 @@ fn tiny_11_scan_param_group_ref_equivalence() {
 
 #[test]
 fn tiny_11_s19_pairwise_binary_values() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s19 = spectrum_by_id(mzml, "scan=19");
     let mz = first_array_values_by_accession(s19, "MS:1000514");
     let intensity = first_array_values_by_accession(s19, "MS:1000515");
@@ -180,7 +180,7 @@ fn tiny_11_s19_pairwise_binary_values() {
 
 #[test]
 fn tiny_11_s20_pairwise_binary_values() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s20 = spectrum_by_id(mzml, "scan=20");
     let mz = first_array_values_by_accession(s20, "MS:1000514");
     let intensity = first_array_values_by_accession(s20, "MS:1000515");

@@ -1,9 +1,7 @@
 mod common;
 
 use common::assertions::*;
-use common::builders::*;
-
-// Test 28: Ref groups and list metadata survive full pipeline.
+use common::helpers::*;
 
 #[test]
 fn ref_groups_and_list_metadata_survive_full_pipeline() {

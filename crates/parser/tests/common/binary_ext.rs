@@ -1,7 +1,7 @@
 use ionic::mzml::structs::BinaryData;
 
-/// Extension trait for `BinaryData` — replaces 6+ duplicated match dispatches.
-pub trait BinaryDataExt {
+/// Extension trait for `BinaryData`
+pub(crate) trait BinaryDataExt {
     /// Number of elements in the payload.
     fn len(&self) -> usize;
 

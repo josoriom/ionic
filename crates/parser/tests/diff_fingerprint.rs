@@ -1,22 +1,22 @@
 mod common;
 
-use common::fixtures;
+use common::test_files;
 use common::{
-    canonical_diff_paths, chromatogram_arrays, chromatograms, semantic_fingerprint, spectra,
-    spectrum_arrays, BinaryDataExt,
+    BinaryDataExt, canonical_diff_paths, chromatogram_arrays, chromatograms, semantic_fingerprint,
+    spectra, spectrum_arrays,
 };
 
 #[test]
 fn fingerprint_is_stable_for_identical_input() {
-    let a = fixtures::tiny_pwiz_11().clone();
-    let b = fixtures::tiny_pwiz_11().clone();
+    let a = test_files::tiny_pwiz_11().clone();
+    let b = test_files::tiny_pwiz_11().clone();
     assert_eq!(semantic_fingerprint(&a), semantic_fingerprint(&b));
 }
 
 #[test]
 fn fingerprint_changes_on_critical_mutation() {
-    let a = fixtures::tiny_pwiz_11().clone();
-    let mut b = fixtures::tiny_pwiz_11().clone();
+    let a = test_files::tiny_pwiz_11().clone();
+    let mut b = test_files::tiny_pwiz_11().clone();
     b.run.id.push_str("_mut");
     assert_ne!(semantic_fingerprint(&a), semantic_fingerprint(&b));
     let diffs = canonical_diff_paths(&a, &b);
@@ -28,7 +28,7 @@ fn fingerprint_changes_on_critical_mutation() {
 
 #[test]
 fn binary_only_equivalence_when_ignoring_identity() {
-    let src = fixtures::tiny_pwiz_11();
+    let src = test_files::tiny_pwiz_11();
     let mut modified = src.clone();
     modified.run.id = "modified-run".to_string();
     if let Some(sl) = modified.run.spectrum_list.as_mut() {

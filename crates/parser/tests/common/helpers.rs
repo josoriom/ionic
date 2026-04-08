@@ -1,21 +1,11 @@
 #![allow(dead_code)]
 
-//! Synthetic MzML builder helpers for the integration test suite.
-//!
-//! Every function here constructs minimal, well-formed MzML fragments that are
-//! useful for property-based and roundtrip tests without requiring on-disk
-//! fixture files.
-
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-use ionic::mzml::structs::*;
+//! Synthetic MzML builder helpers.
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
 
 use super::binary_ext::BinaryDataExt;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// A ready-to-embed `<cvList>` XML fragment matching the writer's default output.
 pub const DEFAULT_CV_LIST_XML: &str = concat!(
     "<cvList count=\"2\">",
     "<cv id=\"MS\" fullName=\"Proteomics Standards Initiative Mass Spectrometry Ontology\" version=\"4.1.182\" uri=\"https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo\"/>",
@@ -23,12 +13,7 @@ pub const DEFAULT_CV_LIST_XML: &str = concat!(
     "</cvList>"
 );
 
-// ---------------------------------------------------------------------------
-// CvParam helpers
-// ---------------------------------------------------------------------------
-
-/// Build a [`CvParam`] with `cvRef="MS"` and the given accession/value.
-pub fn synthetic_ms_cv(accession: &str, value: Option<&str>) -> CvParam {
+pub(crate) fn synthetic_ms_cv(accession: &str, value: Option<&str>) -> CvParam {
     CvParam {
         cv_ref: Some("MS".to_string()),
         accession: Some(accession.to_string()),
@@ -38,9 +23,7 @@ pub fn synthetic_ms_cv(accession: &str, value: Option<&str>) -> CvParam {
     }
 }
 
-/// Map a [`NumericType`] to the corresponding MS ontology accession for binary
-/// precision (e.g. `MS:1000523` for 64-bit float).
-pub fn precision_accession(numeric_type: NumericType) -> &'static str {
+pub(crate) fn precision_accession(numeric_type: NumericType) -> &'static str {
     match numeric_type {
         NumericType::Float64 => "MS:1000523",
         NumericType::Float32 => "MS:1000521",
@@ -51,13 +34,7 @@ pub fn precision_accession(numeric_type: NumericType) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Binary data array builders
-// ---------------------------------------------------------------------------
-
-/// Build a [`BinaryDataArray`] carrying `binary` with the given role accession,
-/// numeric precision, and an optional explicit `arrayLength` override.
-pub fn synthetic_binary_data_array(
+pub(crate) fn synthetic_binary_data_array(
     role_accession: &str,
     numeric_type: NumericType,
     binary: BinaryData,
@@ -68,7 +45,7 @@ pub fn synthetic_binary_data_array(
         cv_params: vec![
             synthetic_ms_cv(role_accession, None),
             synthetic_ms_cv(precision_accession(numeric_type), None),
-            synthetic_ms_cv("MS:1000576", None), // no compression
+            synthetic_ms_cv("MS:1000576", None),
         ],
         numeric_type: Some(numeric_type),
         binary: Some(binary),
@@ -76,13 +53,7 @@ pub fn synthetic_binary_data_array(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Top-level structural helpers
-// ---------------------------------------------------------------------------
-
-/// Build a minimal [`FileDescription`] with an empty file-content and no source
-/// files — just enough for a syntactically valid mzML document.
-pub fn minimal_file_description() -> FileDescription {
+pub(crate) fn minimal_file_description() -> FileDescription {
     FileDescription {
         file_content: FileContent::default(),
         source_file_list: SourceFileList {
@@ -93,9 +64,7 @@ pub fn minimal_file_description() -> FileDescription {
     }
 }
 
-/// Build the standard two-entry [`CvList`] (MS + UO) matching the writer's
-/// default output.
-pub fn default_cv_list_like_writer() -> CvList {
+pub(crate) fn default_cv_list_like_writer() -> CvList {
     CvList {
         count: Some(2),
         cv: vec![
@@ -123,16 +92,7 @@ pub fn default_cv_list_like_writer() -> CvList {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Full MzML builders
-// ---------------------------------------------------------------------------
-
-/// Build a complete [`MzML`] with one spectrum and one chromatogram, both
-/// carrying the same `numeric_type` binary payloads.
-///
-/// If `declared_length` is `None`, the actual element count of each
-/// `BinaryData` payload is used as `defaultArrayLength`.
-pub fn synthetic_numeric_matrix_mzml(
+pub(crate) fn synthetic_numeric_matrix_mzml(
     numeric_type: NumericType,
     spectrum_binary: BinaryData,
     chromatogram_binary: BinaryData,
@@ -207,13 +167,7 @@ pub fn synthetic_numeric_matrix_mzml(
     }
 }
 
-// ---------------------------------------------------------------------------
-// XML string builders
-// ---------------------------------------------------------------------------
-
-/// Build a minimal mzML XML string with a single binary data array for testing
-/// the XML parser directly (no file on disk required).
-pub fn single_array_xml(
+pub(crate) fn single_array_xml(
     role_accession: &str,
     numeric_type: NumericType,
     binary: &BinaryData,
@@ -247,16 +201,7 @@ pub fn single_array_xml(
     )
 }
 
-// ---------------------------------------------------------------------------
-// Mutation helpers
-// ---------------------------------------------------------------------------
-
-/// Ensure that the first [`Product`] exists on `s`, creating it if necessary.
-///
-/// This handles the dual-path layout where product data may live either under
-/// `spectrum.spectrum_description.product_list` (mzML 1.0) or directly under
-/// `spectrum.product_list` (mzML 1.1+).
-pub fn ensure_first_product_mut(s: &mut Spectrum) -> &mut Product {
+pub(crate) fn ensure_first_product_mut(s: &mut Spectrum) -> &mut Product {
     if let Some(sd) = s.spectrum_description.as_mut() {
         let pl = sd.product_list.get_or_insert_with(|| ProductList {
             count: Some(0),
@@ -288,12 +233,7 @@ pub fn ensure_first_product_mut(s: &mut Spectrum) -> &mut Product {
     pl.products.first_mut().expect("first product")
 }
 
-/// Ensure that a [`ReferenceableParamGroup`] with the given `id` exists in the
-/// mzML's referenceable param group list.
-///
-/// If the group doesn't exist yet it is created with a single `ms level = 1`
-/// cvParam — a sensible default for most test scenarios.
-pub fn ensure_referenceable_param_group(mzml: &mut MzML, id: &str) {
+pub(crate) fn ensure_referenceable_param_group(mzml: &mut MzML, id: &str) {
     let rpgl =
         mzml.referenceable_param_group_list
             .get_or_insert_with(|| ReferenceableParamGroupList {
@@ -320,4 +260,133 @@ pub fn ensure_referenceable_param_group(mzml: &mut MzML, id: &str) {
             user_params: Vec::new(),
         });
     rpgl.count = Some(rpgl.referenceable_param_groups.len());
+}
+
+pub(crate) fn mzml_with_single_array(
+    numeric_type: NumericType,
+    binary: BinaryData,
+    len: usize,
+) -> MzML {
+    MzML {
+        file_description: Some(minimal_file_description()),
+        run: Run {
+            id: format!("array-test-{numeric_type:?}"),
+            spectrum_list: Some(SpectrumList {
+                count: Some(1),
+                spectra: vec![Spectrum {
+                    id: "scan=1".to_string(),
+                    index: Some(0),
+                    default_array_length: Some(len),
+                    binary_data_array_list: Some(BinaryDataArrayList {
+                        count: Some(1),
+                        binary_data_arrays: vec![synthetic_binary_data_array(
+                            "MS:1000514",
+                            numeric_type,
+                            binary,
+                            Some(len),
+                        )],
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+pub(crate) fn build_mzml(spectra: Vec<Spectrum>, chromatograms: Vec<Chromatogram>) -> MzML {
+    MzML {
+        cv_list: Some(default_cv_list_like_writer()),
+        file_description: Some(minimal_file_description()),
+        run: Run {
+            id: "test-run".to_string(),
+            spectrum_list: if spectra.is_empty() {
+                None
+            } else {
+                Some(SpectrumList {
+                    count: Some(spectra.len()),
+                    spectra,
+                    ..Default::default()
+                })
+            },
+            chromatogram_list: if chromatograms.is_empty() {
+                None
+            } else {
+                Some(ChromatogramList {
+                    count: Some(chromatograms.len()),
+                    chromatograms,
+                    ..Default::default()
+                })
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+pub(crate) fn parse_single_array_xml(xml: &str) -> Option<BinaryData> {
+    let mzml = parse_mzml(xml.as_bytes()).expect("parse should succeed");
+    let spectra = mzml.run.spectrum_list.as_ref()?.spectra.first()?;
+    let bda = spectra
+        .binary_data_array_list
+        .as_ref()?
+        .binary_data_arrays
+        .first()?;
+    bda.binary.clone()
+}
+
+pub(crate) fn make_spectrum_f64(id: &str, mz: Vec<f64>, intensity: Vec<f64>) -> Spectrum {
+    let len = mz.len();
+    Spectrum {
+        id: id.to_string(),
+        index: Some(0),
+        default_array_length: Some(len),
+        binary_data_array_list: Some(BinaryDataArrayList {
+            count: Some(2),
+            binary_data_arrays: vec![
+                synthetic_binary_data_array(
+                    "MS:1000514",
+                    NumericType::Float64,
+                    BinaryData::F64(mz),
+                    Some(len),
+                ),
+                synthetic_binary_data_array(
+                    "MS:1000515",
+                    NumericType::Float64,
+                    BinaryData::F64(intensity),
+                    Some(len),
+                ),
+            ],
+        }),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn make_chromatogram_f64(id: &str, time: Vec<f64>, intensity: Vec<f64>) -> Chromatogram {
+    let len = time.len();
+    Chromatogram {
+        id: id.to_string(),
+        index: Some(0),
+        default_array_length: Some(len),
+        binary_data_array_list: Some(BinaryDataArrayList {
+            count: Some(2),
+            binary_data_arrays: vec![
+                synthetic_binary_data_array(
+                    "MS:1000595",
+                    NumericType::Float64,
+                    BinaryData::F64(time),
+                    Some(len),
+                ),
+                synthetic_binary_data_array(
+                    "MS:1000515",
+                    NumericType::Float64,
+                    BinaryData::F64(intensity),
+                    Some(len),
+                ),
+            ],
+        }),
+        ..Default::default()
+    }
 }

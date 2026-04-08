@@ -1,12 +1,12 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 
 #[test]
-fn all_refs_resolved_for_all_pwiz_fixtures() {
-    for rel in common::fixtures::PWIZ_FIXTURES {
-        let mzml = common::parse_fixture(rel);
+fn all_refs_resolved_for_all_pwiz_test_files() {
+    for rel in common::test_files::PWIZ_TEST_FILES {
+        let mzml = common::parse_test_file(rel);
         assert_all_refs_resolved(&mzml);
     }
 }
@@ -14,7 +14,7 @@ fn all_refs_resolved_for_all_pwiz_fixtures() {
 #[test]
 #[should_panic(expected = "unresolved")]
 fn detects_broken_run_default_source_file_ref() {
-    let mut m = fixtures::tiny_pwiz_11().clone();
+    let mut m = test_files::tiny_pwiz_11().clone();
     m.run.default_source_file_ref = Some("missing-source-file-id".to_string());
     assert_all_refs_resolved(&m);
 }
@@ -22,7 +22,7 @@ fn detects_broken_run_default_source_file_ref() {
 #[test]
 #[should_panic(expected = "unresolved")]
 fn detects_broken_precursor_spectrum_ref() {
-    let mut m = fixtures::tiny_pwiz_11().clone();
+    let mut m = test_files::tiny_pwiz_11().clone();
     let s20 = m
         .run
         .spectrum_list

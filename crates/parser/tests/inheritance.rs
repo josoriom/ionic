@@ -1,15 +1,11 @@
 mod common;
 
-use common::assertions::*;
-use common::builders::*;
 use common::BinaryDataExt;
+use common::assertions::*;
+use common::helpers::*;
 use ionic::mzml::structs::*;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-
-// Tests 23-27: Default data processing refs, scan settings/source file refs,
-// instrument software ref, legacy spectrum description,
-// binary data array external metadata referenceable param group.
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 #[test]
 fn default_data_processing_refs_roundtrip_semantic() {
@@ -241,9 +237,11 @@ fn legacy_spectrum_description_roundtrip_semantic() {
 
     let mzml = common::parse_xml(&xml);
     assert_eq!(common::spectra(&mzml).len(), 2);
-    assert!(common::spectrum_by_id(&mzml, "S1")
-        .spectrum_description
-        .is_some());
+    assert!(
+        common::spectrum_by_id(&mzml, "S1")
+            .spectrum_description
+            .is_some()
+    );
 
     assert_semantic_roundtrip_via_xml(&mzml, "legacy-spectrum-description-xml");
     assert_semantic_roundtrip_via_ion(&mzml, 9, "legacy-spectrum-description-ion");

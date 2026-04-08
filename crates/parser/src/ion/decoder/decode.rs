@@ -4,14 +4,14 @@ use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerAccess, ContainerView, DefaultProcessor},
-    parse_header::{parse_header, Header},
-    spectrum_source::{f16_bits_to_f64, for_each_spectra_in_range, SpectrumSource},
+    parse_header::{Header, parse_header},
+    spectrum_source::{SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range},
 };
 use crate::ion::{
     attr_meta::{
-        parse_accession_tail, ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
+        ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
         ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
-        ACC_ATTR_START_TIME_STAMP,
+        ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
     },
     utilities::{
         children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
@@ -1405,13 +1405,15 @@ mod tests {
         let mzml = d.to_mzml().unwrap();
         let sl = mzml.run.spectrum_list.as_ref().unwrap();
         assert!(!sl.spectra.is_empty());
-        assert!(sl.spectra[0]
-            .binary_data_array_list
-            .as_ref()
-            .unwrap()
-            .binary_data_arrays
-            .iter()
-            .any(|b| b.binary.is_some()));
+        assert!(
+            sl.spectra[0]
+                .binary_data_array_list
+                .as_ref()
+                .unwrap()
+                .binary_data_arrays
+                .iter()
+                .any(|b| b.binary.is_some())
+        );
     }
 
     #[test]
@@ -1500,12 +1502,14 @@ mod tests {
         let mzml = ion.to_mzml().unwrap();
         let sl = mzml.run.spectrum_list.as_ref().unwrap();
         assert!(!sl.spectra.is_empty());
-        assert!(sl.spectra[0]
-            .binary_data_array_list
-            .as_ref()
-            .unwrap()
-            .binary_data_arrays
-            .iter()
-            .any(|b| b.binary.is_some()));
+        assert!(
+            sl.spectra[0]
+                .binary_data_array_list
+                .as_ref()
+                .unwrap()
+                .binary_data_arrays
+                .iter()
+                .any(|b| b.binary.is_some())
+        );
     }
 }

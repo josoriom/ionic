@@ -1,13 +1,12 @@
 mod common;
 
-use common::assertions::*;
-use common::builders::*;
-use common::fixtures;
 use common::BinaryDataExt;
+use common::assertions::*;
+use common::helpers::*;
+use common::test_files;
 use ionic::mzml::structs::*;
 
-// Tests 19-22: Rare numeric types, XML roundtrip without array length,
-// parser honors shorter array length, preserves integer ms level arrays.
+// Rare numeric types, XML roundtrip without array length.
 
 #[test]
 fn ion_roundtrip_preserves_rare_numeric_types() {
@@ -114,7 +113,7 @@ fn parser_honors_declared_shorter_array_length() {
 
 #[test]
 fn encoder_preserves_integer_ms_level_arrays() {
-    let src = fixtures::anpc_test_mzml();
+    let src = test_files::anpc_test_mzml();
     let bytes = common::encode_to_ion(src, 10, false);
     let out = common::decode_ion(&bytes).expect("decode should succeed");
 

@@ -1,12 +1,14 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 
+/// Checks that reading the same spectrum or chromatogram many times always gives the exact same result,
+/// so access is stable and does not change data.
 #[test]
 fn repeated_spectrum_access_is_stable() {
-    let mzml = fixtures::tiny_pwiz_11();
-    let ctx = SemanticCtx::new(mzml);
+    let mzml = test_files::tiny_pwiz_11();
+    let ctx = SemanticContext::new(mzml);
     let sl = mzml
         .run
         .spectrum_list
@@ -29,8 +31,8 @@ fn repeated_spectrum_access_is_stable() {
 
 #[test]
 fn repeated_chromatogram_access_is_stable() {
-    let mzml = fixtures::tiny_pwiz_11();
-    let ctx = SemanticCtx::new(mzml);
+    let mzml = test_files::tiny_pwiz_11();
+    let ctx = SemanticContext::new(mzml);
     let cl = mzml
         .run
         .chromatogram_list

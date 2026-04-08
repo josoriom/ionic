@@ -2,32 +2,30 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 use ionic::mzml::bin_to_mzml::bin_to_mzml;
 
-// Tests 1-7 from plan + Test 8 (small_zlib)
-
-roundtrip_xml!(tiny_10_semantic, fixtures::tiny_pwiz_10);
-roundtrip_xml!(tiny_11_semantic, fixtures::tiny_pwiz_11);
-roundtrip_xml!(small_10_structural, fixtures::small_pwiz_10, structural);
-roundtrip_xml!(small_11_structural, fixtures::small_pwiz_11, structural);
-roundtrip_xml!(tiny_111_semantic, fixtures::tiny_pwiz_111);
-roundtrip_xml!(small_miape_11_semantic, fixtures::small_miape_pwiz_11);
-roundtrip_xml!(small_zlib_11_semantic, fixtures::small_zlib_pwiz_11);
+roundtrip_xml!(tiny_10_semantic, test_files::tiny_pwiz_10);
+roundtrip_xml!(tiny_11_semantic, test_files::tiny_pwiz_11);
+roundtrip_xml!(small_10_structural, test_files::small_pwiz_10, structural);
+roundtrip_xml!(small_11_structural, test_files::small_pwiz_11, structural);
+roundtrip_xml!(tiny_111_semantic, test_files::tiny_pwiz_111);
+roundtrip_xml!(small_miape_11_semantic, test_files::small_miape_pwiz_11);
+roundtrip_xml!(small_zlib_11_semantic, test_files::small_zlib_pwiz_11);
 
 #[test]
 fn tiny2_exposes_known_unresolved_precursor_ref() {
-    let mzml = fixtures::tiny2_pwiz_10();
+    let mzml = test_files::tiny2_pwiz_10();
     let precursor = common::precursor_list_of_spectrum(common::spectrum_by_id(mzml, "S2"))
         .and_then(|list| list.precursors.first())
-        .expect("tiny2 fixture should retain its known precursor reference");
+        .expect("tiny2 test_file should retain its known precursor reference");
     assert_eq!(precursor.spectrum_ref.as_deref(), Some("change_me"));
 }
 
 #[test]
 fn small_zlib_decodes_nonempty_compressed_arrays() {
     use common::BinaryDataExt;
-    let mzml = fixtures::small_zlib_pwiz_11();
+    let mzml = test_files::small_zlib_pwiz_11();
     let first_spectrum = common::spectra(mzml)
         .first()
         .expect("at least one spectrum");
@@ -52,8 +50,7 @@ fn small_zlib_decodes_nonempty_compressed_arrays() {
 
 #[test]
 fn xml_roundtrip_idempotent() {
-    // Parse -> serialize -> reparse -> serialize -> reparse -> eq
-    let src = fixtures::tiny_pwiz_11();
+    let src = test_files::tiny_pwiz_11();
     let xml = bin_to_mzml(src).expect("bin_to_mzml should succeed");
     let reparsed_once = common::parse_xml(&xml);
     let xml2 = bin_to_mzml(&reparsed_once).expect("second bin_to_mzml should succeed");
@@ -62,9 +59,9 @@ fn xml_roundtrip_idempotent() {
 }
 
 #[test]
-fn all_fixtures_can_parse() {
-    for rel in common::fixtures::ALL_FIXTURES {
-        let mzml = common::parse_fixture(rel);
+fn all_test_files_can_parse() {
+    for rel in common::test_files::ALL_TEST_FILES {
+        let mzml = common::parse_test_file(rel);
         // Just verify it parsed without panic
         let _ = common::spectra(&mzml);
     }

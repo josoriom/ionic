@@ -1,15 +1,15 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 use common::{
-    chromatogram_arrays, chromatograms, decode_ion, encode_to_ion, spectra, spectrum_arrays,
-    BinaryDataExt,
+    BinaryDataExt, chromatogram_arrays, chromatograms, decode_ion, encode_to_ion, spectra,
+    spectrum_arrays,
 };
 
 #[test]
 fn default_array_length_matches_payload() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     for s in spectra(mzml) {
         let arrays = spectrum_arrays(s);
         if arrays.is_empty() {
@@ -41,16 +41,16 @@ fn default_array_length_matches_payload() {
 }
 
 #[test]
-fn declared_counts_consistent_for_all_pwiz_fixtures() {
-    for rel in common::fixtures::PWIZ_FIXTURES {
-        let mzml = common::parse_fixture(rel);
+fn declared_counts_consistent_for_all_pwiz_test_files() {
+    for rel in common::test_files::PWIZ_TEST_FILES {
+        let mzml = common::parse_test_file(rel);
         assert_declared_counts_consistent(&mzml);
     }
 }
 
 #[test]
 fn declared_counts_consistent_after_ion_roundtrip() {
-    let out = decode_ion(&encode_to_ion(fixtures::tiny_pwiz_11(), 12, false))
+    let out = decode_ion(&encode_to_ion(test_files::tiny_pwiz_11(), 12, false))
         .expect("decode should succeed");
     assert_declared_counts_consistent(&out);
 }

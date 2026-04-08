@@ -1,16 +1,16 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 use common::{
-    cv_param_by_accession, cv_value_f64, find_array_by_accession, parse_scan_number_from_id,
-    precursor_list_of_spectrum, scan_start_time_seconds, spectrum_arrays, spectrum_by_id,
-    BinaryDataExt,
+    BinaryDataExt, cv_param_by_accession, cv_value_f64, find_array_by_accession,
+    parse_scan_number_from_id, precursor_list_of_spectrum, scan_start_time_seconds,
+    spectrum_arrays, spectrum_by_id,
 };
 
 #[test]
 fn tiny_11_known_values_scan_19() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s = spectrum_by_id(mzml, "scan=19");
     assert_eq!(s.ms_level, Some(1));
     assert_eq!(s.default_array_length, Some(15));
@@ -35,7 +35,7 @@ fn tiny_11_known_values_scan_19() {
 
 #[test]
 fn tiny_11_known_values_scan_20() {
-    let mzml = fixtures::tiny_pwiz_11();
+    let mzml = test_files::tiny_pwiz_11();
     let s = spectrum_by_id(mzml, "scan=20");
     assert_eq!(s.ms_level, Some(2));
     assert_eq!(s.default_array_length, Some(10));
@@ -60,7 +60,7 @@ fn tiny_11_known_values_scan_20() {
 
 #[test]
 fn tiny_11_scan19_metadata_equivalence() {
-    let s19 = spectrum_by_id(fixtures::tiny_pwiz_11(), "scan=19");
+    let s19 = spectrum_by_id(test_files::tiny_pwiz_11(), "scan=19");
     assert_eq!(parse_scan_number_from_id(&s19.id), Some(19));
     assert_eq!(s19.ms_level, Some(1));
     let rt_s = scan_start_time_seconds(s19).expect("scan start time");
@@ -73,7 +73,7 @@ fn tiny_11_scan19_metadata_equivalence() {
 
 #[test]
 fn tiny_11_scan20_precursor_equivalence() {
-    let s20 = spectrum_by_id(fixtures::tiny_pwiz_11(), "scan=20");
+    let s20 = spectrum_by_id(test_files::tiny_pwiz_11(), "scan=20");
     assert_eq!(parse_scan_number_from_id(&s20.id), Some(20));
     assert_eq!(s20.ms_level, Some(2));
     let precursor = precursor_list_of_spectrum(s20)

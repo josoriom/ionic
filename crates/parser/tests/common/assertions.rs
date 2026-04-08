@@ -1,39 +1,28 @@
 #![allow(dead_code)]
 
-//! Semantic / structural equality checking and reference-resolution assertions.
-//!
-//! Every function is `pub` so that other test modules can import exactly
-//! what they need.
-
+//! Semantic / structural equality checking assertions.
 use std::collections::{BTreeSet, HashMap};
 
 use ionic::mzml::structs::*;
 
 use super::binary_ext::BinaryDataExt;
 use super::{
-    bda_role, chromatograms, precursor_list_of_spectrum,
-    product_list_of_spectrum, scan_list_of_spectrum, set_of_ids, spectra,
-    top_level_dp_ids, top_level_instrument_ids, top_level_sample_ids, top_level_software_ids,
-    top_level_source_file_ids,
+    bda_role, chromatograms, precursor_list_of_spectrum, product_list_of_spectrum,
+    scan_list_of_spectrum, set_of_ids, spectra, top_level_dp_ids, top_level_instrument_ids,
+    top_level_sample_ids, top_level_software_ids, top_level_source_file_ids,
 };
 
-// ---------------------------------------------------------------------------
 // Constants
-// ---------------------------------------------------------------------------
-
 pub const EPS_REL_F64: f64 = 1e-9;
 pub const EPS_REL_F32: f64 = 1e-5;
 
-// ---------------------------------------------------------------------------
-// SemanticCtx
-// ---------------------------------------------------------------------------
-
-pub struct SemanticCtx<'a> {
+// SemanticContext
+pub struct SemanticContext<'a> {
     ref_groups: HashMap<&'a str, &'a ReferenceableParamGroup>,
 }
 
-impl<'a> SemanticCtx<'a> {
-    pub fn new(mzml: &'a MzML) -> Self {
+impl<'a> SemanticContext<'a> {
+    pub(crate) fn new(mzml: &'a MzML) -> Self {
         let mut ref_groups = HashMap::new();
         if let Some(list) = mzml.referenceable_param_group_list.as_ref() {
             for group in &list.referenceable_param_groups {
@@ -43,7 +32,7 @@ impl<'a> SemanticCtx<'a> {
         Self { ref_groups }
     }
 
-    pub fn effective_param_signatures(
+    pub(crate) fn effective_param_signatures(
         &self,
         refs: &[ReferenceableParamGroupRef],
         cv_params: &[CvParam],
@@ -73,11 +62,8 @@ impl<'a> SemanticCtx<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Text normalization
-// ---------------------------------------------------------------------------
-
-pub fn normalized_text(value: Option<&str>) -> Option<&str> {
+pub(crate) fn normalized_text(value: Option<&str>) -> Option<&str> {
     value.and_then(|text| {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -88,11 +74,11 @@ pub fn normalized_text(value: Option<&str>) -> Option<&str> {
     })
 }
 
-pub fn normalized_owned_text(value: Option<&str>) -> String {
+pub(crate) fn normalized_owned_text(value: Option<&str>) -> String {
     normalized_text(value).unwrap_or("").to_string()
 }
 
-pub fn canonical_version_text(value: Option<&str>) -> Option<String> {
+pub(crate) fn canonical_version_text(value: Option<&str>) -> Option<String> {
     normalized_text(value).map(|text| {
         if let Ok(number) = text.parse::<f64>()
             && number.fract() == 0.0
@@ -103,7 +89,7 @@ pub fn canonical_version_text(value: Option<&str>) -> Option<String> {
     })
 }
 
-pub fn should_treat_as_numeric_text(text: &str) -> bool {
+pub(crate) fn should_treat_as_numeric_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
@@ -122,7 +108,7 @@ pub fn should_treat_as_numeric_text(text: &str) -> bool {
     false
 }
 
-pub fn canonical_value_text(value: Option<&str>) -> Option<String> {
+pub(crate) fn canonical_value_text(value: Option<&str>) -> Option<String> {
     normalized_text(value).map(|text| {
         if should_treat_as_numeric_text(text) {
             let number = text.parse::<f64>().expect("numeric text must parse");
@@ -139,11 +125,8 @@ pub fn canonical_value_text(value: Option<&str>) -> Option<String> {
     })
 }
 
-// ---------------------------------------------------------------------------
 // Signature functions
-// ---------------------------------------------------------------------------
-
-pub fn cv_param_signature(param: &CvParam) -> String {
+pub(crate) fn cv_param_signature(param: &CvParam) -> String {
     let canonical_name = if normalized_text(param.accession.as_deref()).is_some() {
         None
     } else {
@@ -171,7 +154,7 @@ pub fn cv_param_signature(param: &CvParam) -> String {
     )
 }
 
-pub fn user_param_signature(param: &UserParam) -> String {
+pub(crate) fn user_param_signature(param: &UserParam) -> String {
     format!(
         "user|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         normalized_text(Some(param.name.as_str())),
@@ -183,17 +166,14 @@ pub fn user_param_signature(param: &UserParam) -> String {
     )
 }
 
-pub fn sorted_signatures(values: impl IntoIterator<Item = String>) -> Vec<String> {
+pub(crate) fn sorted_signatures(values: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut out: Vec<String> = values.into_iter().collect();
     out.sort();
     out
 }
 
-// ---------------------------------------------------------------------------
 // Element-level signature functions
-// ---------------------------------------------------------------------------
-
-pub fn source_file_refs_signature(list: Option<&SourceFileRefList>) -> Vec<String> {
+pub(crate) fn source_file_refs_signature(list: Option<&SourceFileRefList>) -> Vec<String> {
     list.map(|list| {
         sorted_signatures(
             list.source_file_refs
@@ -204,7 +184,7 @@ pub fn source_file_refs_signature(list: Option<&SourceFileRefList>) -> Vec<Strin
     .unwrap_or_default()
 }
 
-pub fn software_param_signature(param: &SoftwareParam) -> String {
+pub(crate) fn software_param_signature(param: &SoftwareParam) -> String {
     format!(
         "{:?}",
         (
@@ -215,14 +195,17 @@ pub fn software_param_signature(param: &SoftwareParam) -> String {
     )
 }
 
-pub fn source_file_signature(ctx: &SemanticCtx<'_>, source_file: &SourceFile) -> String {
+pub(crate) fn source_file_signature(
+    context: &SemanticContext<'_>,
+    source_file: &SourceFile,
+) -> String {
     format!(
         "{:?}",
         (
             normalized_text(Some(source_file.id.as_str())),
             normalized_text(Some(source_file.name.as_str())),
             normalized_text(Some(source_file.location.as_str())),
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &source_file.referenceable_param_group_ref,
                 &source_file.cv_param,
                 &source_file.user_param,
@@ -231,10 +214,10 @@ pub fn source_file_signature(ctx: &SemanticCtx<'_>, source_file: &SourceFile) ->
     )
 }
 
-pub fn contact_signature(ctx: &SemanticCtx<'_>, contact: &Contact) -> String {
+pub(crate) fn contact_signature(context: &SemanticContext<'_>, contact: &Contact) -> String {
     format!(
         "{:?}",
-        ctx.effective_param_signatures(
+        context.effective_param_signatures(
             &contact.referenceable_param_group_refs,
             &contact.cv_params,
             &contact.user_params,
@@ -242,13 +225,13 @@ pub fn contact_signature(ctx: &SemanticCtx<'_>, contact: &Contact) -> String {
     )
 }
 
-pub fn sample_signature(ctx: &SemanticCtx<'_>, sample: &Sample) -> String {
+pub(crate) fn sample_signature(context: &SemanticContext<'_>, sample: &Sample) -> String {
     format!(
         "{:?}",
         (
             normalized_text(Some(sample.id.as_str())),
             normalized_text(Some(sample.name.as_str())),
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &sample.referenceable_param_group_refs,
                 &sample.cv_params,
                 &sample.user_params,
@@ -257,8 +240,8 @@ pub fn sample_signature(ctx: &SemanticCtx<'_>, sample: &Sample) -> String {
     )
 }
 
-pub fn component_signature(
-    ctx: &SemanticCtx<'_>,
+pub(crate) fn component_signature(
+    context: &SemanticContext<'_>,
     kind: &str,
     order: Option<u32>,
     refs: &[ReferenceableParamGroupRef],
@@ -270,17 +253,20 @@ pub fn component_signature(
         (
             kind,
             order,
-            ctx.effective_param_signatures(refs, cv_params, user_params),
+            context.effective_param_signatures(refs, cv_params, user_params),
         )
     )
 }
 
-pub fn instrument_signature(ctx: &SemanticCtx<'_>, instrument: &Instrument) -> String {
+pub(crate) fn instrument_signature(
+    context: &SemanticContext<'_>,
+    instrument: &Instrument,
+) -> String {
     let mut components = Vec::new();
     if let Some(component_list) = instrument.component_list.as_ref() {
         for source in &component_list.source {
             components.push(component_signature(
-                ctx,
+                context,
                 "source",
                 source.order,
                 &source.referenceable_param_group_ref,
@@ -290,7 +276,7 @@ pub fn instrument_signature(ctx: &SemanticCtx<'_>, instrument: &Instrument) -> S
         }
         for analyzer in &component_list.analyzer {
             components.push(component_signature(
-                ctx,
+                context,
                 "analyzer",
                 analyzer.order,
                 &analyzer.referenceable_param_group_ref,
@@ -300,7 +286,7 @@ pub fn instrument_signature(ctx: &SemanticCtx<'_>, instrument: &Instrument) -> S
         }
         for detector in &component_list.detector {
             components.push(component_signature(
-                ctx,
+                context,
                 "detector",
                 detector.order,
                 &detector.referenceable_param_group_ref,
@@ -327,7 +313,7 @@ pub fn instrument_signature(ctx: &SemanticCtx<'_>, instrument: &Instrument) -> S
                     .as_ref()
                     .map(|value| value.r#ref.as_str())
             ),
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &instrument.referenceable_param_group_ref,
                 &instrument.cv_param,
                 &instrument.user_param,
@@ -337,7 +323,7 @@ pub fn instrument_signature(ctx: &SemanticCtx<'_>, instrument: &Instrument) -> S
     )
 }
 
-pub fn software_signature(software: &Software) -> String {
+pub(crate) fn software_signature(software: &Software) -> String {
     let effective_version = canonical_version_text(software.version.as_deref()).or_else(|| {
         software
             .software_param
@@ -378,13 +364,16 @@ pub fn software_signature(software: &Software) -> String {
     )
 }
 
-pub fn processing_method_signature(ctx: &SemanticCtx<'_>, method: &ProcessingMethod) -> String {
+pub(crate) fn processing_method_signature(
+    context: &SemanticContext<'_>,
+    method: &ProcessingMethod,
+) -> String {
     format!(
         "{:?}",
         (
             method.order,
             normalized_text(method.software_ref.as_deref()),
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &method.referenceable_param_group_ref,
                 &method.cv_param,
                 &method.user_param,
@@ -393,14 +382,14 @@ pub fn processing_method_signature(ctx: &SemanticCtx<'_>, method: &ProcessingMet
     )
 }
 
-pub fn data_processing_signature(
-    ctx: &SemanticCtx<'_>,
+pub(crate) fn data_processing_signature(
+    context: &SemanticContext<'_>,
     data_processing: &DataProcessing,
 ) -> String {
     let mut methods = data_processing
         .processing_method
         .iter()
-        .map(|item| processing_method_signature(ctx, item))
+        .map(|item| processing_method_signature(context, item))
         .collect::<Vec<_>>();
     methods.sort();
 
@@ -414,10 +403,10 @@ pub fn data_processing_signature(
     )
 }
 
-pub fn target_signature(ctx: &SemanticCtx<'_>, target: &Target) -> String {
+pub(crate) fn target_signature(context: &SemanticContext<'_>, target: &Target) -> String {
     format!(
         "{:?}",
-        ctx.effective_param_signatures(
+        context.effective_param_signatures(
             &target.referenceable_param_group_refs,
             &target.cv_params,
             &target.user_params,
@@ -425,14 +414,17 @@ pub fn target_signature(ctx: &SemanticCtx<'_>, target: &Target) -> String {
     )
 }
 
-pub fn scan_settings_signature(ctx: &SemanticCtx<'_>, scan_settings: &ScanSettings) -> String {
+pub(crate) fn scan_settings_signature(
+    context: &SemanticContext<'_>,
+    scan_settings: &ScanSettings,
+) -> String {
     let mut targets = scan_settings
         .target_list
         .as_ref()
         .map(|list| {
             list.targets
                 .iter()
-                .map(|item| target_signature(ctx, item))
+                .map(|item| target_signature(context, item))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -443,7 +435,7 @@ pub fn scan_settings_signature(ctx: &SemanticCtx<'_>, scan_settings: &ScanSettin
         (
             normalized_text(scan_settings.id.as_deref()),
             normalized_text(scan_settings.instrument_configuration_ref.as_deref()),
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &scan_settings.referenceable_param_group_refs,
                 &scan_settings.cv_params,
                 &scan_settings.user_params,
@@ -454,7 +446,7 @@ pub fn scan_settings_signature(ctx: &SemanticCtx<'_>, scan_settings: &ScanSettin
     )
 }
 
-pub fn run_signature(ctx: &SemanticCtx<'_>, run: &Run) -> String {
+pub(crate) fn run_signature(context: &SemanticContext<'_>, run: &Run) -> String {
     format!(
         "{:?}",
         (
@@ -463,7 +455,7 @@ pub fn run_signature(ctx: &SemanticCtx<'_>, run: &Run) -> String {
             normalized_text(run.default_instrument_configuration_ref.as_deref()),
             normalized_text(run.default_source_file_ref.as_deref()),
             normalized_text(run.sample_ref.as_deref()),
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &run.referenceable_param_group_refs,
                 &run.cv_params,
                 &run.user_params,
@@ -473,13 +465,13 @@ pub fn run_signature(ctx: &SemanticCtx<'_>, run: &Run) -> String {
     )
 }
 
-pub fn spectrum_description_params_signature(
-    ctx: &SemanticCtx<'_>,
+pub(crate) fn spectrum_description_params_signature(
+    context: &SemanticContext<'_>,
     description: Option<&SpectrumDescription>,
 ) -> Vec<String> {
     description
         .map(|description| {
-            ctx.effective_param_signatures(
+            context.effective_param_signatures(
                 &description.referenceable_param_group_refs,
                 &description.cv_params,
                 &description.user_params,
@@ -488,42 +480,39 @@ pub fn spectrum_description_params_signature(
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
 // Assertion helpers
-// ---------------------------------------------------------------------------
-
-pub fn assert_signature_vec_eq(left: Vec<String>, right: Vec<String>, ctx: &str) {
-    assert_eq!(left, right, "{ctx}: semantic signature mismatch");
+pub(crate) fn assert_signature_vec_eq(left: Vec<String>, right: Vec<String>, context: &str) {
+    assert_eq!(left, right, "{context}: semantic signature mismatch");
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn assert_effective_params_eq(
-    left_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_effective_params_eq(
+    left_context: &SemanticContext<'_>,
     left_refs: &[ReferenceableParamGroupRef],
     left_cv: &[CvParam],
     left_user: &[UserParam],
-    right_ctx: &SemanticCtx<'_>,
+    right_context: &SemanticContext<'_>,
     right_refs: &[ReferenceableParamGroupRef],
     right_cv: &[CvParam],
     right_user: &[UserParam],
-    ctx: &str,
+    context: &str,
 ) {
-    let left = left_ctx.effective_param_signatures(left_refs, left_cv, left_user);
-    let right = right_ctx.effective_param_signatures(right_refs, right_cv, right_user);
-    assert_signature_vec_eq(left, right, ctx);
+    let left = left_context.effective_param_signatures(left_refs, left_cv, left_user);
+    let right = right_context.effective_param_signatures(right_refs, right_cv, right_user);
+    assert_signature_vec_eq(left, right, context);
 }
 
-pub fn assert_opt_str_eq(left: Option<&str>, right: Option<&str>, ctx: &str) {
-    assert_eq!(normalized_text(left), normalized_text(right), "{ctx}");
+pub(crate) fn assert_opt_str_eq(left: Option<&str>, right: Option<&str>, context: &str) {
+    assert_eq!(normalized_text(left), normalized_text(right), "{context}");
 }
 
-pub fn assert_optional_count_eq(label: &str, declared: Option<usize>, actual: usize) {
+pub(crate) fn assert_optional_count_eq(label: &str, declared: Option<usize>, actual: usize) {
     if let Some(declared) = declared {
         assert_eq!(declared, actual, "{label}: declared count mismatch");
     }
 }
 
-pub fn assert_optional_count_eq_u32(label: &str, declared: Option<u32>, actual: usize) {
+pub(crate) fn assert_optional_count_eq_u32(label: &str, declared: Option<u32>, actual: usize) {
     if let Some(declared) = declared {
         assert_eq!(
             declared as usize, actual,
@@ -532,106 +521,104 @@ pub fn assert_optional_count_eq_u32(label: &str, declared: Option<u32>, actual: 
     }
 }
 
-pub fn rel_close_f64(a: f64, b: f64, eps_rel: f64, ctx: &str) {
+pub(crate) fn rel_close_f64(a: f64, b: f64, eps_rel: f64, context: &str) {
     let diff = (a - b).abs();
     let scale = a.abs().max(b.abs()).max(1.0);
     assert!(
         diff <= scale * eps_rel,
-        "{ctx}: values differ: left={a} right={b} diff={diff} allowed={} (rel={eps_rel})",
+        "{context}: values differ: left={a} right={b} diff={diff} allowed={} (rel={eps_rel})",
         scale * eps_rel
     );
 }
 
-pub fn assert_binary_semantic_eq(left: &BinaryData, right: &BinaryData, ctx: &str) {
+pub(crate) fn assert_binary_semantic_eq(left: &BinaryData, right: &BinaryData, context: &str) {
     match (left, right) {
         (BinaryData::F64(l), BinaryData::F64(r)) => {
-            assert_eq!(l.len(), r.len(), "{ctx}: f64 len mismatch");
+            assert_eq!(l.len(), r.len(), "{context}: f64 len mismatch");
             for (i, (lv, rv)) in l.iter().zip(r.iter()).enumerate() {
-                rel_close_f64(*lv, *rv, EPS_REL_F64, &format!("{ctx} f64[{i}]"));
+                rel_close_f64(*lv, *rv, EPS_REL_F64, &format!("{context} f64[{i}]"));
             }
         }
         (BinaryData::F32(l), BinaryData::F32(r)) => {
-            assert_eq!(l.len(), r.len(), "{ctx}: f32 len mismatch");
+            assert_eq!(l.len(), r.len(), "{context}: f32 len mismatch");
             for (i, (lv, rv)) in l.iter().zip(r.iter()).enumerate() {
                 rel_close_f64(
                     *lv as f64,
                     *rv as f64,
                     EPS_REL_F32,
-                    &format!("{ctx} f32[{i}]"),
+                    &format!("{context} f32[{i}]"),
                 );
             }
         }
         (BinaryData::F16(l), BinaryData::F16(r)) => {
-            assert_eq!(l, r, "{ctx}: f16 payload mismatch")
+            assert_eq!(l, r, "{context}: f16 payload mismatch")
         }
         (BinaryData::I64(l), BinaryData::I64(r)) => {
-            assert_eq!(l, r, "{ctx}: i64 payload mismatch")
+            assert_eq!(l, r, "{context}: i64 payload mismatch")
         }
         (BinaryData::I32(l), BinaryData::I32(r)) => {
-            assert_eq!(l, r, "{ctx}: i32 payload mismatch")
+            assert_eq!(l, r, "{context}: i32 payload mismatch")
         }
         (BinaryData::I16(l), BinaryData::I16(r)) => {
-            assert_eq!(l, r, "{ctx}: i16 payload mismatch")
+            assert_eq!(l, r, "{context}: i16 payload mismatch")
         }
-        (l, r) => panic!("{ctx}: binary variant mismatch: left={l:?} right={r:?}"),
+        (l, r) => panic!("{context}: binary variant mismatch: left={l:?} right={r:?}"),
     }
 }
 
-pub fn binary_semantically_empty(binary: Option<&BinaryData>) -> bool {
+pub(crate) fn binary_semantically_empty(binary: Option<&BinaryData>) -> bool {
     match binary {
         None => true,
         Some(binary) => binary.is_empty(),
     }
 }
 
-pub fn effective_data_processing_ref<'a>(
+pub(crate) fn effective_data_processing_ref<'a>(
     raw: Option<&'a str>,
     default_ref: Option<&'a str>,
 ) -> Option<&'a str> {
     normalized_text(raw).or_else(|| normalized_text(default_ref))
 }
 
-pub fn effective_binary_data_array_length(array: &BinaryDataArray) -> Option<usize> {
+pub(crate) fn effective_binary_data_array_length(array: &BinaryDataArray) -> Option<usize> {
     array
         .array_length
         .or_else(|| array.binary.as_ref().map(|b| b.len()))
 }
 
-// ---------------------------------------------------------------------------
 // Deep comparison functions
-// ---------------------------------------------------------------------------
 
-pub fn assert_binary_data_array_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_binary_data_array_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: &BinaryDataArray,
     right: &BinaryDataArray,
-    ctx: &str,
+    context: &str,
 ) {
     assert_eq!(
         effective_binary_data_array_length(left),
         effective_binary_data_array_length(right),
-        "{ctx}: arrayLength mismatch"
+        "{context}: arrayLength mismatch"
     );
     assert_opt_str_eq(
         left.data_processing_ref.as_deref(),
         right.data_processing_ref.as_deref(),
-        &format!("{ctx}: dataProcessingRef mismatch"),
+        &format!("{context}: dataProcessingRef mismatch"),
     );
     assert_eq!(
         left.numeric_type, right.numeric_type,
-        "{ctx}: numeric_type mismatch"
+        "{context}: numeric_type mismatch"
     );
     assert_effective_params_eq(
-        left_ctx,
+        left_context,
         &left.referenceable_param_group_refs,
         &left.cv_params,
         &left.user_params,
-        right_ctx,
+        right_context,
         &right.referenceable_param_group_refs,
         &right.cv_params,
         &right.user_params,
-        &format!("{ctx}: parameter bundle mismatch"),
+        &format!("{context}: parameter bundle mismatch"),
     );
 
     match (left.binary.as_ref(), right.binary.as_ref()) {
@@ -639,26 +626,26 @@ pub fn assert_binary_data_array_semantic_eq(
             assert_eq!(
                 left_binary.variant_name(),
                 right_binary.variant_name(),
-                "{ctx}: binary variant mismatch"
+                "{context}: binary variant mismatch"
             );
-            assert_binary_semantic_eq(left_binary, right_binary, ctx);
+            assert_binary_semantic_eq(left_binary, right_binary, context);
         }
         _ => {
             assert!(
                 binary_semantically_empty(left.binary.as_ref())
                     && binary_semantically_empty(right.binary.as_ref()),
-                "{ctx}: one side has semantic payload while the other is empty"
+                "{context}: one side has semantic payload while the other is empty"
             );
         }
     }
 }
 
-pub fn assert_binary_data_array_list_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_binary_data_array_list_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&BinaryDataArrayList>,
     right: Option<&BinaryDataArrayList>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
@@ -666,7 +653,7 @@ pub fn assert_binary_data_array_list_semantic_eq(
             assert_eq!(
                 left.binary_data_arrays.len(),
                 right.binary_data_arrays.len(),
-                "{ctx}: binaryDataArray count mismatch"
+                "{context}: binaryDataArray count mismatch"
             );
             for (index, (left, right)) in left
                 .binary_data_arrays
@@ -674,25 +661,31 @@ pub fn assert_binary_data_array_list_semantic_eq(
                 .zip(&right.binary_data_arrays)
                 .enumerate()
             {
-                let array_ctx = format!("{ctx} array[{index}] role={}", bda_role(left));
+                let array_context = format!("{context} array[{index}] role={}", bda_role(left));
                 assert_eq!(
                     bda_role(left),
                     bda_role(right),
-                    "{array_ctx}: role mismatch"
+                    "{array_context}: role mismatch"
                 );
-                assert_binary_data_array_semantic_eq(left_ctx, right_ctx, left, right, &array_ctx);
+                assert_binary_data_array_semantic_eq(
+                    left_context,
+                    right_context,
+                    left,
+                    right,
+                    &array_context,
+                );
             }
         }
-        _ => panic!("{ctx}: binaryDataArrayList presence mismatch"),
+        _ => panic!("{context}: binaryDataArrayList presence mismatch"),
     }
 }
 
-pub fn assert_scan_window_list_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_scan_window_list_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&ScanWindowList>,
     right: Option<&ScanWindowList>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
@@ -700,7 +693,7 @@ pub fn assert_scan_window_list_semantic_eq(
             assert_eq!(
                 left.scan_windows.len(),
                 right.scan_windows.len(),
-                "{ctx}: scanWindow count mismatch"
+                "{context}: scanWindow count mismatch"
             );
             for (index, (left_window, right_window)) in left
                 .scan_windows
@@ -709,142 +702,142 @@ pub fn assert_scan_window_list_semantic_eq(
                 .enumerate()
             {
                 assert_effective_params_eq(
-                    left_ctx,
+                    left_context,
                     &[],
                     &left_window.cv_params,
                     &left_window.user_params,
-                    right_ctx,
+                    right_context,
                     &[],
                     &right_window.cv_params,
                     &right_window.user_params,
-                    &format!("{ctx}: scanWindow[{index}] params mismatch"),
+                    &format!("{context}: scanWindow[{index}] params mismatch"),
                 );
             }
         }
-        _ => panic!("{ctx}: scanWindowList presence mismatch"),
+        _ => panic!("{context}: scanWindowList presence mismatch"),
     }
 }
 
-pub fn assert_scan_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_scan_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: &Scan,
     right: &Scan,
-    ctx: &str,
+    context: &str,
 ) {
     assert_opt_str_eq(
         left.instrument_configuration_ref.as_deref(),
         right.instrument_configuration_ref.as_deref(),
-        &format!("{ctx}: instrumentConfigurationRef mismatch"),
+        &format!("{context}: instrumentConfigurationRef mismatch"),
     );
     assert_opt_str_eq(
         left.external_spectrum_id.as_deref(),
         right.external_spectrum_id.as_deref(),
-        &format!("{ctx}: externalSpectrumID mismatch"),
+        &format!("{context}: externalSpectrumID mismatch"),
     );
     assert_opt_str_eq(
         left.source_file_ref.as_deref(),
         right.source_file_ref.as_deref(),
-        &format!("{ctx}: sourceFileRef mismatch"),
+        &format!("{context}: sourceFileRef mismatch"),
     );
     assert_opt_str_eq(
         left.spectrum_ref.as_deref(),
         right.spectrum_ref.as_deref(),
-        &format!("{ctx}: spectrumRef mismatch"),
+        &format!("{context}: spectrumRef mismatch"),
     );
     assert_effective_params_eq(
-        left_ctx,
+        left_context,
         &left.referenceable_param_group_refs,
         &left.cv_params,
         &left.user_params,
-        right_ctx,
+        right_context,
         &right.referenceable_param_group_refs,
         &right.cv_params,
         &right.user_params,
-        &format!("{ctx}: parameter bundle mismatch"),
+        &format!("{context}: parameter bundle mismatch"),
     );
     assert_scan_window_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.scan_window_list.as_ref(),
         right.scan_window_list.as_ref(),
-        &format!("{ctx}: scanWindowList"),
+        &format!("{context}: scanWindowList"),
     );
 }
 
-pub fn assert_scan_list_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_scan_list_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&ScanList>,
     right: Option<&ScanList>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
         (Some(left), Some(right)) => {
             assert_effective_params_eq(
-                left_ctx,
+                left_context,
                 &[],
                 &left.cv_params,
                 &left.user_params,
-                right_ctx,
+                right_context,
                 &[],
                 &right.cv_params,
                 &right.user_params,
-                &format!("{ctx}: scanList params mismatch"),
+                &format!("{context}: scanList params mismatch"),
             );
             assert_eq!(
                 left.scans.len(),
                 right.scans.len(),
-                "{ctx}: scan count mismatch"
+                "{context}: scan count mismatch"
             );
             for (index, (left_scan, right_scan)) in left.scans.iter().zip(&right.scans).enumerate()
             {
                 assert_scan_semantic_eq(
-                    left_ctx,
-                    right_ctx,
+                    left_context,
+                    right_context,
                     left_scan,
                     right_scan,
-                    &format!("{ctx}: scan[{index}]"),
+                    &format!("{context}: scan[{index}]"),
                 );
             }
         }
-        _ => panic!("{ctx}: scanList presence mismatch"),
+        _ => panic!("{context}: scanList presence mismatch"),
     }
 }
 
-pub fn assert_isolation_window_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_isolation_window_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&IsolationWindow>,
     right: Option<&IsolationWindow>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
         (Some(left), Some(right)) => {
             assert_effective_params_eq(
-                left_ctx,
+                left_context,
                 &left.referenceable_param_group_refs,
                 &left.cv_params,
                 &left.user_params,
-                right_ctx,
+                right_context,
                 &right.referenceable_param_group_refs,
                 &right.cv_params,
                 &right.user_params,
-                ctx,
+                context,
             );
         }
-        _ => panic!("{ctx}: isolationWindow presence mismatch"),
+        _ => panic!("{context}: isolationWindow presence mismatch"),
     }
 }
 
-pub fn assert_selected_ion_list_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_selected_ion_list_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&SelectedIonList>,
     right: Option<&SelectedIonList>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
@@ -852,7 +845,7 @@ pub fn assert_selected_ion_list_semantic_eq(
             assert_eq!(
                 left.selected_ions.len(),
                 right.selected_ions.len(),
-                "{ctx}: selectedIon count mismatch"
+                "{context}: selectedIon count mismatch"
             );
             for (index, (left_ion, right_ion)) in left
                 .selected_ions
@@ -861,242 +854,245 @@ pub fn assert_selected_ion_list_semantic_eq(
                 .enumerate()
             {
                 assert_effective_params_eq(
-                    left_ctx,
+                    left_context,
                     &left_ion.referenceable_param_group_refs,
                     &left_ion.cv_params,
                     &left_ion.user_params,
-                    right_ctx,
+                    right_context,
                     &right_ion.referenceable_param_group_refs,
                     &right_ion.cv_params,
                     &right_ion.user_params,
-                    &format!("{ctx}: selectedIon[{index}] params mismatch"),
+                    &format!("{context}: selectedIon[{index}] params mismatch"),
                 );
             }
         }
-        _ => panic!("{ctx}: selectedIonList presence mismatch"),
+        _ => panic!("{context}: selectedIonList presence mismatch"),
     }
 }
 
-pub fn assert_activation_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_activation_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&Activation>,
     right: Option<&Activation>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
         (Some(left), Some(right)) => {
             assert_effective_params_eq(
-                left_ctx,
+                left_context,
                 &left.referenceable_param_group_refs,
                 &left.cv_params,
                 &left.user_params,
-                right_ctx,
+                right_context,
                 &right.referenceable_param_group_refs,
                 &right.cv_params,
                 &right.user_params,
-                ctx,
+                context,
             );
         }
-        _ => panic!("{ctx}: activation presence mismatch"),
+        _ => panic!("{context}: activation presence mismatch"),
     }
 }
 
-pub fn assert_precursor_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_precursor_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: &Precursor,
     right: &Precursor,
-    ctx: &str,
+    context: &str,
 ) {
     assert_opt_str_eq(
         left.spectrum_ref.as_deref(),
         right.spectrum_ref.as_deref(),
-        &format!("{ctx}: spectrumRef mismatch"),
+        &format!("{context}: spectrumRef mismatch"),
     );
     assert_opt_str_eq(
         left.source_file_ref.as_deref(),
         right.source_file_ref.as_deref(),
-        &format!("{ctx}: sourceFileRef mismatch"),
+        &format!("{context}: sourceFileRef mismatch"),
     );
     assert_opt_str_eq(
         left.external_spectrum_id.as_deref(),
         right.external_spectrum_id.as_deref(),
-        &format!("{ctx}: externalSpectrumID mismatch"),
+        &format!("{context}: externalSpectrumID mismatch"),
     );
     assert_isolation_window_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.isolation_window.as_ref(),
         right.isolation_window.as_ref(),
-        &format!("{ctx}: isolationWindow"),
+        &format!("{context}: isolationWindow"),
     );
     assert_selected_ion_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.selected_ion_list.as_ref(),
         right.selected_ion_list.as_ref(),
-        &format!("{ctx}: selectedIonList"),
+        &format!("{context}: selectedIonList"),
     );
     assert_activation_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.activation.as_ref(),
         right.activation.as_ref(),
-        &format!("{ctx}: activation"),
+        &format!("{context}: activation"),
     );
 }
 
-pub fn assert_precursor_list_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_precursor_list_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&PrecursorList>,
     right: Option<&PrecursorList>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
         (Some(left), Some(right)) => {
             assert_effective_params_eq(
-                left_ctx,
+                left_context,
                 &[],
                 &left.cv_params,
                 &left.user_params,
-                right_ctx,
+                right_context,
                 &[],
                 &right.cv_params,
                 &right.user_params,
-                &format!("{ctx}: precursorList params mismatch"),
+                &format!("{context}: precursorList params mismatch"),
             );
             assert_eq!(
                 left.precursors.len(),
                 right.precursors.len(),
-                "{ctx}: precursor count mismatch"
+                "{context}: precursor count mismatch"
             );
             for (index, (left_precursor, right_precursor)) in
                 left.precursors.iter().zip(&right.precursors).enumerate()
             {
                 assert_precursor_semantic_eq(
-                    left_ctx,
-                    right_ctx,
+                    left_context,
+                    right_context,
                     left_precursor,
                     right_precursor,
-                    &format!("{ctx}: precursor[{index}]"),
+                    &format!("{context}: precursor[{index}]"),
                 );
             }
         }
-        _ => panic!("{ctx}: precursorList presence mismatch"),
+        _ => panic!("{context}: precursorList presence mismatch"),
     }
 }
 
-pub fn assert_product_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_product_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: &Product,
     right: &Product,
-    ctx: &str,
+    context: &str,
 ) {
     assert_opt_str_eq(
         left.spectrum_ref.as_deref(),
         right.spectrum_ref.as_deref(),
-        &format!("{ctx}: spectrumRef mismatch"),
+        &format!("{context}: spectrumRef mismatch"),
     );
     assert_opt_str_eq(
         left.source_file_ref.as_deref(),
         right.source_file_ref.as_deref(),
-        &format!("{ctx}: sourceFileRef mismatch"),
+        &format!("{context}: sourceFileRef mismatch"),
     );
     assert_opt_str_eq(
         left.external_spectrum_id.as_deref(),
         right.external_spectrum_id.as_deref(),
-        &format!("{ctx}: externalSpectrumID mismatch"),
+        &format!("{context}: externalSpectrumID mismatch"),
     );
     assert_isolation_window_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.isolation_window.as_ref(),
         right.isolation_window.as_ref(),
-        &format!("{ctx}: isolationWindow"),
+        &format!("{context}: isolationWindow"),
     );
     assert_effective_params_eq(
-        left_ctx,
+        left_context,
         &[],
         &left.cv_params,
         &left.user_params,
-        right_ctx,
+        right_context,
         &[],
         &right.cv_params,
         &right.user_params,
-        &format!("{ctx}: parameter bundle mismatch"),
+        &format!("{context}: parameter bundle mismatch"),
     );
 }
 
-pub fn assert_product_list_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_product_list_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: Option<&ProductList>,
     right: Option<&ProductList>,
-    ctx: &str,
+    context: &str,
 ) {
     match (left, right) {
         (None, None) => {}
         (Some(left), Some(right)) => {
             assert_effective_params_eq(
-                left_ctx,
+                left_context,
                 &[],
                 &left.cv_params,
                 &left.user_params,
-                right_ctx,
+                right_context,
                 &[],
                 &right.cv_params,
                 &right.user_params,
-                &format!("{ctx}: productList params mismatch"),
+                &format!("{context}: productList params mismatch"),
             );
             assert_eq!(
                 left.products.len(),
                 right.products.len(),
-                "{ctx}: product count mismatch"
+                "{context}: product count mismatch"
             );
             for (index, (left_product, right_product)) in
                 left.products.iter().zip(&right.products).enumerate()
             {
                 assert_product_semantic_eq(
-                    left_ctx,
-                    right_ctx,
+                    left_context,
+                    right_context,
                     left_product,
                     right_product,
-                    &format!("{ctx}: product[{index}]"),
+                    &format!("{context}: product[{index}]"),
                 );
             }
         }
-        _ => panic!("{ctx}: productList presence mismatch"),
+        _ => panic!("{context}: productList presence mismatch"),
     }
 }
 
-pub fn assert_spectrum_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_spectrum_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: &Spectrum,
     right: &Spectrum,
     left_default_data_processing_ref: Option<&str>,
     right_default_data_processing_ref: Option<&str>,
-    ctx: &str,
+    context: &str,
 ) {
-    assert_eq!(left.id, right.id, "{ctx}: spectrum id mismatch");
-    assert_eq!(left.index, right.index, "{ctx}: spectrum index mismatch");
+    assert_eq!(left.id, right.id, "{context}: spectrum id mismatch");
+    assert_eq!(
+        left.index, right.index,
+        "{context}: spectrum index mismatch"
+    );
     assert_eq!(
         left.scan_number, right.scan_number,
-        "{ctx}: scan number mismatch"
+        "{context}: scan number mismatch"
     );
     assert_eq!(
         left.default_array_length, right.default_array_length,
-        "{ctx}: defaultArrayLength mismatch"
+        "{context}: defaultArrayLength mismatch"
     );
     assert_opt_str_eq(
         left.native_id.as_deref(),
         right.native_id.as_deref(),
-        &format!("{ctx}: nativeID mismatch"),
+        &format!("{context}: nativeID mismatch"),
     );
     assert_opt_str_eq(
         effective_data_processing_ref(
@@ -1107,94 +1103,91 @@ pub fn assert_spectrum_semantic_eq(
             right.data_processing_ref.as_deref(),
             right_default_data_processing_ref,
         ),
-        &format!("{ctx}: dataProcessingRef mismatch"),
+        &format!("{context}: dataProcessingRef mismatch"),
     );
     assert_opt_str_eq(
         left.source_file_ref.as_deref(),
         right.source_file_ref.as_deref(),
-        &format!("{ctx}: sourceFileRef mismatch"),
+        &format!("{context}: sourceFileRef mismatch"),
     );
     assert_opt_str_eq(
         left.spot_id.as_deref(),
         right.spot_id.as_deref(),
-        &format!("{ctx}: spotID mismatch"),
+        &format!("{context}: spotID mismatch"),
     );
-    // ms_level may be absent (None) in legacy 0.99.x fixtures that predate the
-    // attribute.  After a serialize→reparse roundtrip the writer can infer it from
-    // cvParams, so we only require equality when *both* sides declare it.
     if let (Some(l), Some(r)) = (left.ms_level, right.ms_level) {
-        assert_eq!(l, r, "{ctx}: msLevel mismatch");
+        assert_eq!(l, r, "{context}: msLevel mismatch");
     }
 
     assert_effective_params_eq(
-        left_ctx,
+        left_context,
         &left.referenceable_param_group_refs,
         &left.cv_params,
         &left.user_params,
-        right_ctx,
+        right_context,
         &right.referenceable_param_group_refs,
         &right.cv_params,
         &right.user_params,
-        &format!("{ctx}: spectrum parameter bundle mismatch"),
+        &format!("{context}: spectrum parameter bundle mismatch"),
     );
     assert_signature_vec_eq(
-        spectrum_description_params_signature(left_ctx, left.spectrum_description.as_ref()),
-        spectrum_description_params_signature(right_ctx, right.spectrum_description.as_ref()),
-        &format!("{ctx}: spectrumDescription parameter bundle mismatch"),
+        spectrum_description_params_signature(left_context, left.spectrum_description.as_ref()),
+        spectrum_description_params_signature(right_context, right.spectrum_description.as_ref()),
+        &format!("{context}: spectrumDescription parameter bundle mismatch"),
     );
 
     assert_scan_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         scan_list_of_spectrum(left),
         scan_list_of_spectrum(right),
-        &format!("{ctx}: scanList"),
+        &format!("{context}: scanList"),
     );
     assert_precursor_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         precursor_list_of_spectrum(left),
         precursor_list_of_spectrum(right),
-        &format!("{ctx}: precursorList"),
+        &format!("{context}: precursorList"),
     );
     assert_product_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         product_list_of_spectrum(left),
         product_list_of_spectrum(right),
-        &format!("{ctx}: productList"),
+        &format!("{context}: productList"),
     );
     assert_binary_data_array_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.binary_data_array_list.as_ref(),
         right.binary_data_array_list.as_ref(),
-        &format!("{ctx}: binaryDataArrayList"),
+        &format!("{context}: binaryDataArrayList"),
     );
 }
 
-pub fn assert_chromatogram_semantic_eq(
-    left_ctx: &SemanticCtx<'_>,
-    right_ctx: &SemanticCtx<'_>,
+pub(crate) fn assert_chromatogram_semantic_eq(
+    left_context: &SemanticContext<'_>,
+    right_context: &SemanticContext<'_>,
     left: &Chromatogram,
     right: &Chromatogram,
     left_default_data_processing_ref: Option<&str>,
     right_default_data_processing_ref: Option<&str>,
-    ctx: &str,
+    context: &str,
 ) {
-    assert_eq!(left.id, right.id, "{ctx}: chromatogram id mismatch");
+    assert_eq!(left.id, right.id, "{context}: chromatogram id mismatch");
     assert_opt_str_eq(
         left.native_id.as_deref(),
         right.native_id.as_deref(),
-        &format!("{ctx}: chromatogram nativeID mismatch"),
+        &format!("{context}: chromatogram nativeID mismatch"),
     );
     assert_eq!(
         left.index, right.index,
-        "{ctx}: chromatogram index mismatch"
+        "{context}: chromatogram index mismatch"
     );
     assert_eq!(
         left.default_array_length, right.default_array_length,
-        "{ctx}: defaultArrayLength mismatch"
+        "{context}: defaultArrayLength mismatch"
     );
     assert_opt_str_eq(
         effective_data_processing_ref(
@@ -1205,55 +1198,52 @@ pub fn assert_chromatogram_semantic_eq(
             right.data_processing_ref.as_deref(),
             right_default_data_processing_ref,
         ),
-        &format!("{ctx}: chromatogram dataProcessingRef mismatch"),
+        &format!("{context}: chromatogram dataProcessingRef mismatch"),
     );
     assert_effective_params_eq(
-        left_ctx,
+        left_context,
         &left.referenceable_param_group_refs,
         &left.cv_params,
         &left.user_params,
-        right_ctx,
+        right_context,
         &right.referenceable_param_group_refs,
         &right.cv_params,
         &right.user_params,
-        &format!("{ctx}: chromatogram parameter bundle mismatch"),
+        &format!("{context}: chromatogram parameter bundle mismatch"),
     );
     match (left.precursor.as_ref(), right.precursor.as_ref()) {
         (None, None) => {}
         (Some(left_precursor), Some(right_precursor)) => assert_precursor_semantic_eq(
-            left_ctx,
-            right_ctx,
+            left_context,
+            right_context,
             left_precursor,
             right_precursor,
-            &format!("{ctx}: chromatogram precursor"),
+            &format!("{context}: chromatogram precursor"),
         ),
-        _ => panic!("{ctx}: chromatogram precursor presence mismatch"),
+        _ => panic!("{context}: chromatogram precursor presence mismatch"),
     }
     match (left.product.as_ref(), right.product.as_ref()) {
         (None, None) => {}
         (Some(left_product), Some(right_product)) => assert_product_semantic_eq(
-            left_ctx,
-            right_ctx,
+            left_context,
+            right_context,
             left_product,
             right_product,
-            &format!("{ctx}: chromatogram product"),
+            &format!("{context}: chromatogram product"),
         ),
-        _ => panic!("{ctx}: chromatogram product presence mismatch"),
+        _ => panic!("{context}: chromatogram product presence mismatch"),
     }
     assert_binary_data_array_list_semantic_eq(
-        left_ctx,
-        right_ctx,
+        left_context,
+        right_context,
         left.binary_data_array_list.as_ref(),
         right.binary_data_array_list.as_ref(),
-        &format!("{ctx}: chromatogram binaryDataArrayList"),
+        &format!("{context}: chromatogram binaryDataArrayList"),
     );
 }
 
-// ---------------------------------------------------------------------------
 // Top-level assertion functions
-// ---------------------------------------------------------------------------
-
-pub fn assert_declared_counts_consistent(mzml: &MzML) {
+pub(crate) fn assert_declared_counts_consistent(mzml: &MzML) {
     if let Some(list) = mzml.cv_list.as_ref() {
         assert_optional_count_eq("cvList", list.count, list.cv.len());
     }
@@ -1396,12 +1386,12 @@ pub fn assert_declared_counts_consistent(mzml: &MzML) {
     }
 }
 
-pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
+pub(crate) fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
     assert_all_refs_resolved(left);
     assert_all_refs_resolved(right);
 
-    let left_ctx = SemanticCtx::new(left);
-    let right_ctx = SemanticCtx::new(right);
+    let left_context = SemanticContext::new(left);
+    let right_context = SemanticContext::new(right);
 
     assert_signature_vec_eq(
         left.cv_list
@@ -1447,13 +1437,13 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
         (None, None) => {}
         (Some(left_file_description), Some(right_file_description)) => {
             assert_effective_params_eq(
-                &left_ctx,
+                &left_context,
                 &left_file_description
                     .file_content
                     .referenceable_param_group_refs,
                 &left_file_description.file_content.cv_params,
                 &left_file_description.file_content.user_params,
-                &right_ctx,
+                &right_context,
                 &right_file_description
                     .file_content
                     .referenceable_param_group_refs,
@@ -1467,14 +1457,14 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                         .source_file_list
                         .source_file
                         .iter()
-                        .map(|item| source_file_signature(&left_ctx, item)),
+                        .map(|item| source_file_signature(&left_context, item)),
                 ),
                 sorted_signatures(
                     right_file_description
                         .source_file_list
                         .source_file
                         .iter()
-                        .map(|item| source_file_signature(&right_ctx, item)),
+                        .map(|item| source_file_signature(&right_context, item)),
                 ),
                 "fileDescription.sourceFileList mismatch",
             );
@@ -1483,13 +1473,13 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                     left_file_description
                         .contacts
                         .iter()
-                        .map(|item| contact_signature(&left_ctx, item)),
+                        .map(|item| contact_signature(&left_context, item)),
                 ),
                 sorted_signatures(
                     right_file_description
                         .contacts
                         .iter()
-                        .map(|item| contact_signature(&right_ctx, item)),
+                        .map(|item| contact_signature(&right_context, item)),
                 ),
                 "fileDescription.contacts mismatch",
             );
@@ -1504,7 +1494,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.samples
                         .iter()
-                        .map(|item| sample_signature(&left_ctx, item)),
+                        .map(|item| sample_signature(&left_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1515,7 +1505,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.samples
                         .iter()
-                        .map(|item| sample_signature(&right_ctx, item)),
+                        .map(|item| sample_signature(&right_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1528,7 +1518,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.instrument
                         .iter()
-                        .map(|item| instrument_signature(&left_ctx, item)),
+                        .map(|item| instrument_signature(&left_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1539,7 +1529,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.instrument
                         .iter()
-                        .map(|item| instrument_signature(&right_ctx, item)),
+                        .map(|item| instrument_signature(&right_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1564,7 +1554,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.data_processing
                         .iter()
-                        .map(|item| data_processing_signature(&left_ctx, item)),
+                        .map(|item| data_processing_signature(&left_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1575,7 +1565,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.data_processing
                         .iter()
-                        .map(|item| data_processing_signature(&right_ctx, item)),
+                        .map(|item| data_processing_signature(&right_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1588,7 +1578,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.scan_settings
                         .iter()
-                        .map(|item| scan_settings_signature(&left_ctx, item)),
+                        .map(|item| scan_settings_signature(&left_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1599,7 +1589,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 sorted_signatures(
                     list.scan_settings
                         .iter()
-                        .map(|item| scan_settings_signature(&right_ctx, item)),
+                        .map(|item| scan_settings_signature(&right_context, item)),
                 )
             })
             .unwrap_or_default(),
@@ -1607,8 +1597,8 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
     );
 
     assert_eq!(
-        run_signature(&left_ctx, &left.run),
-        run_signature(&right_ctx, &right.run),
+        run_signature(&left_context, &left.run),
+        run_signature(&right_context, &right.run),
         "run metadata mismatch"
     );
 
@@ -1629,8 +1619,8 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 .enumerate()
             {
                 assert_spectrum_semantic_eq(
-                    &left_ctx,
-                    &right_ctx,
+                    &left_context,
+                    &right_context,
                     left_spectrum,
                     right_spectrum,
                     left_spectrum_list.default_data_processing_ref.as_deref(),
@@ -1660,8 +1650,8 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
                 .enumerate()
             {
                 assert_chromatogram_semantic_eq(
-                    &left_ctx,
-                    &right_ctx,
+                    &left_context,
+                    &right_context,
                     left_chromatogram,
                     right_chromatogram,
                     left_chromatogram_list
@@ -1679,7 +1669,7 @@ pub fn assert_mzml_semantic_eq(left: &MzML, right: &MzML) {
     }
 }
 
-pub fn assert_mzml_structural_eq(left: &MzML, right: &MzML) {
+pub(crate) fn assert_mzml_structural_eq(left: &MzML, right: &MzML) {
     assert_eq!(left.run.id, right.run.id, "run id mismatch");
     assert_eq!(
         spectra(left).len(),
@@ -1701,29 +1691,32 @@ pub fn assert_mzml_structural_eq(left: &MzML, right: &MzML) {
     assert_eq!(left_chrom_ids, right_chrom_ids, "chromatogram ids mismatch");
 }
 
-pub fn assert_referenceable_param_group_refs_resolved(
+pub(crate) fn assert_referenceable_param_group_refs_resolved(
     refs: &[ReferenceableParamGroupRef],
     ref_group_ids: &BTreeSet<String>,
-    ctx: &str,
+    context: &str,
 ) {
     for group_ref in refs {
         assert!(
             ref_group_ids.contains(group_ref.r#ref.as_str()),
-            "{ctx} unresolved referenceableParamGroupRef: {}",
+            "{context} unresolved referenceableParamGroupRef: {}",
             group_ref.r#ref
         );
     }
 }
 
-pub fn assert_binary_data_array_lengths_consistent(arrays: &[BinaryDataArray], ctx: &str) {
+pub(crate) fn assert_binary_data_array_lengths_consistent(
+    arrays: &[BinaryDataArray],
+    context: &str,
+) {
     let mut canonical_len = None;
     for (index, array) in arrays.iter().enumerate() {
-        let array_ctx = format!("{ctx} binaryDataArray[{index}]");
+        let array_context = format!("{context} binaryDataArray[{index}]");
         if let (Some(binary), Some(array_length)) = (array.binary.as_ref(), array.array_length) {
             assert_eq!(
                 binary.len(),
                 array_length,
-                "{array_ctx}: arrayLength does not match payload length"
+                "{array_context}: arrayLength does not match payload length"
             );
         }
         if let Some(binary) = array.binary.as_ref() {
@@ -1732,7 +1725,7 @@ pub fn assert_binary_data_array_lengths_consistent(arrays: &[BinaryDataArray], c
                 if let Some(existing) = canonical_len {
                     assert_eq!(
                         len, existing,
-                        "{array_ctx}: payload length mismatch across arrays"
+                        "{array_context}: payload length mismatch across arrays"
                     );
                 } else {
                     canonical_len = Some(len);
@@ -1742,14 +1735,8 @@ pub fn assert_binary_data_array_lengths_consistent(arrays: &[BinaryDataArray], c
     }
 }
 
-/// Verify that every ref attribute in `mzml` points to an id that actually
-/// exists in the document.
-///
-/// **BUG FIX**: The original code mixed `spectrumList.defaultDataProcessingRef`
-/// and `chromatogramList.defaultDataProcessingRef` into a single variable.
-/// This version uses two separate variables so that spectrum checks use the
-/// spectrum default and chromatogram checks use the chromatogram default.
-pub fn assert_all_refs_resolved(mzml: &MzML) {
+/// Verify that every ref attribute in `mzml` points to an id that actually exists in the document.
+pub(crate) fn assert_all_refs_resolved(mzml: &MzML) {
     let source_file_ids = top_level_source_file_ids(mzml);
     let software_ids = top_level_software_ids(mzml);
     let dp_ids = top_level_dp_ids(mzml);
@@ -1945,8 +1932,6 @@ pub fn assert_all_refs_resolved(mzml: &MzML) {
         }
     }
 
-    // BUG FIX: use two separate variables for spectrum and chromatogram
-    // default data processing refs instead of a single combined variable.
     let spectrum_default_dp = mzml
         .run
         .spectrum_list
@@ -2173,35 +2158,36 @@ pub fn assert_all_refs_resolved(mzml: &MzML) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Roundtrip assertion functions
-// ---------------------------------------------------------------------------
-
-pub fn assert_semantic_roundtrip_via_xml(src: &MzML, ctx: &str) {
+pub(crate) fn assert_semantic_roundtrip_via_xml(src: &MzML, context: &str) {
     let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(src)
-        .unwrap_or_else(|e| panic!("bin_to_mzml failed for {ctx}: {e}"));
+        .unwrap_or_else(|e| panic!("bin_to_mzml failed for {context}: {e}"));
     let reparsed = super::parse_xml(&xml);
     assert_mzml_semantic_eq(src, &reparsed);
 }
 
-pub fn assert_semantic_roundtrip_via_ion(src: &MzML, compression_level: u8, ctx: &str) {
+pub(crate) fn assert_semantic_roundtrip_via_ion(src: &MzML, compression_level: u8, context: &str) {
     let bytes = super::encode_to_ion(src, compression_level, false);
     let decoded =
-        super::decode_ion(&bytes).unwrap_or_else(|e| panic!("decode failed for {ctx}: {e}"));
+        super::decode_ion(&bytes).unwrap_or_else(|e| panic!("decode failed for {context}: {e}"));
     assert_mzml_semantic_eq(src, &decoded);
 }
 
-pub fn assert_semantic_roundtrip_full_pipeline(src: &MzML, compression_level: u8, ctx: &str) {
+pub(crate) fn assert_semantic_roundtrip_full_pipeline(
+    src: &MzML,
+    compression_level: u8,
+    context: &str,
+) {
     let bytes = super::encode_to_ion(src, compression_level, false);
     let decoded =
-        super::decode_ion(&bytes).unwrap_or_else(|e| panic!("decode failed for {ctx}: {e}"));
+        super::decode_ion(&bytes).unwrap_or_else(|e| panic!("decode failed for {context}: {e}"));
     let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(&decoded)
-        .unwrap_or_else(|e| panic!("bin_to_mzml failed for {ctx}: {e}"));
+        .unwrap_or_else(|e| panic!("bin_to_mzml failed for {context}: {e}"));
     let reparsed = super::parse_xml(&xml);
     assert_mzml_semantic_eq(src, &reparsed);
 }
 
-pub fn assert_index_offsets_match_model(indexed: &IndexedmzML, ctx: &str) {
+pub(crate) fn assert_index_offsets_match_model(indexed: &IndexedmzML, context: &str) {
     let spectrum_ids: Vec<_> = spectra(&indexed.mzml)
         .iter()
         .map(|s| s.id.clone())
@@ -2214,12 +2200,12 @@ pub fn assert_index_offsets_match_model(indexed: &IndexedmzML, ctx: &str) {
     assert_eq!(
         indexed.index_list.spectrum.len(),
         spectrum_ids.len(),
-        "{ctx}: indexed spectrum count mismatch"
+        "{context}: indexed spectrum count mismatch"
     );
     assert_eq!(
         indexed.index_list.chromatogram.len(),
         chromatogram_ids.len(),
-        "{ctx}: indexed chromatogram count mismatch"
+        "{context}: indexed chromatogram count mismatch"
     );
 
     for (index, (offset, expected_id)) in indexed
@@ -2232,11 +2218,11 @@ pub fn assert_index_offsets_match_model(indexed: &IndexedmzML, ctx: &str) {
         assert_eq!(
             offset.id_ref.as_deref(),
             Some(expected_id.as_str()),
-            "{ctx}: indexed spectrum id mismatch at {index}"
+            "{context}: indexed spectrum id mismatch at {index}"
         );
         assert!(
             offset.offset > 0,
-            "{ctx}: indexed spectrum offset {index} is zero"
+            "{context}: indexed spectrum offset {index} is zero"
         );
     }
 
@@ -2250,20 +2236,19 @@ pub fn assert_index_offsets_match_model(indexed: &IndexedmzML, ctx: &str) {
         assert_eq!(
             offset.id_ref.as_deref(),
             Some(expected_id.as_str()),
-            "{ctx}: indexed chromatogram id mismatch at {index}"
+            "{context}: indexed chromatogram id mismatch at {index}"
         );
         assert!(
             offset.offset > 0,
-            "{ctx}: indexed chromatogram offset {index} is zero"
+            "{context}: indexed chromatogram offset {index} is zero"
         );
     }
 
-    // monotonicity checks
     let mut previous = 0_u64;
     for (index, offset) in indexed.index_list.spectrum.iter().enumerate() {
         assert!(
             offset.offset >= previous,
-            "{ctx}: indexed spectrum offsets are not monotonic at {index}"
+            "{context}: indexed spectrum offsets are not monotonic at {index}"
         );
         previous = offset.offset;
     }
@@ -2271,7 +2256,7 @@ pub fn assert_index_offsets_match_model(indexed: &IndexedmzML, ctx: &str) {
     for (index, offset) in indexed.index_list.chromatogram.iter().enumerate() {
         assert!(
             offset.offset >= previous,
-            "{ctx}: indexed chromatogram offsets are not monotonic at {index}"
+            "{context}: indexed chromatogram offsets are not monotonic at {index}"
         );
         previous = offset.offset;
     }
@@ -2279,7 +2264,7 @@ pub fn assert_index_offsets_match_model(indexed: &IndexedmzML, ctx: &str) {
     if !indexed.index_list.spectrum.is_empty() || !indexed.index_list.chromatogram.is_empty() {
         assert!(
             indexed.index_list_offset.is_some(),
-            "{ctx}: indexListOffset missing despite populated index entries"
+            "{context}: indexListOffset missing despite populated index entries"
         );
     }
 }

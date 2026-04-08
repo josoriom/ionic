@@ -1,17 +1,17 @@
 #![allow(unused_macros)]
 
-/// Parse a fixture once (cached via OnceLock).
+/// Parse a fixture once.
 ///
 /// Usage:
 /// ```ignore
-/// fixture!(tiny_pwiz_11, "pwiz/example_data/tiny.pwiz.1.1.mzML");
+/// test_file!(tiny_pwiz_11, "pwiz/example_data/tiny.pwiz.1.1.mzML");
 /// ```
-macro_rules! fixture {
+macro_rules! test_file {
     ($name:ident, $rel_path:expr) => {
         pub fn $name() -> &'static ionic::mzml::structs::MzML {
             static CACHE: std::sync::OnceLock<ionic::mzml::structs::MzML> =
                 std::sync::OnceLock::new();
-            CACHE.get_or_init(|| crate::common::parse_fixture($rel_path))
+            CACHE.get_or_init(|| crate::common::parse_test_file($rel_path))
         }
     };
 }
@@ -24,10 +24,10 @@ macro_rules! fixture {
 /// roundtrip_xml!(small_10_structural, small_pwiz_10, structural);
 /// ```
 macro_rules! roundtrip_xml {
-    ($name:ident, $fixture_fn:path) => {
+    ($name:ident, $test_file_fn:path) => {
         #[test]
         fn $name() {
-            let original = $fixture_fn();
+            let original = $test_file_fn();
             let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(original)
                 .expect("bin_to_mzml should succeed");
             let reparsed = ionic::mzml::parse_mzml::parse_mzml(xml.as_bytes())
@@ -35,10 +35,10 @@ macro_rules! roundtrip_xml {
             crate::common::assertions::assert_mzml_semantic_eq(original, &reparsed);
         }
     };
-    ($name:ident, $fixture_fn:path, structural) => {
+    ($name:ident, $test_file_fn:path, structural) => {
         #[test]
         fn $name() {
-            let original = $fixture_fn();
+            let original = $test_file_fn();
             let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(original)
                 .expect("bin_to_mzml should succeed");
             let reparsed = ionic::mzml::parse_mzml::parse_mzml(xml.as_bytes())
@@ -56,28 +56,28 @@ macro_rules! roundtrip_xml {
 /// roundtrip_ion!(tiny_11_f32, tiny_pwiz_11, level = 9, f32 = true, structural);
 /// ```
 macro_rules! roundtrip_ion {
-    ($name:ident, $fixture_fn:path, level = $level:expr) => {
+    ($name:ident, $test_file_fn:path, level = $level:expr) => {
         #[test]
         fn $name() {
-            let original = $fixture_fn();
+            let original = $test_file_fn();
             let bytes = crate::common::encode_to_ion(original, $level, false);
             let decoded = crate::common::decode_ion(&bytes).expect("decode should succeed");
             crate::common::assertions::assert_mzml_semantic_eq(original, &decoded);
         }
     };
-    ($name:ident, $fixture_fn:path, level = $level:expr, f32 = $f32:expr) => {
+    ($name:ident, $test_file_fn:path, level = $level:expr, f32 = $f32:expr) => {
         #[test]
         fn $name() {
-            let original = $fixture_fn();
+            let original = $test_file_fn();
             let bytes = crate::common::encode_to_ion(original, $level, $f32);
             let decoded = crate::common::decode_ion(&bytes).expect("decode should succeed");
             crate::common::assertions::assert_mzml_semantic_eq(original, &decoded);
         }
     };
-    ($name:ident, $fixture_fn:path, level = $level:expr, f32 = $f32:expr, structural) => {
+    ($name:ident, $test_file_fn:path, level = $level:expr, f32 = $f32:expr, structural) => {
         #[test]
         fn $name() {
-            let original = $fixture_fn();
+            let original = $test_file_fn();
             let bytes = crate::common::encode_to_ion(original, $level, $f32);
             let decoded = crate::common::decode_ion(&bytes).expect("decode should succeed");
             crate::common::assertions::assert_mzml_structural_eq(original, &decoded);
@@ -85,7 +85,7 @@ macro_rules! roundtrip_ion {
     };
 }
 
-/// Breaker test: clone fixture → mutate → Ion roundtrip → assert attributes survived.
+/// Breaker test: clone test_file → mutate → Ion roundtrip → assert attributes survived.
 ///
 /// Usage:
 /// ```ignore

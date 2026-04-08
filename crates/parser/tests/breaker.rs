@@ -1,7 +1,7 @@
 mod common;
 
-use common::builders::{ensure_first_product_mut, ensure_referenceable_param_group};
-use common::fixtures;
+use common::helpers::{ensure_first_product_mut, ensure_referenceable_param_group};
+use common::test_files;
 use common::{
     chromatogram_by_id, decode_ion, encode_to_ion, first_scan, first_scan_mut,
     product_list_of_spectrum, spectrum_by_id,
@@ -10,7 +10,7 @@ use ionic::mzml::structs::*;
 
 #[test]
 fn scan_attributes_not_lost() {
-    let mut src = fixtures::tiny_pwiz_11().clone();
+    let mut src = test_files::tiny_pwiz_11().clone();
     let source_file_id = src
         .file_description
         .as_ref()
@@ -74,7 +74,7 @@ fn scan_attributes_not_lost() {
 
 #[test]
 fn spectrum_product_attributes_not_lost() {
-    let mut src = fixtures::tiny_pwiz_11().clone();
+    let mut src = test_files::tiny_pwiz_11().clone();
     let source_file_id = src
         .file_description
         .as_ref()
@@ -128,7 +128,7 @@ fn spectrum_product_attributes_not_lost() {
 
 #[test]
 fn chrom_product_attributes_not_lost() {
-    let mut src = fixtures::tiny_pwiz_11().clone();
+    let mut src = test_files::tiny_pwiz_11().clone();
     let source_file_id = src
         .file_description
         .as_ref()
@@ -185,7 +185,7 @@ fn chrom_product_attributes_not_lost() {
 
 #[test]
 fn scan_referenceable_param_group_refs_not_lost() {
-    let mut src = fixtures::tiny_pwiz_11().clone();
+    let mut src = test_files::tiny_pwiz_11().clone();
     let ref_group_id = "pwiz-breaker-scan-ref-group";
     ensure_referenceable_param_group(&mut src, ref_group_id);
 
@@ -214,7 +214,7 @@ fn scan_referenceable_param_group_refs_not_lost() {
 
 #[test]
 fn binary_data_array_refs_not_lost() {
-    let mut src = fixtures::tiny_pwiz_11().clone();
+    let mut src = test_files::tiny_pwiz_11().clone();
     let ref_group_id = "pwiz-breaker-bda-ref-group";
     ensure_referenceable_param_group(&mut src, ref_group_id);
 

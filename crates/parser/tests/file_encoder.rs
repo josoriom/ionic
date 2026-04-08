@@ -1,68 +1,10 @@
-//! T3-5: File-based encoder output test.
-//!
-//! Tests the Ion encoder with `WritingMode::Streaming` (file-based output)
-//! by writing to a temporary file and reading it back.
+//! Tests the Ion encoder with WritingMode::Streaming
 
 mod common;
 
-use common::builders::{minimal_file_description, synthetic_binary_data_array};
-use ionic::ion::{encode, Decoder, WritingMode};
+use common::helpers::{minimal_file_description, synthetic_binary_data_array};
+use ionic::ion::{Decoder, WritingMode, encode};
 use ionic::mzml::structs::*;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Build a minimal MzML with multiple spectra for a more realistic test.
-fn build_multi_spectrum_mzml(n_spectra: usize, n_points: usize) -> MzML {
-    let spectra: Vec<Spectrum> = (0..n_spectra)
-        .map(|i| {
-            let mz: Vec<f64> = (0..n_points).map(|j| 100.0 + j as f64 + i as f64 * 0.1).collect();
-            let intensity: Vec<f64> = (0..n_points).map(|j| (j as f64 + 1.0) * 100.0).collect();
-            Spectrum {
-                id: format!("scan={}", i + 1),
-                index: Some(i as u32),
-                default_array_length: Some(n_points),
-                binary_data_array_list: Some(BinaryDataArrayList {
-                    count: Some(2),
-                    binary_data_arrays: vec![
-                        synthetic_binary_data_array(
-                            "MS:1000514",
-                            NumericType::Float64,
-                            BinaryData::F64(mz),
-                            Some(n_points),
-                        ),
-                        synthetic_binary_data_array(
-                            "MS:1000515",
-                            NumericType::Float64,
-                            BinaryData::F64(intensity),
-                            Some(n_points),
-                        ),
-                    ],
-                }),
-                ..Default::default()
-            }
-        })
-        .collect();
-
-    MzML {
-        file_description: Some(minimal_file_description()),
-        run: Run {
-            id: "file-test".to_string(),
-            spectrum_list: Some(SpectrumList {
-                count: Some(n_spectra),
-                spectra,
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[test]
 fn memory_mode_roundtrip_multi_spectrum() {
@@ -79,7 +21,6 @@ fn memory_mode_roundtrip_multi_spectrum() {
     let dec_spectra = common::spectra(&decoded);
     assert_eq!(orig_spectra.len(), dec_spectra.len());
 
-    // Verify first and last spectrum's m/z arrays
     for idx in [0, orig_spectra.len() - 1] {
         let orig_mz = common::first_array_values_by_accession(&orig_spectra[idx], "MS:1000514");
         let dec_mz = common::first_array_values_by_accession(&dec_spectra[idx], "MS:1000514");
@@ -96,21 +37,18 @@ fn streaming_mode_roundtrip_via_tempfile() {
     use std::fs;
 
     let mzml = build_multi_spectrum_mzml(5, 50);
-
-    // Create temp file
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("ionic_test_streaming.ion");
 
-    let mut file_output =
-        FileEncoderOutput::open_for_writing(temp_path.to_str().unwrap()).unwrap_or_else(|e| {
+    let mut file_output = FileEncoderOutput::open_for_writing(temp_path.to_str().unwrap())
+        .unwrap_or_else(|e| {
             panic!("failed to create FileEncoderOutput: {e}");
         });
 
     encode(&mzml, 3, false, WritingMode::Streaming, &mut file_output)
         .expect("streaming encode should succeed");
-    drop(file_output); // ensure flush
+    drop(file_output);
 
-    // Read back and decode
     let bytes = fs::read(&temp_path).expect("should read temp file");
     assert!(!bytes.is_empty(), "file should not be empty");
 
@@ -123,7 +61,6 @@ fn streaming_mode_roundtrip_via_tempfile() {
         "spectrum count mismatch"
     );
 
-    // Clean up
     let _ = fs::remove_file(&temp_path);
 }
 
@@ -134,27 +71,22 @@ fn memory_and_streaming_produce_equivalent_results() {
 
     let mzml = build_multi_spectrum_mzml(3, 20);
 
-    // Memory mode
     let mut mem_buf = Vec::new();
     encode(&mzml, 0, false, WritingMode::Memory, &mut mem_buf).expect("memory encode");
 
-    // Streaming mode
     let temp_path = std::env::temp_dir().join("ionic_test_equiv.ion");
-    let mut file_output =
-        FileEncoderOutput::open_for_writing(temp_path.to_str().unwrap())
-            .expect("create file output");
+    let mut file_output = FileEncoderOutput::open_for_writing(temp_path.to_str().unwrap())
+        .expect("create file output");
     encode(&mzml, 0, false, WritingMode::Streaming, &mut file_output).expect("streaming encode");
     drop(file_output); // ensure flush
     let stream_buf = fs::read(&temp_path).expect("read temp file");
 
-    // Decode both
     let mut mem_decoder = Decoder::open(&mem_buf).expect("mem decoder");
     let mem_decoded = mem_decoder.to_mzml().expect("mem to_mzml");
 
     let mut stream_decoder = Decoder::open(&stream_buf).expect("stream decoder");
     let stream_decoded = stream_decoder.to_mzml().expect("stream to_mzml");
 
-    // Compare decoded results
     let diffs = common::canonical_diff_paths(&mem_decoded, &stream_decoded);
     assert!(
         diffs.is_empty(),
@@ -162,13 +94,11 @@ fn memory_and_streaming_produce_equivalent_results() {
         diffs.join("\n")
     );
 
-    // Clean up
     let _ = fs::remove_file(&temp_path);
 }
 
 #[test]
 fn large_array_roundtrip_stress() {
-    // 10,000 element array — tests buffer handling for larger data
     let n = 10_000;
     let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.01).collect();
     let intensity: Vec<f64> = (0..n).map(|i| (i as f64).sin().abs() * 1e6).collect();
@@ -222,4 +152,55 @@ fn large_array_roundtrip_stress() {
     let dec_int = common::first_array_values_by_accession(&dec_spectra[0], "MS:1000515");
     assert_eq!(dec_mz, mz);
     assert_eq!(dec_int, intensity);
+}
+
+// Helpers
+
+/// Build a minimal MzML with multiple spectra for a more realistic test.
+fn build_multi_spectrum_mzml(n_spectra: usize, n_points: usize) -> MzML {
+    let spectra: Vec<Spectrum> = (0..n_spectra)
+        .map(|i| {
+            let mz: Vec<f64> = (0..n_points)
+                .map(|j| 100.0 + j as f64 + i as f64 * 0.1)
+                .collect();
+            let intensity: Vec<f64> = (0..n_points).map(|j| (j as f64 + 1.0) * 100.0).collect();
+            Spectrum {
+                id: format!("scan={}", i + 1),
+                index: Some(i as u32),
+                default_array_length: Some(n_points),
+                binary_data_array_list: Some(BinaryDataArrayList {
+                    count: Some(2),
+                    binary_data_arrays: vec![
+                        synthetic_binary_data_array(
+                            "MS:1000514",
+                            NumericType::Float64,
+                            BinaryData::F64(mz),
+                            Some(n_points),
+                        ),
+                        synthetic_binary_data_array(
+                            "MS:1000515",
+                            NumericType::Float64,
+                            BinaryData::F64(intensity),
+                            Some(n_points),
+                        ),
+                    ],
+                }),
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    MzML {
+        file_description: Some(minimal_file_description()),
+        run: Run {
+            id: "file-test".to_string(),
+            spectrum_list: Some(SpectrumList {
+                count: Some(n_spectra),
+                spectra,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }

@@ -1,13 +1,13 @@
 mod common;
 
 use common::assertions::*;
-use common::fixtures;
+use common::test_files;
 use common::{decode_ion, encode_to_ion, parse_xml, semantic_fingerprint};
 use ionic::mzml::bin_to_mzml::bin_to_mzml;
 
 #[test]
 fn full_pipeline_tiny11() {
-    let src = fixtures::tiny_pwiz_11();
+    let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 12, false);
     let out = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &out);
@@ -15,7 +15,7 @@ fn full_pipeline_tiny11() {
 
 #[test]
 fn full_pipeline_tiny10() {
-    let src = fixtures::tiny_pwiz_10();
+    let src = test_files::tiny_pwiz_10();
     let bytes = encode_to_ion(src, 7, false);
     let out = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &out);
@@ -23,7 +23,7 @@ fn full_pipeline_tiny10() {
 
 #[test]
 fn mixed_pipeline_xml_then_ion() {
-    let src = fixtures::tiny_pwiz_11();
+    let src = test_files::tiny_pwiz_11();
     let xml = bin_to_mzml(src).expect("bin_to_mzml should succeed");
     let reparsed = parse_xml(&xml);
 
@@ -34,7 +34,7 @@ fn mixed_pipeline_xml_then_ion() {
 
 #[test]
 fn repeated_roundtrip_stability() {
-    let src = fixtures::tiny_pwiz_11();
+    let src = test_files::tiny_pwiz_11();
     let mut last_fp = semantic_fingerprint(src);
 
     for iter in 0..25 {
@@ -47,16 +47,16 @@ fn repeated_roundtrip_stability() {
 }
 
 #[test]
-fn internal_fixture_regression_guard_099_10() {
-    let src = common::parse_fixture("crates/parser/data/mzml/tiny.pwiz.mzML0.99.10.mzML");
+fn internal_test_file_regression_guard_099_10() {
+    let src = common::parse_test_file("crates/parser/data/mzml/tiny.pwiz.mzML0.99.10.mzML");
     let bytes = encode_to_ion(&src, 12, false);
     let out = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(&src, &out);
 }
 
 #[test]
-fn internal_fixture_regression_guard_anpc() {
-    let src = fixtures::anpc_test_mzml();
+fn internal_test_file_regression_guard_anpc() {
+    let src = test_files::anpc_test_mzml();
     let bytes = encode_to_ion(src, 12, false);
     let out = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &out);
