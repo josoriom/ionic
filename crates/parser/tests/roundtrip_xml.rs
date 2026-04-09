@@ -62,7 +62,6 @@ fn xml_roundtrip_idempotent() {
 fn all_test_files_can_parse() {
     for rel in common::test_files::ALL_TEST_FILES {
         let mzml = common::parse_test_file(rel);
-        // Just verify it parsed without panic
         let _ = common::spectra(&mzml);
     }
 }

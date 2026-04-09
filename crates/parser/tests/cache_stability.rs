@@ -3,8 +3,6 @@ mod common;
 use common::assertions::*;
 use common::test_files;
 
-/// Checks that reading the same spectrum or chromatogram many times always gives the exact same result,
-/// so access is stable and does not change data.
 #[test]
 fn repeated_spectrum_access_is_stable() {
     let mzml = test_files::tiny_pwiz_11();

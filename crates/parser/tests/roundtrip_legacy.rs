@@ -3,7 +3,6 @@ mod common;
 
 use common::test_files;
 
-// XML roundtrips for legacy test_files
 roundtrip_xml!(legacy_099_9_pwiz, test_files::legacy_pwiz_099_9);
 roundtrip_xml!(legacy_099_10_pwiz, test_files::legacy_pwiz_099_10);
 roundtrip_xml!(legacy_099_9_msdata, test_files::legacy_msdata_099_9);
@@ -16,7 +15,6 @@ roundtrip_xml!(
     test_files::legacy_tiny4_ltq_ft_099_0
 );
 
-// Ion roundtrips for legacy test_files
 roundtrip_ion!(
     legacy_099_9_pwiz_ion,
     test_files::legacy_pwiz_099_9,

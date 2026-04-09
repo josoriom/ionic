@@ -21,8 +21,6 @@ fn mzml_cached() -> &'static MzML {
 #[test]
 fn tiny_msdata_mzml0_99_10_header_sections() {
     let mzml = parse_b(&MZML_CACHE, PATH);
-
-    // cvList
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -36,11 +34,7 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
         cv0.uri.as_deref(),
         Some("http://psidev.sourceforge.net/ms/xml/mzdata/psi-ms.2.0.2.obo")
     );
-
-    // fileDescription
     let file_desc = &mzml.file_description.as_ref().unwrap();
-
-    // fileContent
     assert_eq!(file_desc.file_content.cv_params.len(), 1);
     assert_cv(
         CV_REF_MODE,
@@ -51,8 +45,6 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
         Some(""),
         None,
     );
-
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 2);
 
     let sf0 = &file_desc.source_file_list.source_file[0];
@@ -83,8 +75,6 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
     assert_eq!(sf1.name, "parameters.par");
     assert_eq!(sf1.location, "file:///C:/settings/");
     assert!(sf1.cv_param.is_empty());
-
-    // referenceableParamGroupList
     let rpgl = mzml
         .referenceable_param_group_list
         .as_ref()
@@ -115,15 +105,11 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
             None,
         );
     }
-
-    // sampleList
     let sample_list = mzml.sample_list.as_ref().expect("sampleList parsed");
     assert_eq!(sample_list.samples.len(), 1);
     let sample0 = &sample_list.samples[0];
     assert_eq!(sample0.id, "sp1");
     assert_eq!(sample0.name, "Sample1");
-
-    // instrumentList
     let inst_list = mzml
         .instrument_list
         .as_ref()
@@ -149,8 +135,6 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
         Some("23433"),
         None,
     );
-
-    // componentList
     let cl0 = inst0.component_list.as_ref().expect("componentList parsed");
     assert_eq!(cl0.source.len(), 1);
     assert_eq!(cl0.analyzer.len(), 1);
@@ -191,8 +175,6 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
         Some(""),
         None,
     );
-
-    // softwareList
     let sw_list = mzml.software_list.as_ref().expect("softwareList parsed");
     assert_eq!(sw_list.software.len(), 3);
 
@@ -234,8 +216,6 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
         "Xcalibur",
         Some("2.0.5"),
     );
-
-    // dataProcessingList
     let dp_list = mzml
         .data_processing_list
         .as_ref()
@@ -275,8 +255,6 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
         Some(""),
         None,
     );
-
-    // scanSettingsList
     let ss_list = mzml
         .scan_settings_list
         .as_ref()
@@ -347,13 +325,9 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
 fn tiny_msdata_mzml0_99_10_first_spectrum() {
     let mzml = parse_b(&MZML_CACHE, PATH);
     let run = &mzml.run;
-
-    // spectrumList
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
     let s0 = &sl.spectra[0];
-
-    // spectrum
     assert_eq!(s0.index, Some(0));
     assert_eq!(s0.id, "S19");
     assert_eq!(s0.cv_params.len(), 2);
@@ -375,8 +349,6 @@ fn tiny_msdata_mzml0_99_10_first_spectrum() {
         Some("1"),
         None,
     );
-
-    // spectrumDescription
     let sd = spectrum_description(s0);
     assert_cv(
         CV_REF_MODE,
@@ -432,14 +404,10 @@ fn tiny_msdata_mzml0_99_10_first_spectrum() {
         Some("16675500"),
         None,
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s0)
         .map(|p| p.precursors.len())
         .unwrap_or(0);
     assert_eq!(pl, 0);
-
-    // scan
     let scl = spectrum_scan_list(s0);
     assert_eq!(scl.scans.len(), 1);
     let scan0 = &scl.scans[0];
@@ -461,8 +429,6 @@ fn tiny_msdata_mzml0_99_10_first_spectrum() {
         Some("+ c NSI Full ms [ 400.00-1800.00]"),
         None,
     );
-
-    // scanWindowList
     let swl = scan0
         .scan_window_list
         .as_ref()
@@ -487,8 +453,6 @@ fn tiny_msdata_mzml0_99_10_first_spectrum() {
         Some("1800"),
         None,
     );
-
-    // binaryDataArrayList
     let bal = s0
         .binary_data_array_list
         .as_ref()
@@ -535,13 +499,9 @@ fn tiny_msdata_mzml0_99_10_first_spectrum() {
 fn tiny_msdata_mzml0_99_10_second_spectrum() {
     let mzml = parse_b(&MZML_CACHE, PATH);
     let run = &mzml.run;
-
-    // spectrumList
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
     let s1 = &sl.spectra[1];
-
-    // spectrum
     assert_eq!(s1.index, Some(1));
     assert_eq!(s1.id, "S20");
     assert_eq!(s1.cv_params.len(), 2);
@@ -563,8 +523,6 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("2"),
         None,
     );
-
-    // spectrumDescription
     let sd = spectrum_description(s1);
     assert_cv(
         CV_REF_MODE,
@@ -620,14 +578,10 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("16675500"),
         None,
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s1).expect("precursorList parsed");
     assert_eq!(pl.precursors.len(), 1);
     let p0 = &pl.precursors[0];
     assert_eq!(p0.spectrum_ref.as_deref(), Some("S19"));
-
-    // isolationWindow
     let iw = p0
         .isolation_window
         .as_ref()
@@ -659,8 +613,6 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("2"),
         None,
     );
-
-    // selectedIonList
     let sil = p0
         .selected_ion_list
         .as_ref()
@@ -686,8 +638,6 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("2"),
         None,
     );
-
-    // activation
     let act = p0.activation.as_ref().expect("activation parsed");
     assert_cv(
         CV_REF_MODE,
@@ -707,8 +657,6 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("35"),
         Some("electron volt"),
     );
-
-    // scan
     let scl = spectrum_scan_list(s1);
     assert_eq!(scl.scans.len(), 1);
     let scan1 = &scl.scans[0];
@@ -730,8 +678,6 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("+ c d Full ms2  445.35@cid35.00 [ 110.00-905.00]"),
         None,
     );
-
-    // scanWindowList
     let swl = scan1
         .scan_window_list
         .as_ref()
@@ -756,8 +702,6 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         Some("905"),
         None,
     );
-
-    // binaryDataArrayList
     let bal = s1
         .binary_data_array_list
         .as_ref()
@@ -829,7 +773,7 @@ fn tiny_msdata_mzml0_99_10_s19_mz_binary() {
         .expect("binaryDataArrayList parsed");
     assert_eq!(bdal.binary_data_arrays.len(), 2);
 
-    let bda = &bdal.binary_data_arrays[0]; // m/z array
+    let bda = &bdal.binary_data_arrays[0];
     assert_eq!(bda.array_length, Some(10));
     assert_eq!(bda.encoded_length, Some(108));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
@@ -858,7 +802,7 @@ fn tiny_msdata_mzml0_99_10_s19_intensity_binary() {
         .expect("binaryDataArrayList parsed");
     assert_eq!(bdal.binary_data_arrays.len(), 2);
 
-    let bda = &bdal.binary_data_arrays[1]; // intensity array
+    let bda = &bdal.binary_data_arrays[1];
     assert_eq!(bda.array_length, Some(10));
     assert_eq!(bda.encoded_length, Some(108));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
@@ -887,7 +831,7 @@ fn tiny_msdata_mzml0_99_10_s20_mz_binary() {
         .expect("binaryDataArrayList parsed");
     assert_eq!(bdal.binary_data_arrays.len(), 2);
 
-    let bda = &bdal.binary_data_arrays[0]; // m/z array
+    let bda = &bdal.binary_data_arrays[0];
     println!("--::>>{:#?}", bda);
     assert_eq!(bda.array_length, Some(20));
     assert_eq!(bda.encoded_length, Some(216));
@@ -917,7 +861,7 @@ fn tiny_msdata_mzml0_99_10_s20_intensity_binary() {
         .expect("binaryDataArrayList parsed");
     assert_eq!(bdal.binary_data_arrays.len(), 2);
 
-    let bda = &bdal.binary_data_arrays[1]; // intensity array
+    let bda = &bdal.binary_data_arrays[1];
     assert_eq!(bda.array_length, Some(20));
     assert_eq!(bda.encoded_length, Some(216));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));

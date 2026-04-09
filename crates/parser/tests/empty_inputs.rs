@@ -1,4 +1,3 @@
-//! Every input should ensure they return sensible defaults or errors, dont panic.
 mod common;
 
 use ionic::ion::{Decoder, WritingMode, encode};
@@ -8,7 +7,6 @@ use ionic::mzml::{
     structs::*,
 };
 
-// parse_mzml
 #[test]
 fn parse_mzml_empty_bytes() {
     let result = parse_mzml(b"");
@@ -48,7 +46,6 @@ fn parse_indexed_mzml_minimal() {
     assert!(result.is_ok(), "minimal indexed mzML should parse");
 }
 
-// bin_to_mzml
 #[test]
 fn bin_to_mzml_empty_mzml_returns_error() {
     let mzml = MzML::default();
@@ -82,7 +79,6 @@ fn bin_to_mzml_minimal_mzml_succeeds() {
     );
 }
 
-// Ion encoder
 #[test]
 fn encode_empty_mzml() {
     let mzml = MzML::default();
@@ -120,7 +116,6 @@ fn encode_mzml_no_arrays() {
     );
 }
 
-// Ion decoder
 #[test]
 fn decoder_open_empty_bytes() {
     let result = Decoder::open(b"");
@@ -149,7 +144,6 @@ fn decoder_open_too_small() {
     );
 }
 
-// Roundtrip: encode → decode with empty data
 #[test]
 fn roundtrip_empty_mzml() {
     let mzml = MzML {

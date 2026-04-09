@@ -15,7 +15,8 @@ use crate::encoder::utilities::{
     meta_collector::{
         array_type_accession_from_binary_data_array, parse_accession_tail_raw, ArrayPolicy,
         CompressedMetaSections, GlobalCounts, MetaCollector, PackedMeta, ACCESSION_32BIT_FLOAT,
-        ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY, ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY,
+        ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY, ACCESSION_MZ_ARRAY,
+        ACCESSION_TIME_ARRAY,
     },
 };
 

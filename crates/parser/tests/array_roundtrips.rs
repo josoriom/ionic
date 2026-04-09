@@ -1,4 +1,3 @@
-//! Tests all 6 BinaryData variants (F64, F32, F16, I64, I32, I16) through the Ion encode-decode roundtrip, both with deterministic values and
 mod common;
 
 use common::binary_ext::BinaryDataExt;
@@ -108,8 +107,6 @@ fn roundtrip_single_element_per_type() {
         );
     }
 }
-
-// Compression level sweep
 #[test]
 fn roundtrip_at_compression_levels() {
     let values = vec![100.0_f64, 200.0, 300.0, 400.0, 500.0];
@@ -133,8 +130,6 @@ fn roundtrip_at_compression_levels() {
         );
     }
 }
-
-// force_f32 mode test
 #[test]
 fn roundtrip_force_f32_downcasts() {
     let values = vec![100.0_f64, 200.0, 300.0];

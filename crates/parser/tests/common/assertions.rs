@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-//! Semantic / structural equality checking assertions.
 use std::collections::{BTreeSet, HashMap};
 
 use ionic::mzml::structs::*;
@@ -12,11 +11,9 @@ use super::{
     top_level_sample_ids, top_level_software_ids, top_level_source_file_ids,
 };
 
-// Constants
 pub const EPS_REL_F64: f64 = 1e-9;
 pub const EPS_REL_F32: f64 = 1e-5;
 
-// SemanticContext
 pub struct SemanticContext<'a> {
     ref_groups: HashMap<&'a str, &'a ReferenceableParamGroup>,
 }
@@ -62,7 +59,6 @@ impl<'a> SemanticContext<'a> {
     }
 }
 
-// Text normalization
 pub(crate) fn normalized_text(value: Option<&str>) -> Option<&str> {
     value.and_then(|text| {
         let trimmed = text.trim();
@@ -125,7 +121,6 @@ pub(crate) fn canonical_value_text(value: Option<&str>) -> Option<String> {
     })
 }
 
-// Signature functions
 pub(crate) fn cv_param_signature(param: &CvParam) -> String {
     let canonical_name = if normalized_text(param.accession.as_deref()).is_some() {
         None
@@ -172,7 +167,6 @@ pub(crate) fn sorted_signatures(values: impl IntoIterator<Item = String>) -> Vec
     out
 }
 
-// Element-level signature functions
 pub(crate) fn source_file_refs_signature(list: Option<&SourceFileRefList>) -> Vec<String> {
     list.map(|list| {
         sorted_signatures(
@@ -480,7 +474,6 @@ pub(crate) fn spectrum_description_params_signature(
         .unwrap_or_default()
 }
 
-// Assertion helpers
 pub(crate) fn assert_signature_vec_eq(left: Vec<String>, right: Vec<String>, context: &str) {
     assert_eq!(left, right, "{context}: semantic signature mismatch");
 }
@@ -586,7 +579,6 @@ pub(crate) fn effective_binary_data_array_length(array: &BinaryDataArray) -> Opt
         .or_else(|| array.binary.as_ref().map(|b| b.len()))
 }
 
-// Deep comparison functions
 
 pub(crate) fn assert_binary_data_array_semantic_eq(
     left_context: &SemanticContext<'_>,
@@ -1242,7 +1234,6 @@ pub(crate) fn assert_chromatogram_semantic_eq(
     );
 }
 
-// Top-level assertion functions
 pub(crate) fn assert_declared_counts_consistent(mzml: &MzML) {
     if let Some(list) = mzml.cv_list.as_ref() {
         assert_optional_count_eq("cvList", list.count, list.cv.len());
@@ -1735,7 +1726,6 @@ pub(crate) fn assert_binary_data_array_lengths_consistent(
     }
 }
 
-/// Verify that every ref attribute in `mzml` points to an id that actually exists in the document.
 pub(crate) fn assert_all_refs_resolved(mzml: &MzML) {
     let source_file_ids = top_level_source_file_ids(mzml);
     let software_ids = top_level_software_ids(mzml);
@@ -2158,7 +2148,6 @@ pub(crate) fn assert_all_refs_resolved(mzml: &MzML) {
     }
 }
 
-// Roundtrip assertion functions
 pub(crate) fn assert_semantic_roundtrip_via_xml(src: &MzML, context: &str) {
     let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(src)
         .unwrap_or_else(|e| panic!("bin_to_mzml failed for {context}: {e}"));

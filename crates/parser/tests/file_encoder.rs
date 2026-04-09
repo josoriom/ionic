@@ -1,5 +1,3 @@
-//! Tests the Ion encoder with WritingMode::Streaming
-
 mod common;
 
 use common::helpers::{minimal_file_description, synthetic_binary_data_array};
@@ -154,9 +152,6 @@ fn large_array_roundtrip_stress() {
     assert_eq!(dec_int, intensity);
 }
 
-// Helpers
-
-/// Build a minimal MzML with multiple spectra for a more realistic test.
 fn build_multi_spectrum_mzml(n_spectra: usize, n_points: usize) -> MzML {
     let spectra: Vec<Spectrum> = (0..n_spectra)
         .map(|i| {

@@ -1,5 +1,3 @@
-// ── pwiz test_files ──────────────────────────────────────────────────────
-
 test_file!(tiny_pwiz_10, "crates/parser/data/mzml/tiny.pwiz.1.0.mzML");
 test_file!(tiny_pwiz_11, "crates/parser/data/mzml/tiny.pwiz.1.1.mzML");
 test_file!(
@@ -17,8 +15,6 @@ test_file!(
     small_miape_pwiz_11,
     "crates/parser/data/mzml/small_miape.pwiz.1.1.mzML"
 );
-
-// ── Internal parser test_files ───────────────────────────────────────────
 
 test_file!(anpc_test_mzml, "crates/parser/data/mzml/test.mzML");
 test_file!(
@@ -54,7 +50,6 @@ test_file!(
     "crates/parser/data/mzml/tiny4_LTQ-FT.mzML0.99.0.mzML"
 );
 
-/// All pwiz test_file paths for iteration.
 pub const PWIZ_TEST_FILES: &[&str] = &[
     "crates/parser/data/mzml/tiny.pwiz.1.0.mzML",
     "crates/parser/data/mzml/tiny.pwiz.1.1.mzML",
@@ -66,7 +61,6 @@ pub const PWIZ_TEST_FILES: &[&str] = &[
     "crates/parser/data/mzml/small_miape.pwiz.1.1.mzML",
 ];
 
-/// All internal mzML test_file paths for iteration.
 pub const INTERNAL_MZML_TEST_FILES: &[&str] = &[
     "crates/parser/data/mzml/test.mzML",
     "crates/parser/data/mzml/tiny.pwiz.mzML0.99.10.mzML",
@@ -79,7 +73,6 @@ pub const INTERNAL_MZML_TEST_FILES: &[&str] = &[
     "crates/parser/data/mzml/tiny4_LTQ-FT.mzML0.99.0.mzML",
 ];
 
-/// All test_file paths combined.
 pub const ALL_TEST_FILES: &[&str] = &[
     "crates/parser/data/mzml/tiny.pwiz.1.0.mzML",
     "crates/parser/data/mzml/tiny.pwiz.1.1.mzML",

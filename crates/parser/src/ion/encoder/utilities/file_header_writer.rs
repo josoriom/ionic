@@ -8,13 +8,13 @@ use crate::ion::utilities::parse_header::{
     HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, HEADER_LEN_CHROM_ARRAYREFS, HEADER_LEN_CHROM_ENTRIES,
     HEADER_LEN_CHROM_META, HEADER_LEN_FILTER_INDEX, HEADER_LEN_GLOBAL_META,
     HEADER_LEN_PACKED_CHROMS, HEADER_LEN_PACKED_SPECTRA, HEADER_LEN_SPEC_ARRAYREFS,
-    HEADER_LEN_SPEC_ENTRIES, HEADER_LEN_SPEC_META, HEADER_OFF_FILTER_INDEX,
-    HEADER_OFFSET_CHROM_ARRAYREFS, HEADER_OFFSET_CHROM_ENTRIES, HEADER_OFFSET_CHROM_META,
-    HEADER_OFFSET_GLOBAL_META, HEADER_OFFSET_PACKED_CHROMS, HEADER_OFFSET_PACKED_SPECTRA,
-    HEADER_OFFSET_SPEC_ARRAYREFS, HEADER_OFFSET_SPEC_ENTRIES, HEADER_OFFSET_SPEC_META,
-    HEADER_SPEC_ARRAY_TYPE_COUNT, HEADER_SPEC_META_CRC32, HEADER_SPEC_META_NUMERIC_COUNT,
-    HEADER_SPEC_META_ROW_COUNT, HEADER_SPEC_META_STRING_COUNT, HEADER_SPEC_META_UNCOMPRESSED_SIZE,
-    HEADER_SPECTRUM_BLOCK_COUNT, HEADER_SPECTRUM_COUNT, HEADER_TARGET_BLOCK_SIZE,
+    HEADER_LEN_SPEC_ENTRIES, HEADER_LEN_SPEC_META, HEADER_OFFSET_CHROM_ARRAYREFS,
+    HEADER_OFFSET_CHROM_ENTRIES, HEADER_OFFSET_CHROM_META, HEADER_OFFSET_GLOBAL_META,
+    HEADER_OFFSET_PACKED_CHROMS, HEADER_OFFSET_PACKED_SPECTRA, HEADER_OFFSET_SPEC_ARRAYREFS,
+    HEADER_OFFSET_SPEC_ENTRIES, HEADER_OFFSET_SPEC_META, HEADER_OFF_FILTER_INDEX,
+    HEADER_SPECTRUM_BLOCK_COUNT, HEADER_SPECTRUM_COUNT, HEADER_SPEC_ARRAY_TYPE_COUNT,
+    HEADER_SPEC_META_CRC32, HEADER_SPEC_META_NUMERIC_COUNT, HEADER_SPEC_META_ROW_COUNT,
+    HEADER_SPEC_META_STRING_COUNT, HEADER_SPEC_META_UNCOMPRESSED_SIZE, HEADER_TARGET_BLOCK_SIZE,
     HEADER_TOTAL_FILE_SIZE,
 };
 
@@ -28,7 +28,6 @@ pub(crate) struct FileHeader {
     pub(crate) array_filter_id: u8,
     pub(crate) target_block_size: u64,
 
-    // Section offsets and lengths
     pub(crate) offset_spec_entries: u64,
     pub(crate) len_spec_entries: u64,
     pub(crate) offset_spec_arrayrefs: u64,
@@ -48,13 +47,11 @@ pub(crate) struct FileHeader {
     pub(crate) offset_packed_chroms: u64,
     pub(crate) len_packed_chroms: u64,
 
-    // Block counts
     pub(crate) spectrum_block_count: u64,
     pub(crate) chrom_block_count: u64,
     pub(crate) spectrum_count: u64,
     pub(crate) chrom_count: u64,
 
-    // Metadata pool counts
     pub(crate) spec_meta_row_count: u64,
     pub(crate) spec_meta_numeric_count: u64,
     pub(crate) spec_meta_string_count: u64,
@@ -67,19 +64,15 @@ pub(crate) struct FileHeader {
     pub(crate) spec_array_type_count: u64,
     pub(crate) chrom_array_type_count: u64,
 
-    // Uncompressed sizes
     pub(crate) spec_meta_uncompressed_size: u64,
     pub(crate) chrom_meta_uncompressed_size: u64,
     pub(crate) global_meta_uncompressed_size: u64,
 
-    // RT index
     pub(crate) off_filter_index: u64,
     pub(crate) len_filter_index: u64,
 
-    // File size
     pub(crate) total_file_size: u64,
 
-    // crc32
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
     pub(crate) global_meta_crc32: u32,
@@ -92,15 +85,12 @@ impl FileHeader {
         buf[8] = 0u8; // endianness_flag: little-endian
         patch_u16_at(buf, HEADER_FORMAT_VERSION, 1u16);
 
-        // Compression config
         patch_u8_at(buf, HEADER_CODEC_ID, self.compression_codec);
         patch_u8_at(buf, HEADER_COMPRESSION_LEVEL, self.compression_level);
         patch_u8_at(buf, HEADER_ARRAY_FILTER_ID, self.array_filter_id);
 
-        // Target block size
         patch_u64_at(buf, HEADER_TARGET_BLOCK_SIZE, self.target_block_size);
 
-        // Section offsets and lengths
         patch_u64_at(buf, HEADER_OFFSET_SPEC_ENTRIES, self.offset_spec_entries);
         patch_u64_at(buf, HEADER_LEN_SPEC_ENTRIES, self.len_spec_entries);
         patch_u64_at(
@@ -132,7 +122,6 @@ impl FileHeader {
         patch_u64_at(buf, HEADER_OFFSET_PACKED_CHROMS, self.offset_packed_chroms);
         patch_u64_at(buf, HEADER_LEN_PACKED_CHROMS, self.len_packed_chroms);
 
-        // Counts
         patch_u64_at(buf, HEADER_SPECTRUM_BLOCK_COUNT, self.spectrum_block_count);
         patch_u64_at(buf, HEADER_CHROM_BLOCK_COUNT, self.chrom_block_count);
         patch_u64_at(buf, HEADER_SPECTRUM_COUNT, self.spectrum_count);
@@ -185,7 +174,6 @@ impl FileHeader {
             self.chrom_array_type_count,
         );
 
-        // Uncompressed sizes
         patch_u64_at(
             buf,
             HEADER_SPEC_META_UNCOMPRESSED_SIZE,
@@ -202,14 +190,11 @@ impl FileHeader {
             self.global_meta_uncompressed_size,
         );
 
-        // RT index
         patch_u64_at(buf, HEADER_OFF_FILTER_INDEX, self.off_filter_index);
         patch_u64_at(buf, HEADER_LEN_FILTER_INDEX, self.len_filter_index);
 
-        // File size
         patch_u64_at(buf, HEADER_TOTAL_FILE_SIZE, self.total_file_size);
 
-        // crc32
         patch_u32_at(buf, HEADER_SPEC_META_CRC32, self.spec_meta_crc32);
         patch_u32_at(buf, HEADER_CHROM_META_CRC32, self.chrom_meta_crc32);
         patch_u32_at(buf, HEADER_GLOBAL_META_CRC32, self.global_meta_crc32);

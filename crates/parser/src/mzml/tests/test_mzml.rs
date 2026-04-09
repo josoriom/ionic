@@ -40,8 +40,6 @@ fn anpc_mzml1_1_0_header_sections() {
     );
 
     let file_desc = &mzml.file_description.as_ref().unwrap();
-
-    // fileContent
     assert_eq!(file_desc.file_content.cv_params.len(), 2);
     assert_cv(
         CV_REF_MODE,
@@ -61,8 +59,6 @@ fn anpc_mzml1_1_0_header_sections() {
         Some(""),
         None,
     );
-
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 1);
     let sf0 = &file_desc.source_file_list.source_file[0];
     assert_eq!(sf0.id, "anpc_file.d_x005c_Analysis.baf");
@@ -356,8 +352,6 @@ fn anpc_mzml1_1_0_first_spectrum() {
         Some(""),
         None,
     );
-
-    // scanList/scan
     let scl = spectrum_scan_list(s0);
     assert_eq!(scl.scans.len(), 1);
     // TODO: re-enable once ScanList.cv_params is parsed
@@ -407,18 +401,12 @@ fn anpc_mzml1_1_0_first_spectrum() {
         Some("1000.0"),
         Some("m/z"),
     );
-
-    // precursorList must be absent for MS1
     assert!(spectrum_precursor_list(s0).is_none());
-
-    // binaryDataArrayList
     let bal = s0
         .binary_data_array_list
         .as_ref()
         .expect("binaryDataArrayList parsed");
     assert_eq!(bal.binary_data_arrays.len(), 2);
-
-    // m/z array
     let mz = &bal.binary_data_arrays[0];
     assert_eq!(mz.encoded_length, Some(3627008));
     assert_cv(
@@ -448,8 +436,6 @@ fn anpc_mzml1_1_0_first_spectrum() {
         Some(""),
         Some("m/z"),
     );
-
-    // intensity array (32-bit float)
     let it = &bal.binary_data_arrays[1];
     assert_eq!(it.encoded_length, Some(1813504));
     assert_cv(
@@ -548,8 +534,6 @@ fn anpc_mzml1_1_0_last_spectrum() {
         Some(""),
         None,
     );
-
-    // scanList/scan
     // TODO: re-enable once ScanList.cv_params is parsed
     let scl = spectrum_scan_list(s_last);
     assert_eq!(scl.scans.len(), 1);
@@ -599,8 +583,6 @@ fn anpc_mzml1_1_0_last_spectrum() {
         Some("1000.0"),
         Some("m/z"),
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s_last).expect("precursorList parsed");
     assert_eq!(pl.precursors.len(), 1);
 
@@ -675,8 +657,6 @@ fn anpc_mzml1_1_0_last_spectrum() {
         Some("20.0"),
         None,
     );
-
-    // binaryDataArrayList
     let bal = s_last
         .binary_data_array_list
         .as_ref()
@@ -755,7 +735,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         .expect("chromatogramList parsed");
     assert_eq!(cl.chromatograms.len(), 2);
 
-    // TIC
     let tic = &cl.chromatograms[0];
     assert_eq!(tic.index, Some(0));
     assert_eq!(tic.id, "TIC");
@@ -776,8 +755,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         .as_ref()
         .expect("binaryDataArrayList parsed");
     assert_eq!(bal.binary_data_arrays.len(), 3);
-
-    // time array (64-bit float)
     let t = &bal.binary_data_arrays[0];
     assert_eq!(t.encoded_length, Some(37080));
     assert_cv(
@@ -807,8 +784,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         Some(""),
         Some("second"),
     );
-
-    // intensity array (32-bit float)
     let i = &bal.binary_data_arrays[1];
     assert_eq!(i.encoded_length, Some(18540));
     assert_cv(
@@ -870,7 +845,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         Some("dimensionless unit"),
     );
 
-    // BPC
     let bpc = &cl.chromatograms[1];
     assert_eq!(bpc.index, Some(1));
     assert_eq!(bpc.id, "BPC");
@@ -929,8 +903,6 @@ fn anpc_mzml_spectrum_scan_1_binaries() {
 
     let mz = &bal.binary_data_arrays[0];
     let it = &bal.binary_data_arrays[1];
-
-    // m/z array should be f64 (MS:1000523)
     assert!(
         mz.cv_params
             .iter()
@@ -941,8 +913,6 @@ fn anpc_mzml_spectrum_scan_1_binaries() {
         BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
         other => panic!("mz expected BinaryData::F64, got {other:?}"),
     }
-
-    // intensity array should be f32 (MS:1000521)
     assert!(
         it.cv_params
             .iter()
@@ -975,8 +945,6 @@ fn anpc_mzml_spectrum_scan_3476_binaries() {
 
     let mz = &bal.binary_data_arrays[0];
     let it = &bal.binary_data_arrays[1];
-
-    // m/z array should be f64 (MS:1000523)
     assert!(
         mz.cv_params
             .iter()
@@ -987,8 +955,6 @@ fn anpc_mzml_spectrum_scan_3476_binaries() {
         BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
         other => panic!("mz expected BinaryData::F64, got {other:?}"),
     }
-
-    // intensity array should be f32 (MS:1000521)
     assert!(
         it.cv_params
             .iter()
@@ -1025,8 +991,6 @@ fn anpc_mzml_chromatogram_tic_binaries() {
     let time = &bal.binary_data_arrays[0];
     let inten = &bal.binary_data_arrays[1];
     let ms_level = &bal.binary_data_arrays[2];
-
-    // time array should be f64 (MS:1000523)
     assert!(
         time.cv_params
             .iter()
@@ -1037,8 +1001,6 @@ fn anpc_mzml_chromatogram_tic_binaries() {
         BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
         other => panic!("time expected BinaryData::F64, got {other:?}"),
     }
-
-    // intensity array should be f32 (MS:1000521)
     assert!(
         inten
             .cv_params
@@ -1050,8 +1012,6 @@ fn anpc_mzml_chromatogram_tic_binaries() {
         BinaryData::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
         other => panic!("intensity expected BinaryData::F32, got {other:?}"),
     }
-
-    // ms level array should be i64 (MS:1000522)
     assert!(
         ms_level
             .cv_params
@@ -1089,8 +1049,6 @@ fn anpc_mzml_chromatogram_bpc_binaries() {
     let time = &bal.binary_data_arrays[0];
     let inten = &bal.binary_data_arrays[1];
     let ms_level = &bal.binary_data_arrays[2];
-
-    // time array should be f64 (MS:1000523)
     assert!(
         time.cv_params
             .iter()
@@ -1102,8 +1060,6 @@ fn anpc_mzml_chromatogram_bpc_binaries() {
         BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
         other => panic!("time expected BinaryData::F64, got {other:?}"),
     }
-
-    // intensity array should be f32 (MS:1000521)
     assert!(
         inten
             .cv_params
@@ -1115,8 +1071,6 @@ fn anpc_mzml_chromatogram_bpc_binaries() {
         BinaryData::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
         other => panic!("intensity expected BinaryData::F32, got {other:?}"),
     }
-
-    // ms level array should be i64 (MS:1000522)
     assert!(
         ms_level
             .cv_params

@@ -1,11 +1,5 @@
 #![allow(unused_macros)]
 
-/// Parse a fixture once.
-///
-/// Usage:
-/// ```ignore
-/// test_file!(tiny_pwiz_11, "pwiz/example_data/tiny.pwiz.1.1.mzML");
-/// ```
 macro_rules! test_file {
     ($name:ident, $rel_path:expr) => {
         pub fn $name() -> &'static ionic::mzml::structs::MzML {
@@ -16,13 +10,6 @@ macro_rules! test_file {
     };
 }
 
-/// XML roundtrip: parse → serialize → reparse → assert eq.
-///
-/// Usage:
-/// ```ignore
-/// roundtrip_xml!(tiny_10_semantic, tiny_pwiz_10);
-/// roundtrip_xml!(small_10_structural, small_pwiz_10, structural);
-/// ```
 macro_rules! roundtrip_xml {
     ($name:ident, $test_file_fn:path) => {
         #[test]
@@ -48,13 +35,6 @@ macro_rules! roundtrip_xml {
     };
 }
 
-/// Ion roundtrip: parse → encode → decode → assert semantic eq.
-///
-/// Usage:
-/// ```ignore
-/// roundtrip_ion!(tiny_11_level12, tiny_pwiz_11, level = 12);
-/// roundtrip_ion!(tiny_11_f32, tiny_pwiz_11, level = 9, f32 = true, structural);
-/// ```
 macro_rules! roundtrip_ion {
     ($name:ident, $test_file_fn:path, level = $level:expr) => {
         #[test]
@@ -85,12 +65,6 @@ macro_rules! roundtrip_ion {
     };
 }
 
-/// Breaker test: clone test_file → mutate → Ion roundtrip → assert attributes survived.
-///
-/// Usage:
-/// ```ignore
-/// breaker_test!(scan_attrs, tiny_pwiz_11, |m| { /* mutate */ }, |m| { /* check */ });
-/// ```
 macro_rules! breaker_test {
     ($name:ident, $fixture_fn:path, $mutator:expr, $checker:expr) => {
         #[test]

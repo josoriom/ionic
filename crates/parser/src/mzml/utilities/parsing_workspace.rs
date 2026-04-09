@@ -8,7 +8,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::io::BufRead;
 
-#[allow(dead_code)] // Coming soon!
+#[allow(dead_code)]
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Default)]
 pub(crate) enum StrictnessPolicy {
     #[default]

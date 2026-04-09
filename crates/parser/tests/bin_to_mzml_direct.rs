@@ -1,4 +1,3 @@
-//! Exercises the binary→mzML XML serialization path with synthetic data, verifying that the output is valid XML that can be re-parsed into equivalent MzML structs.
 mod common;
 
 use common::binary_ext::BinaryDataExt;
@@ -228,8 +227,6 @@ fn f32_arrays_via_mzml_xml_roundtrip() {
 
     let sl = reparsed.run.spectrum_list.as_ref().unwrap();
     assert_eq!(sl.spectra.len(), 1);
-
-    // Values should be recoverable (possibly promoted to f64)
     let arrays = sl.spectra[0].binary_data_array_list.as_ref().unwrap();
     for bda in &arrays.binary_data_arrays {
         let vals = bda.binary.as_ref().unwrap().to_f64_vec();

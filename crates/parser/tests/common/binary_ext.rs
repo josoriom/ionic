@@ -1,25 +1,18 @@
 use ionic::mzml::structs::BinaryData;
 
-/// Extension trait for `BinaryData`
 pub(crate) trait BinaryDataExt {
-    /// Number of elements in the payload.
     fn len(&self) -> usize;
 
-    /// Whether the payload is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Convert all elements to f64, regardless of stored type.
     fn to_f64_vec(&self) -> Vec<f64>;
 
-    /// First element as f64, or None if empty.
     fn first_f64(&self) -> Option<f64>;
 
-    /// Raw little-endian bytes of the payload.
     fn to_le_bytes(&self) -> Vec<u8>;
 
-    /// Variant name as a static string (e.g., "f64", "f32", "i16").
     fn variant_name(&self) -> &'static str;
 }
 

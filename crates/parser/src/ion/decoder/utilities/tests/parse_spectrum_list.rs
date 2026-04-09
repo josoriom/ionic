@@ -380,8 +380,6 @@ fn spectrum0_strict_full_structure() {
         unit_accession: Some("UO:0000010"),
     }];
     assert_cv_params_exact(&scan.cv_params, expected_scan_cvs);
-
-    // scanWindowList
     let swl = scan
         .scan_window_list
         .as_ref()

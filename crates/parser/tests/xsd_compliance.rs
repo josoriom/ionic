@@ -1,14 +1,3 @@
-//! XSD conformance tests for the mzML writer (`bin_to_mzml`).
-//!
-//! These tests verify two structural properties required by the mzML 1.1.0 XSD
-//! and the indexedmzML 1.1.2 wrapper XSD:
-//!
-//! 1. **Element ordering** — children of `<mzML>` must appear in the exact
-//!    `xs:sequence` order defined by `mzMLType`.
-//! 2. **fileChecksum** — `<indexedmzML>` must contain a `<fileChecksum>`
-//!    element with a valid SHA-1 hex digest covering bytes from the start of the
-//!    file through (and including) the `<fileChecksum>` open tag.
-
 mod common;
 
 use common::helpers::{
@@ -21,11 +10,6 @@ use ionic::mzml::{
     structs::*,
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// XSD-mandated child element names of `<mzML>`, in the required order.
 const MZML_CHILD_ORDER: &[&str] = &[
     "cvList",
     "fileDescription",
@@ -38,9 +22,6 @@ const MZML_CHILD_ORDER: &[&str] = &[
     "run",
 ];
 
-/// Extract the byte position of each top-level child element of `<mzML>` that
-/// is present in `xml`.  Returns `(element_name, byte_offset)` pairs in the
-/// order they appear in the document.
 fn extract_mzml_child_positions(xml: &str) -> Vec<(&'static str, usize)> {
     MZML_CHILD_ORDER
         .iter()
@@ -51,8 +32,6 @@ fn extract_mzml_child_positions(xml: &str) -> Vec<(&'static str, usize)> {
         .collect()
 }
 
-/// Assert that the elements in `positions` are sorted by their byte offset —
-/// i.e. the writer emitted them in XSD-mandated order.
 fn assert_xsd_order(positions: &[(&str, usize)]) {
     for w in positions.windows(2) {
         assert!(
@@ -66,12 +45,6 @@ fn assert_xsd_order(positions: &[(&str, usize)]) {
     }
 }
 
-// ===========================================================================
-// Bug 1: Element ordering
-// ===========================================================================
-
-/// With all optional sections present, the writer must emit children of
-/// `<mzML>` in the exact order prescribed by the XSD `xs:sequence`.
 #[test]
 fn mzml_child_element_order_all_sections() {
     let mzml = full_mzml_all_optional_fields();
@@ -80,7 +53,6 @@ fn mzml_child_element_order_all_sections() {
 
     let positions = extract_mzml_child_positions(&xml);
 
-    // All 9 children should be present
     assert_eq!(
         positions.len(),
         MZML_CHILD_ORDER.len(),
@@ -92,9 +64,6 @@ fn mzml_child_element_order_all_sections() {
     assert_xsd_order(&positions);
 }
 
-/// With only `softwareList` and `instrumentConfigurationList` present (no
-/// `scanSettingsList`, `sampleList`, or `referenceableParamGroupList`), the
-/// writer must still emit `softwareList` before `instrumentConfigurationList`.
 #[test]
 fn mzml_child_order_subset_of_optional_elements() {
     let mzml = MzML {
@@ -144,7 +113,6 @@ fn mzml_child_order_subset_of_optional_elements() {
     let positions = extract_mzml_child_positions(&xml);
     assert_xsd_order(&positions);
 
-    // Specifically: softwareList before instrumentConfigurationList
     let sw_pos = positions.iter().find(|(n, _)| *n == "softwareList");
     let ic_pos = positions
         .iter()
@@ -159,19 +127,12 @@ fn mzml_child_order_subset_of_optional_elements() {
     );
 }
 
-// ===========================================================================
-// Bug 2: fileChecksum
-// ===========================================================================
-
-/// The output must contain a `<fileChecksum>` element with a 40-character
-/// hex string (SHA-1 digest) between `</indexListOffset>` and `</indexedmzML>`.
 #[test]
 fn indexed_mzml_contains_file_checksum() {
     let mzml = full_mzml_all_optional_fields();
     let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes).expect("valid UTF-8");
 
-    // Must contain <fileChecksum>
     let fc_open = xml.find("<fileChecksum>");
     let fc_close = xml.find("</fileChecksum>");
     assert!(
@@ -179,7 +140,6 @@ fn indexed_mzml_contains_file_checksum() {
         "output must contain <fileChecksum>...</fileChecksum>"
     );
 
-    // Extract the hex digest
     let start = fc_open.unwrap() + "<fileChecksum>".len();
     let end = fc_close.unwrap();
     let digest = &xml[start..end];
@@ -196,7 +156,6 @@ fn indexed_mzml_contains_file_checksum() {
         "fileChecksum must be a hex string, got: {digest:?}"
     );
 
-    // Must appear after indexListOffset and before </indexedmzML>
     let ilo_pos = xml
         .find("</indexListOffset>")
         .expect("must have indexListOffset");
@@ -214,14 +173,6 @@ fn indexed_mzml_contains_file_checksum() {
     );
 }
 
-// ===========================================================================
-// Bug 3: empty sourceFileList
-// ===========================================================================
-
-/// When there are no source files, the writer must NOT emit
-/// `<sourceFileList count="0"></sourceFileList>` — the XSD requires at least
-/// one `<sourceFile>` child if the element is present (`sourceFile+`).
-/// Omitting the element entirely is the correct behavior.
 #[test]
 fn empty_source_file_list_is_omitted() {
     let mzml = MzML {
@@ -281,7 +232,6 @@ fn empty_source_file_list_is_omitted() {
     );
 }
 
-/// When there IS at least one source file, `<sourceFileList>` must be present.
 #[test]
 fn nonempty_source_file_list_is_emitted() {
     let mzml = MzML {
@@ -350,31 +300,21 @@ fn nonempty_source_file_list_is_emitted() {
     );
 }
 
-// ===========================================================================
-// Bug 2: fileChecksum
-// ===========================================================================
-
-/// The SHA-1 in `<fileChecksum>` must be the hex-encoded SHA-1 of all bytes
-/// from the start of the file through the end of the `<fileChecksum>` open tag
-/// (i.e. including the `>` character).
 #[test]
 fn file_checksum_is_valid_sha1() {
     let mzml = full_mzml_all_optional_fields();
     let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes.clone()).expect("valid UTF-8");
 
-    // Find the open tag end position: everything up to and including ">"
     let fc_tag = "<fileChecksum>";
     let fc_open = xml
         .find(fc_tag)
         .expect("must contain <fileChecksum>");
     let hash_input_end = fc_open + fc_tag.len(); // byte after '>'
 
-    // Extract the claimed digest
     let fc_close = xml.find("</fileChecksum>").expect("must have closing tag");
     let claimed = &xml[hash_input_end..fc_close];
 
-    // Independently compute SHA-1 of bytes[0..hash_input_end]
     use sha1::{Sha1, Digest};
     let mut hasher = Sha1::new();
     hasher.update(&bytes[..hash_input_end]);

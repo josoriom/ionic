@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-//! Synthetic MzML builder helpers.
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
 
 use super::binary_ext::BinaryDataExt;
@@ -391,11 +390,6 @@ pub(crate) fn make_chromatogram_f64(id: &str, time: Vec<f64>, intensity: Vec<f64
     }
 }
 
-// ---------------------------------------------------------------------------
-// Optional-section builders (for XSD compliance tests)
-// ---------------------------------------------------------------------------
-
-/// Build a minimal [`SoftwareList`] with a single software entry.
 pub fn minimal_software_list() -> SoftwareList {
     SoftwareList {
         count: Some(1),
@@ -407,7 +401,6 @@ pub fn minimal_software_list() -> SoftwareList {
     }
 }
 
-/// Build a minimal [`InstrumentList`] with a single instrument configuration.
 pub fn minimal_instrument_list() -> InstrumentList {
     InstrumentList {
         count: Some(1),
@@ -418,7 +411,6 @@ pub fn minimal_instrument_list() -> InstrumentList {
     }
 }
 
-/// Build a minimal [`ScanSettingsList`] with a single scan settings entry.
 pub fn minimal_scan_settings_list() -> ScanSettingsList {
     ScanSettingsList {
         count: Some(1),
@@ -429,8 +421,6 @@ pub fn minimal_scan_settings_list() -> ScanSettingsList {
     }
 }
 
-/// Build a minimal [`DataProcessingList`] with a single data processing entry
-/// that references the software from [`minimal_software_list`].
 pub fn minimal_data_processing_list() -> DataProcessingList {
     DataProcessingList {
         count: Some(1),
@@ -446,8 +436,6 @@ pub fn minimal_data_processing_list() -> DataProcessingList {
     }
 }
 
-/// Build a [`MzML`] with **all** optional sections populated — ideal for
-/// testing that the writer emits children of `<mzML>` in XSD-mandated order.
 pub fn full_mzml_all_optional_fields() -> MzML {
     MzML {
         cv_list: Some(default_cv_list_like_writer()),

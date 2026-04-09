@@ -6,8 +6,6 @@ use common::helpers::*;
 use common::test_files;
 use ionic::mzml::structs::*;
 
-// Rare numeric types, XML roundtrip without array length.
-
 #[test]
 fn ion_roundtrip_preserves_rare_numeric_types() {
     let cases = [

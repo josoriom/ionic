@@ -17,7 +17,6 @@ const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
     let mzml = parse_b(&MZML_CACHE, PATH);
-    // cvList
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -31,11 +30,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         cv0.uri.as_deref(),
         Some("http://psidev.sourceforge.net/ms/xml/mzdata/psi-ms.2.0.2.obo")
     );
-
-    // fileDescription
     let file_desc = &mzml.file_description.as_ref().unwrap();
-
-    // fileContent
     assert_eq!(file_desc.file_content.cv_params.len(), 1);
     assert_cv(
         CV_REF_MODE,
@@ -46,8 +41,6 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         Some(""),
         None,
     );
-
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 1);
     let sf0 = &file_desc.source_file_list.source_file[0];
     assert_eq!(sf0.id, "SF1");
@@ -71,8 +64,6 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         Some("71be39fb2700ab2f3c8b2234b91274968b6899b1"),
         None,
     );
-
-    // referenceableParamGroupList
     let rpgl = mzml
         .referenceable_param_group_list
         .as_ref()
@@ -103,15 +94,11 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
             None,
         );
     }
-
-    // sampleList
     let sample_list = mzml.sample_list.as_ref().expect("sampleList parsed");
     assert_eq!(sample_list.samples.len(), 1);
     let sample0 = &sample_list.samples[0];
     assert_eq!(sample0.id, "SP1");
     assert_eq!(sample0.name, "Sample1");
-
-    // instrumentConfigurationList
     let inst_list = mzml
         .instrument_list
         .as_ref()
@@ -137,8 +124,6 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         Some("23433"),
         None,
     );
-
-    // componentList
     let cl0 = inst0.component_list.as_ref().expect("componentList parsed");
     assert_eq!(cl0.source.len(), 1);
     assert_eq!(cl0.analyzer.len(), 1);
@@ -179,8 +164,6 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         Some(""),
         None,
     );
-
-    // softwareList
     let sw_list = mzml.software_list.as_ref().expect("softwareList parsed");
     assert_eq!(sw_list.software.len(), 3);
 
@@ -222,8 +205,6 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         "Xcalibur",
         Some("2.0.5"),
     );
-
-    // dataProcessingList
     let dp_list = mzml
         .data_processing_list
         .as_ref()

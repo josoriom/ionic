@@ -1,5 +1,3 @@
-//! Exercises the Ion encoder→decoder roundtrip
-
 mod common;
 
 use common::binary_ext::BinaryDataExt;

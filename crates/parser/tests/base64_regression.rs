@@ -1,11 +1,9 @@
-//! Tests the mzML XML parser's base64 decoding pathway with known payloads
 mod common;
 
 use common::binary_ext::BinaryDataExt;
 use common::helpers::{parse_single_array_xml, single_array_xml};
 use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
 
-// Known value roundtrips via single_array_xml
 #[test]
 fn known_f64_values_via_xml_roundtrip() {
     let values = vec![1.0_f64, 2.0, 3.0, 100.5, -42.0];
@@ -78,7 +76,6 @@ fn empty_base64_produces_empty_array() {
     }
 }
 
-// 1000 elements — tests that base64 encoding/decoding handles multi-line or long strings correctly.
 #[test]
 fn large_array_base64_roundtrip() {
     let values: Vec<f64> = (0..1000).map(|i| i as f64 * 0.001).collect();
@@ -89,7 +86,6 @@ fn large_array_base64_roundtrip() {
     assert_eq!(got, values);
 }
 
-/// Tests that the parser handles base64 strings with embedded newlines/spaces.
 #[test]
 fn base64_with_embedded_whitespace() {
     use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};

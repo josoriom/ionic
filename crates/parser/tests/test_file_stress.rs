@@ -1,6 +1,3 @@
-//! Parses available known mzML tests file, encodes it to Ion, decodes back,
-//! and asserts semantic equality.
-
 mod common;
 
 use common::test_files::{ALL_TEST_FILES, INTERNAL_MZML_TEST_FILES, PWIZ_TEST_FILES};
@@ -119,7 +116,6 @@ fn all_test_files_ion_roundtrip_force_f32() {
     }
 }
 
-// Full roundtrip: mzML → Ion → MzML (struct) → XML → reparse
 #[test]
 fn all_test_files_full_roundtrip() {
     use ionic::mzml::bin_to_mzml::bin_to_mzml;
@@ -129,7 +125,6 @@ fn all_test_files_full_roundtrip() {
     for test_file_path in ALL_TEST_FILES {
         let original = common::parse_test_file(test_file_path);
 
-        // Step 1: mzML struct → Ion bytes → mzML struct
         let ion_bytes = common::encode_to_ion(&original, 0, false);
         let from_ion = match common::decode_ion(&ion_bytes) {
             Ok(m) => m,
@@ -139,7 +134,6 @@ fn all_test_files_full_roundtrip() {
             }
         };
 
-        // Step 2: mzML struct → XML string → re-parse to mzML struct
         let xml_str = match bin_to_mzml(&from_ion) {
             Ok(s) => s,
             Err(e) => {

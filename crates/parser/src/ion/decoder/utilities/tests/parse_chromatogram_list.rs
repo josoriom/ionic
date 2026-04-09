@@ -123,8 +123,6 @@ fn chromatogram_0_tic_cv_params_and_bdal_shape() {
     assert_eq!(c.id.as_str(), "TIC");
     assert_eq!(c.index, Some(0));
     assert_eq!(c.default_array_length, Some(3476));
-
-    // <cvParam accession="MS:1000235" name="total ion current chromatogram" value=""/>
     let p = c
         .cv_params
         .iter()
@@ -310,8 +308,6 @@ fn chromatogram_1_bpc_has_expected_cv_and_bdal_lengths_match() {
     assert_eq!(c.id.as_str(), "BPC");
     assert_eq!(c.index, Some(1));
     assert_eq!(c.default_array_length, Some(3476));
-
-    // <cvParam accession="MS:1000628" name="basepeak chromatogram" value=""/>
     let p = c
         .cv_params
         .iter()

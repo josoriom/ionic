@@ -1211,7 +1211,6 @@ fn write_chromatogram_list(
     Ok(())
 }
 
-/// <chromatogram>
 fn write_chromatogram(
     writer: &mut Writer<Vec<u8>>,
     c: &Chromatogram,
@@ -1264,7 +1263,6 @@ fn write_chromatogram(
     Ok(())
 }
 
-/// <binaryDataArrayList>
 fn write_binary_data_array_list(
     writer: &mut Writer<Vec<u8>>,
     list: &BinaryDataArrayList,
@@ -1289,7 +1287,6 @@ fn write_binary_data_array_list(
     Ok(())
 }
 
-/// <binaryDataArray>
 fn write_binary_data_array(
     writer: &mut Writer<Vec<u8>>,
     bda: &BinaryDataArray,
@@ -1725,11 +1722,6 @@ fn write_index_list_offset(writer: &mut Writer<Vec<u8>>, off: u64) -> Result<(),
     Ok(())
 }
 
-/// Write `<fileChecksum>` with the SHA-1 hex digest of all bytes emitted so
-/// far (from the start of the document through the end of the open tag).
-///
-/// Per the mzML 1.1.2 indexed wrapper XSD:
-///   "SHA-1 checksum from beginning of file to end of 'fileChecksum' open tag."
 fn write_file_checksum(writer: &mut Writer<Vec<u8>>) -> Result<(), String> {
     // Write the open tag so its bytes are part of the hash input.
     writer
