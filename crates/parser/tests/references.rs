@@ -1,0 +1,39 @@
+mod common;
+
+use common::assertions::*;
+use common::test_files;
+
+#[test]
+fn all_refs_resolved_for_all_pwiz_test_files() {
+    for rel in common::test_files::PWIZ_TEST_FILES {
+        let mzml = common::parse_test_file(rel);
+        assert_all_refs_resolved(&mzml);
+    }
+}
+
+#[test]
+#[should_panic(expected = "unresolved")]
+fn detects_broken_run_default_source_file_ref() {
+    let mut m = test_files::tiny_pwiz_11().clone();
+    m.run.default_source_file_ref = Some("missing-source-file-id".to_string());
+    assert_all_refs_resolved(&m);
+}
+
+#[test]
+#[should_panic(expected = "unresolved")]
+fn detects_broken_precursor_spectrum_ref() {
+    let mut m = test_files::tiny_pwiz_11().clone();
+    let s20 = m
+        .run
+        .spectrum_list
+        .as_mut()
+        .expect("spectrumList")
+        .spectra
+        .iter_mut()
+        .find(|s| s.id == "scan=20")
+        .expect("scan=20");
+    if let Some(pl) = s20.precursor_list.as_mut() {
+        pl.precursors[0].spectrum_ref = Some("scan=DOES_NOT_EXIST".to_string());
+    }
+    assert_all_refs_resolved(&m);
+}

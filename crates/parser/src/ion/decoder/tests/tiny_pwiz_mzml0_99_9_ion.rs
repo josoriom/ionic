@@ -207,7 +207,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
         "MS",
         "MS:1000615",
         "ProteoWizard software",
-        Some("1"),
+        Some("1.0"),
     );
 
     let sw2 = &sw_list.software[2];

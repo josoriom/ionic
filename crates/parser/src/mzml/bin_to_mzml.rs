@@ -1,9 +1,10 @@
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 
 use miniz_oxide::deflate::compress_to_vec_zlib;
-use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::Writer;
+use sha1::{Digest, Sha1};
 
 use crate::mzml::structs::*;
 
@@ -19,7 +20,7 @@ struct IndexOffsetAcc {
 }
 
 #[inline]
-fn nonempty<'a>(s: Option<&'a str>) -> Option<&'a str> {
+fn nonempty(s: Option<&str>) -> Option<&str> {
     match s {
         Some(v) if !v.is_empty() => Some(v),
         _ => None,
@@ -92,7 +93,12 @@ pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, String> {
 
     write_cv_list(&mut writer, cvl)?;
 
-    write_file_description(&mut writer, &mzml.file_description.as_ref().unwrap())?;
+    write_file_description(
+        &mut writer,
+        mzml.file_description
+            .as_ref()
+            .ok_or_else(|| "mzML is missing required <fileDescription> element".to_string())?,
+    )?;
 
     if let Some(rpgl) = &mzml.referenceable_param_group_list {
         write_referenceable_param_group_list(&mut writer, rpgl)?;
@@ -100,17 +106,17 @@ pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, String> {
     if let Some(sl) = &mzml.sample_list {
         write_sample_list(&mut writer, sl)?;
     }
-    if let Some(il) = &mzml.instrument_list {
-        write_instrument_list(&mut writer, il)?;
-    }
     if let Some(sw) = &mzml.software_list {
         write_software_list(&mut writer, sw)?;
     }
-    if let Some(dpl) = &mzml.data_processing_list {
-        write_data_processing_list(&mut writer, dpl)?;
-    }
     if let Some(ssl) = &mzml.scan_settings_list {
         write_scan_settings_list(&mut writer, ssl)?;
+    }
+    if let Some(il) = &mzml.instrument_list {
+        write_instrument_list(&mut writer, il)?;
+    }
+    if let Some(dpl) = &mzml.data_processing_list {
+        write_data_processing_list(&mut writer, dpl)?;
     }
 
     let fallback_default_dp = mzml
@@ -128,6 +134,7 @@ pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, String> {
 
     let index_list_offset = write_index_list_with_offset(&mut writer, &idx)?;
     write_index_list_offset(&mut writer, index_list_offset)?;
+    write_file_checksum(&mut writer)?;
 
     writer
         .write_event(Event::End(BytesEnd::new("indexedmzML")))
@@ -218,7 +225,11 @@ fn write_file_description(
         .write_event(Event::End(BytesEnd::new("fileContent")))
         .map_err(|e| e.to_string())?;
 
-    write_source_file_list(writer, &fd.source_file_list)?;
+    // XSD requires at least one <sourceFile> child if <sourceFileList> is
+    // present.  Omit the element entirely when the list is empty.
+    if !fd.source_file_list.source_file.is_empty() {
+        write_source_file_list(writer, &fd.source_file_list)?;
+    }
 
     for c in &fd.contacts {
         writer
@@ -371,10 +382,10 @@ fn write_instrument_list(
     for ic in &list.instrument {
         let mut ic_tag = BytesStart::new("instrumentConfiguration");
         ic_tag.push_attribute(("id", ic.id.as_str()));
-        if let Some(ssr) = &ic.scan_settings_ref {
-            if let Some(v) = nonempty(Some(ssr.r#ref.as_str())) {
-                ic_tag.push_attribute(("scanSettingsRef", v));
-            }
+        if let Some(ssr) = &ic.scan_settings_ref
+            && let Some(v) = nonempty(Some(ssr.r#ref.as_str()))
+        {
+            ic_tag.push_attribute(("scanSettingsRef", v));
         }
 
         writer
@@ -698,15 +709,15 @@ fn write_scan_settings_list(
 
     for ss in &list.scan_settings {
         let mut ss_tag = BytesStart::new("scanSettings");
-        if let Some(id) = ss.id.as_deref() {
-            if !id.is_empty() {
-                ss_tag.push_attribute(("id", id));
-            }
+        if let Some(id) = ss.id.as_deref()
+            && !id.is_empty()
+        {
+            ss_tag.push_attribute(("id", id));
         }
-        if let Some(r) = ss.instrument_configuration_ref.as_deref() {
-            if !r.is_empty() {
-                ss_tag.push_attribute(("instrumentConfigurationRef", r));
-            }
+        if let Some(r) = ss.instrument_configuration_ref.as_deref()
+            && !r.is_empty()
+        {
+            ss_tag.push_attribute(("instrumentConfigurationRef", r));
         }
 
         writer
@@ -875,22 +886,22 @@ fn write_spectrum(
         write_spectrum_description(writer, sd)?;
     }
 
-    if !sd_has_scan_list {
-        if let Some(sl) = &s.scan_list {
-            write_scan_list(writer, sl)?;
-        }
+    if !sd_has_scan_list
+        && let Some(sl) = &s.scan_list
+    {
+        write_scan_list(writer, sl)?;
     }
 
-    if !sd_has_precursor_list {
-        if let Some(pl) = &s.precursor_list {
-            write_precursor_list(writer, pl)?;
-        }
+    if !sd_has_precursor_list
+        && let Some(pl) = &s.precursor_list
+    {
+        write_precursor_list(writer, pl)?;
     }
 
-    if !sd_has_product_list {
-        if let Some(pr) = &s.product_list {
-            write_product_list(writer, pr)?;
-        }
+    if !sd_has_product_list
+        && let Some(pr) = &s.product_list
+    {
+        write_product_list(writer, pr)?;
     }
 
     if let Some(bdal) = &s.binary_data_array_list {
@@ -1299,111 +1310,121 @@ fn write_binary_data_array(
     let cv_has_i32 = has_accession("MS:1000519");
     let cv_has_i16 = has_accession("MS:1000518");
 
-    let Some(binary) = bda.binary.as_ref() else {
-        return Ok(());
-    };
+    let encoded = if let Some(binary) = bda.binary.as_ref() {
+        if let Some(nt) = bda.numeric_type {
+            let ok = matches!(
+                (binary, nt),
+                (BinaryData::F64(_), NumericType::Float64)
+                    | (BinaryData::F32(_), NumericType::Float32)
+                    | (BinaryData::F16(_), NumericType::Float16)
+                    | (BinaryData::I64(_), NumericType::Int64)
+                    | (BinaryData::I32(_), NumericType::Int32)
+                    | (BinaryData::I16(_), NumericType::Int16)
+            );
+            if !ok {
+                return Err("binary/numeric_type mismatch".into());
+            }
+        }
 
-    if let Some(nt) = bda.numeric_type {
-        let ok = match (binary, nt) {
-            (BinaryData::F64(_), NumericType::Float64) => true,
-            (BinaryData::F32(_), NumericType::Float32) => true,
-            (BinaryData::F16(_), NumericType::Float16) => true,
-            (BinaryData::I64(_), NumericType::Int64) => true,
-            (BinaryData::I32(_), NumericType::Int32) => true,
-            (BinaryData::I16(_), NumericType::Int16) => true,
-            _ => false,
+        let (mut raw_bytes, inferred_numeric_type) = match binary {
+            BinaryData::F64(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 8);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Float64)
+            }
+            BinaryData::F32(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 4);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Float32)
+            }
+            BinaryData::F16(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 2);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Float16)
+            }
+            BinaryData::I64(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 8);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Int64)
+            }
+            BinaryData::I32(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 4);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Int32)
+            }
+            BinaryData::I16(v) => {
+                let mut bytes = Vec::with_capacity(v.len() * 2);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                (bytes, NumericType::Int16)
+            }
         };
-        if !ok {
-            return Err("binary/numeric_type mismatch".into());
-        }
-    }
 
-    let (mut raw_bytes, array_len, inferred_numeric_type) = match binary {
-        BinaryData::F64(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 8);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Float64)
+        if !cv_has_zlib && !cv_has_no_comp {
+            return Err(
+                "binaryDataArray missing compression cvParam (MS:1000576 or MS:1000574)".into(),
+            );
         }
-        BinaryData::F32(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 4);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Float32)
+        if cv_has_zlib && !raw_bytes.is_empty() {
+            raw_bytes = compress_to_vec_zlib(&raw_bytes, 6);
         }
-        BinaryData::F16(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 2);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Float16)
-        }
-        BinaryData::I64(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 8);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Int64)
-        }
-        BinaryData::I32(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 4);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Int32)
-        }
-        BinaryData::I16(v) => {
-            let mut bytes = Vec::with_capacity(v.len() * 2);
-            for &x in v {
-                bytes.extend_from_slice(&x.to_le_bytes());
-            }
-            (bytes, v.len(), NumericType::Int16)
-        }
-    };
 
-    if !cv_has_zlib && !cv_has_no_comp {
-        return Err(
-            "binaryDataArray missing compression cvParam (MS:1000576 or MS:1000574)".into(),
-        );
-    }
-    if cv_has_zlib && !raw_bytes.is_empty() {
-        raw_bytes = compress_to_vec_zlib(&raw_bytes, 6);
-    }
+        match inferred_numeric_type {
+            NumericType::Float64
+                if !(cv_has_f64 || bda.numeric_type == Some(NumericType::Float64)) =>
+            {
+                return Err("binaryDataArray F64 but missing cvParam MS:1000523".into());
+            }
+            NumericType::Float32
+                if !(cv_has_f32 || bda.numeric_type == Some(NumericType::Float32)) =>
+            {
+                return Err("binaryDataArray F32 but missing cvParam MS:1000521".into());
+            }
+            NumericType::Float16
+                if !(has_accession("MS:1000520")
+                    || bda.numeric_type == Some(NumericType::Float16)) =>
+            {
+                return Err("binaryDataArray F16 but missing cvParam MS:1000520".into());
+            }
+            NumericType::Int64 if !(cv_has_i64 || bda.numeric_type == Some(NumericType::Int64)) => {
+                return Err("binaryDataArray I64 but missing cvParam MS:1000522".into());
+            }
+            NumericType::Int32 if !(cv_has_i32 || bda.numeric_type == Some(NumericType::Int32)) => {
+                return Err("binaryDataArray I32 but missing cvParam MS:1000519".into());
+            }
+            NumericType::Int16 if !(cv_has_i16 || bda.numeric_type == Some(NumericType::Int16)) => {
+                return Err("binaryDataArray I16 but missing cvParam MS:1000518".into());
+            }
+            _ => {}
+        }
 
-    match inferred_numeric_type {
-        NumericType::Float64 if !(cv_has_f64 || bda.numeric_type == Some(NumericType::Float64)) => {
-            return Err("binaryDataArray F64 but missing cvParam MS:1000523".into());
+        if raw_bytes.is_empty() {
+            String::new()
+        } else {
+            STANDARD.encode(&raw_bytes)
         }
-        NumericType::Float32 if !(cv_has_f32 || bda.numeric_type == Some(NumericType::Float32)) => {
-            return Err("binaryDataArray F32 but missing cvParam MS:1000521".into());
-        }
-        NumericType::Int64 if !(cv_has_i64 || bda.numeric_type == Some(NumericType::Int64)) => {
-            return Err("binaryDataArray I64 but missing cvParam MS:1000522".into());
-        }
-        NumericType::Int32 if !(cv_has_i32 || bda.numeric_type == Some(NumericType::Int32)) => {
-            return Err("binaryDataArray I32 but missing cvParam MS:1000519".into());
-        }
-        NumericType::Int16 if !(cv_has_i16 || bda.numeric_type == Some(NumericType::Int16)) => {
-            return Err("binaryDataArray I16 but missing cvParam MS:1000518".into());
-        }
-        _ => {}
-    }
-
-    let encoded = if raw_bytes.is_empty() {
-        String::new()
     } else {
-        STANDARD.encode(&raw_bytes)
+        String::new()
     };
 
     let mut tag = BytesStart::new("binaryDataArray");
 
-    if let Some(al) = bda.array_length {
-        if al > 0 {
-            let al_s = al.to_string();
-            tag.push_attribute(("arrayLength", al_s.as_str()));
-        }
+    if let Some(al) = bda.array_length
+        && al > 0
+    {
+        let al_s = al.to_string();
+        tag.push_attribute(("arrayLength", al_s.as_str()));
     }
 
     let el = encoded.len();
@@ -1445,7 +1466,6 @@ fn write_binary_data_array(
         .write_event(Event::End(BytesEnd::new("binaryDataArray")))
         .map_err(|e| e.to_string())?;
 
-    let _ = array_len;
     Ok(())
 }
 
@@ -1702,5 +1722,35 @@ fn write_index_list_offset(writer: &mut Writer<Vec<u8>>, off: u64) -> Result<(),
     writer
         .write_event(Event::End(BytesEnd::new("indexListOffset")))
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Write `<fileChecksum>` with the SHA-1 hex digest of all bytes emitted so
+/// far (from the start of the document through the end of the open tag).
+///
+/// Per the mzML 1.1.2 indexed wrapper XSD:
+///   "SHA-1 checksum from beginning of file to end of 'fileChecksum' open tag."
+fn write_file_checksum(writer: &mut Writer<Vec<u8>>) -> Result<(), String> {
+    // Write the open tag so its bytes are part of the hash input.
+    writer
+        .write_event(Event::Start(BytesStart::new("fileChecksum")))
+        .map_err(|e| e.to_string())?;
+
+    // Hash everything written so far (including "<fileChecksum>").
+    let digest = Sha1::digest(writer.get_ref());
+    let hex: String = digest.iter().fold(String::with_capacity(40), |mut acc, b| {
+        use std::fmt::Write;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+
+    writer
+        .write_event(Event::Text(BytesText::new(&hex)))
+        .map_err(|e| e.to_string())?;
+
+    writer
+        .write_event(Event::End(BytesEnd::new("fileChecksum")))
+        .map_err(|e| e.to_string())?;
+
     Ok(())
 }

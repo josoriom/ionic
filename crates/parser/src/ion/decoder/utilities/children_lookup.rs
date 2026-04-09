@@ -150,7 +150,7 @@ impl MetadataPolicy for DefaultMetadataPolicy {
     fn should_exclude(&self, m: &Metadatum) -> bool {
         m.accession
             .as_deref()
-            .map_or(false, |a| a.starts_with(EXCLUDED_ACCESSION_PREFIX))
+            .is_some_and(|a| a.starts_with(EXCLUDED_ACCESSION_PREFIX))
     }
 
     #[inline]

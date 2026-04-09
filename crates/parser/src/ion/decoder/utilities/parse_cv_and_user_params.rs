@@ -42,26 +42,40 @@ pub(crate) fn parse_cv_and_user_params(metadata: &[&Metadatum]) -> (Vec<CvParam>
 
 #[inline]
 fn parse_user_param(entry: &Metadatum) -> UserParam {
-    let (name, value) = match &entry.value {
-        MetadatumValue::Text(s) => match s.split_once('\0') {
-            Some((name_part, value_part)) => {
-                let value = if value_part.is_empty() {
-                    None
-                } else {
-                    Some(value_part.to_string())
-                };
-                (name_part.to_string(), value)
-            }
-            None => (s.clone(), None),
-        },
-        MetadatumValue::Number(n) => (n.to_string(), None),
-        MetadatumValue::Empty => (String::new(), None),
+    let (name, value, type_) = match &entry.value {
+        MetadatumValue::Text(s) => {
+            let mut parts = s.splitn(3, '\0');
+            let name_part = parts.next().unwrap_or("").to_string();
+            let value_part = parts
+                .next()
+                .map(|v| {
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.to_string())
+                    }
+                })
+                .unwrap_or(None);
+            let type_part = parts
+                .next()
+                .map(|t| {
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                })
+                .unwrap_or(None);
+            (name_part, value_part, type_part)
+        }
+        MetadatumValue::Number(n) => (n.to_string(), None, None),
+        MetadatumValue::Empty => (String::new(), None, None),
     };
 
     UserParam {
         name,
         value,
-        r#type: None,
+        r#type: type_,
         unit_accession: entry.unit_accession.clone(),
         unit_cv_ref: unit_cv_ref(entry.unit_accession.as_deref()),
         unit_name: None,

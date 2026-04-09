@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 use zstd::zstd_safe;
 
 use crate::{
@@ -7,7 +9,9 @@ use crate::{
     mzml::schema::{SchemaNode, SchemaTree as Schema, TagId},
 };
 
+#[allow(dead_code)]
 pub(crate) const ACC_Y_INTENSITY: &str = "MS:1000515";
+#[allow(dead_code)]
 pub(crate) const ACC_Y_SNR: &str = "MS:1000786";
 
 #[inline]
@@ -86,17 +90,27 @@ pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> Result<Vec<u8>, S
     if expected == 0 {
         return Ok(Vec::new());
     }
-    let mut out = Vec::with_capacity(expected);
-    unsafe {
-        out.set_len(expected);
-    }
-    let actual = zstd_safe::decompress(out.as_mut_slice(), comp)
-        .map_err(|e| format!("zstd decode failed: {e:?}"))?;
+
+    let mut out: Vec<u8> = Vec::with_capacity(expected);
+
+    let actual = {
+        let spare: &mut [MaybeUninit<u8>] = out.spare_capacity_mut();
+        let dst =
+            unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr() as *mut u8, expected) };
+
+        zstd_safe::decompress(dst, comp).map_err(|e| format!("zstd decode failed: {e:?}"))?
+    };
+
     if actual != expected {
         return Err(format!(
             "zstd: bad decoded size (got={actual}, expected={expected})"
         ));
     }
+
+    unsafe {
+        out.set_len(actual);
+    }
+
     Ok(out)
 }
 
@@ -109,12 +123,12 @@ pub(crate) fn decompress_zstd_allow_aligned_padding(
         return Ok(Vec::new());
     }
 
-    if let Ok(n) = zstd::zstd_safe::find_frame_compressed_size(input) {
-        if n > 0 && n <= input.len() {
-            if let Ok(v) = decompress_zstd(&input[..n], expected) {
-                return Ok(v);
-            }
-        }
+    if let Ok(n) = zstd::zstd_safe::find_frame_compressed_size(input)
+        && n > 0
+        && n <= input.len()
+        && let Ok(v) = decompress_zstd(&input[..n], expected)
+    {
+        return Ok(v);
     }
 
     match decompress_zstd(input, expected) {
@@ -160,18 +174,18 @@ pub(crate) fn value_to_opt_string(v: &MetadatumValue) -> Option<String> {
 #[inline]
 pub(crate) fn get_attr_u32(rows: &[&Metadatum], tail: AccessionTail) -> Option<u32> {
     for m in rows {
-        if let Some(acc) = m.accession.as_deref() {
-            if parse_accession_tail(Some(acc)) == tail {
-                return match &m.value {
-                    MetadatumValue::Number(n)
-                        if n.is_finite() && *n >= 0.0 && *n <= u32::MAX as f64 =>
-                    {
-                        Some(*n as u32)
-                    }
-                    MetadatumValue::Text(s) => s.parse::<u32>().ok(),
-                    _ => None,
-                };
-            }
+        if let Some(acc) = m.accession.as_deref()
+            && parse_accession_tail(Some(acc)) == tail
+        {
+            return match &m.value {
+                MetadatumValue::Number(n)
+                    if n.is_finite() && *n >= 0.0 && *n <= u32::MAX as f64 =>
+                {
+                    Some(*n as u32)
+                }
+                MetadatumValue::Text(s) => s.parse::<u32>().ok(),
+                _ => None,
+            };
         }
     }
     None
@@ -180,14 +194,14 @@ pub(crate) fn get_attr_u32(rows: &[&Metadatum], tail: AccessionTail) -> Option<u
 #[inline]
 pub(crate) fn get_attr_text(rows: &[&Metadatum], tail: AccessionTail) -> Option<String> {
     for m in rows {
-        if let Some(acc) = m.accession.as_deref() {
-            if parse_accession_tail(Some(acc)) == tail {
-                return match &m.value {
-                    MetadatumValue::Text(s) => Some(s.clone()),
-                    MetadatumValue::Number(n) => Some(n.to_string()),
-                    MetadatumValue::Empty => None,
-                };
-            }
+        if let Some(acc) = m.accession.as_deref()
+            && parse_accession_tail(Some(acc)) == tail
+        {
+            return match &m.value {
+                MetadatumValue::Text(s) => Some(s.clone()),
+                MetadatumValue::Number(n) => Some(n.to_string()),
+                MetadatumValue::Empty => None,
+            };
         }
     }
     None
@@ -219,6 +233,7 @@ pub(crate) fn vs_len_bytes(
     Ok(max_end)
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn xy_lengths_from_bdal(
     list: Option<&BinaryDataArrayList>,
@@ -244,6 +259,7 @@ pub(crate) fn xy_lengths_from_bdal(
     (x_len, y_len)
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn decoded_len(bda: &BinaryDataArray) -> usize {
     match bda.binary.as_ref() {
@@ -259,6 +275,7 @@ pub(crate) fn decoded_len(bda: &BinaryDataArray) -> usize {
     }
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn is_y_array(bda: &BinaryDataArray) -> bool {
     bda.cv_params.iter().any(|p| {
@@ -271,14 +288,14 @@ pub(crate) fn is_y_array(bda: &BinaryDataArray) -> bool {
 
 #[allow(dead_code)]
 #[inline]
-pub(crate) fn find_node_by_tag<'a>(schema: &'a Schema, tag: TagId) -> Option<&'a SchemaNode> {
+pub(crate) fn find_node_by_tag(schema: &Schema, tag: TagId) -> Option<&SchemaNode> {
     if let Some(n) = schema.root_by_tag(tag) {
         return Some(n);
     }
     for root in schema.roots.values() {
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
-            if node.self_tags.iter().any(|&t| t == tag) {
+            if node.self_tags.contains(&tag) {
                 return Some(node);
             }
             stack.extend(node.children.values());
