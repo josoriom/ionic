@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// <mzML>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MzML {
     pub cv_list: Option<CvList>,
@@ -25,7 +24,6 @@ pub struct FilterRecord {
     pub polarity: u8,
 }
 
-/// <cvList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CvList {
     pub count: Option<usize>,
@@ -62,7 +60,6 @@ pub struct IndexedmzML {
     pub file_checksum: Option<String>,
 }
 
-/// <cvParam>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CvParam {
     pub cv_ref: Option<String>,
@@ -74,7 +71,6 @@ pub struct CvParam {
     pub unit_accession: Option<String>,
 }
 
-/// <userParam>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserParam {
     pub name: String,
@@ -85,20 +81,17 @@ pub struct UserParam {
     pub value: Option<String>,
 }
 
-/// <referenceableParamGroupRef>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReferenceableParamGroupRef {
     pub r#ref: String,
 }
 
-/// <dataProcessingList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DataProcessingList {
     pub count: Option<usize>,
     pub data_processing: Vec<DataProcessing>,
 }
 
-/// <dataProcessing>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DataProcessing {
     pub id: String,
@@ -106,7 +99,6 @@ pub struct DataProcessing {
     pub processing_method: Vec<ProcessingMethod>,
 }
 
-/// <processingMethod>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProcessingMethod {
     pub order: Option<u32>,
@@ -116,7 +108,6 @@ pub struct ProcessingMethod {
     pub user_param: Vec<UserParam>,
 }
 
-/// <fileDescription>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FileDescription {
     pub file_content: FileContent,
@@ -124,14 +115,12 @@ pub struct FileDescription {
     pub contacts: Vec<Contact>,
 }
 
-/// <sourceFileList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceFileList {
     pub count: Option<usize>,
     pub source_file: Vec<SourceFile>,
 }
 
-/// <sourceFile>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceFile {
     pub id: String,
@@ -142,7 +131,6 @@ pub struct SourceFile {
     pub user_param: Vec<UserParam>,
 }
 
-/// <fileContent>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FileContent {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -150,7 +138,6 @@ pub struct FileContent {
     pub user_params: Vec<UserParam>,
 }
 
-/// <contact>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Contact {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -158,14 +145,12 @@ pub struct Contact {
     pub user_params: Vec<UserParam>,
 }
 
-/// <instrumentList> / <instrumentConfigurationList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstrumentList {
     pub count: Option<usize>,
     pub instrument: Vec<Instrument>,
 }
 
-/// <instrument> / <instrumentConfiguration>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Instrument {
     pub id: String,
@@ -177,13 +162,11 @@ pub struct Instrument {
     pub software_ref: Option<InstrumentSoftwareRef>,
 }
 
-/// attribute scanSettingsRef
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanSettingsRef {
     pub r#ref: String,
 }
 
-/// <componentList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComponentList {
     pub count: Option<usize>,
@@ -192,7 +175,6 @@ pub struct ComponentList {
     pub detector: Vec<Detector>,
 }
 
-/// <source>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Source {
     pub order: Option<u32>,
@@ -201,7 +183,6 @@ pub struct Source {
     pub user_param: Vec<UserParam>,
 }
 
-/// <analyzer>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Analyzer {
     pub order: Option<u32>,
@@ -210,7 +191,6 @@ pub struct Analyzer {
     pub user_param: Vec<UserParam>,
 }
 
-/// <detector>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Detector {
     pub order: Option<u32>,
@@ -219,20 +199,17 @@ pub struct Detector {
     pub user_param: Vec<UserParam>,
 }
 
-/// <instrumentSoftwareRef> / <softwareRef>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstrumentSoftwareRef {
     pub r#ref: String,
 }
 
-/// <referenceableParamGroupList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReferenceableParamGroupList {
     pub count: Option<usize>,
     pub referenceable_param_groups: Vec<ReferenceableParamGroup>,
 }
 
-/// <referenceableParamGroup>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReferenceableParamGroup {
     pub id: String,
@@ -240,7 +217,6 @@ pub struct ReferenceableParamGroup {
     pub user_params: Vec<UserParam>,
 }
 
-/// <sampleList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SampleList {
     pub count: Option<u32>,
@@ -249,7 +225,6 @@ pub struct SampleList {
     pub user_params: Vec<UserParam>,
 }
 
-/// <sample>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Sample {
     pub id: String,
@@ -259,14 +234,12 @@ pub struct Sample {
     pub user_params: Vec<UserParam>,
 }
 
-/// <scanSettingsList> / <acquisitionSettingsList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanSettingsList {
     pub count: Option<usize>,
     pub scan_settings: Vec<ScanSettings>,
 }
 
-/// <scanSettings> / <acquisitionSettings>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanSettings {
     pub id: Option<String>,
@@ -278,27 +251,23 @@ pub struct ScanSettings {
     pub target_list: Option<TargetList>,
 }
 
-/// <sourceFileRefList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceFileRefList {
     pub count: Option<usize>,
     pub source_file_refs: Vec<SourceFileRef>,
 }
 
-/// <sourceFileRef>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceFileRef {
     pub r#ref: String,
 }
 
-/// <targetList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TargetList {
     pub count: Option<usize>,
     pub targets: Vec<Target>,
 }
 
-/// <target>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Target {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -306,14 +275,12 @@ pub struct Target {
     pub user_params: Vec<UserParam>,
 }
 
-/// <softwareList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SoftwareList {
     pub count: Option<usize>,
     pub software: Vec<Software>,
 }
 
-/// <software>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Software {
     pub id: String,
@@ -324,7 +291,6 @@ pub struct Software {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
 }
 
-/// <softwareParam>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SoftwareParam {
     pub cv_ref: Option<String>,
@@ -333,7 +299,6 @@ pub struct SoftwareParam {
     pub version: Option<String>,
 }
 
-/// <run>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Run {
     pub id: String,
@@ -351,7 +316,6 @@ pub struct Run {
     pub chromatogram_list: Option<ChromatogramList>,
 }
 
-/// <spectrumList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SpectrumList {
     pub count: Option<usize>,
@@ -359,7 +323,6 @@ pub struct SpectrumList {
     pub spectra: Vec<Spectrum>,
 }
 
-/// <spectrumDescription> (1.0.0)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SpectrumDescription {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -371,7 +334,6 @@ pub struct SpectrumDescription {
     pub product_list: Option<ProductList>,
 }
 
-/// <scanList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanList {
     pub count: Option<usize>,
@@ -381,7 +343,6 @@ pub struct ScanList {
     pub scans: Vec<Scan>,
 }
 
-/// <scan>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Scan {
     pub instrument_configuration_ref: Option<String>,
@@ -396,21 +357,18 @@ pub struct Scan {
     pub scan_window_list: Option<ScanWindowList>,
 }
 
-/// <scanWindowList> / <selectionWindowList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanWindowList {
     pub count: Option<usize>,
     pub scan_windows: Vec<ScanWindow>,
 }
 
-/// <scanWindow> / <selectionWindow>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScanWindow {
     pub cv_params: Vec<CvParam>,
     pub user_params: Vec<UserParam>,
 }
 
-/// <precursorList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrecursorList {
     pub count: Option<usize>,
@@ -419,7 +377,6 @@ pub struct PrecursorList {
     pub precursors: Vec<Precursor>,
 }
 
-/// <precursor>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Precursor {
     pub spectrum_ref: Option<String>,
@@ -431,7 +388,6 @@ pub struct Precursor {
     pub activation: Option<Activation>,
 }
 
-/// <isolationWindow>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IsolationWindow {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -439,14 +395,12 @@ pub struct IsolationWindow {
     pub user_params: Vec<UserParam>,
 }
 
-/// <selectedIonList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SelectedIonList {
     pub count: Option<usize>,
     pub selected_ions: Vec<SelectedIon>,
 }
 
-/// <selectedIon>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SelectedIon {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -454,7 +408,6 @@ pub struct SelectedIon {
     pub user_params: Vec<UserParam>,
 }
 
-/// <activation>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Activation {
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
@@ -462,7 +415,6 @@ pub struct Activation {
     pub user_params: Vec<UserParam>,
 }
 
-/// <productList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProductList {
     pub count: Option<usize>,
@@ -471,7 +423,6 @@ pub struct ProductList {
     pub user_params: Vec<UserParam>,
 }
 
-/// <product>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Product {
     pub spectrum_ref: Option<String>,
@@ -482,7 +433,6 @@ pub struct Product {
     pub user_params: Vec<UserParam>,
 }
 
-/// <binaryDataArrayList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BinaryDataArrayList {
     pub count: Option<usize>,
@@ -511,7 +461,6 @@ pub enum BinaryData {
     I16(Vec<i16>),
 }
 
-/// <binaryDataArray>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BinaryDataArray {
     pub array_length: Option<usize>,
@@ -526,7 +475,6 @@ pub struct BinaryDataArray {
     pub binary: Option<BinaryData>,
 }
 
-/// <chromatogramList>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChromatogramList {
     pub count: Option<usize>,
@@ -534,7 +482,6 @@ pub struct ChromatogramList {
     pub chromatograms: Vec<Chromatogram>,
 }
 
-/// <chromatogram>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Chromatogram {
     pub id: String,
@@ -553,10 +500,8 @@ pub struct Chromatogram {
     pub binary_data_array_list: Option<BinaryDataArrayList>,
 }
 
-/// <spectrum>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Spectrum {
-    // Attributes
     pub id: String,
     pub index: Option<u32>,
     pub scan_number: Option<u32>,
@@ -567,15 +512,12 @@ pub struct Spectrum {
     pub spot_id: Option<String>,
     pub ms_level: Option<u32>,
 
-    // Children
     pub referenceable_param_group_refs: Vec<ReferenceableParamGroupRef>,
     pub cv_params: Vec<CvParam>,
     pub user_params: Vec<UserParam>,
 
-    /// 1.0.0: <spectrumDescription>
     pub spectrum_description: Option<SpectrumDescription>,
 
-    /// 1.1.x: <spectrum>
     pub scan_list: Option<ScanList>,
     pub precursor_list: Option<PrecursorList>,
     pub product_list: Option<ProductList>,

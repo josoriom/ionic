@@ -169,8 +169,6 @@ fn check_first_spectrum() {
         CV_CODE_UNKNOWN,
         0,
     );
-
-    // ScanList
     expect_number_one(
         &spec_meta,
         0,
@@ -181,8 +179,6 @@ fn check_first_spectrum() {
         0,
         1.0,
     );
-
-    // Scan
     expect_number_one(
         &spec_meta,
         0,
@@ -193,8 +189,6 @@ fn check_first_spectrum() {
         10,
         0.191,
     );
-
-    // ScanWindow
     expect_number_one(
         &spec_meta,
         0,
@@ -215,8 +209,6 @@ fn check_first_spectrum() {
         1000040,
         1000.0,
     );
-
-    // BinaryDataArrayList
     expect_number_one(
         &spec_meta,
         0,
@@ -227,8 +219,6 @@ fn check_first_spectrum() {
         0,
         2.0,
     );
-
-    // BinaryDataArray
     expect_empty_one(
         &spec_meta,
         0,
@@ -396,8 +386,6 @@ fn check_second_spectrum() {
         10,
         452.262,
     );
-
-    // ScanWindow
     expect_number_one(
         &spec_meta,
         1,
@@ -418,8 +406,6 @@ fn check_second_spectrum() {
         1000040,
         1000.0,
     );
-
-    // PrecursorList
     expect_number_one(
         &spec_meta,
         1,
@@ -430,7 +416,6 @@ fn check_second_spectrum() {
         0,
         1.0,
     );
-    // IsolationWindow
     expect_number_one(
         &spec_meta,
         1,
@@ -461,7 +446,6 @@ fn check_second_spectrum() {
         1000040,
         485.0,
     );
-    // SelectedIonList
     expect_number_one(
         &spec_meta,
         1,
@@ -472,7 +456,6 @@ fn check_second_spectrum() {
         0,
         1.0,
     );
-    // SelectedIon
     expect_number_one(
         &spec_meta,
         1,
@@ -483,8 +466,6 @@ fn check_second_spectrum() {
         1000040,
         515.0,
     );
-
-    // Activation
     expect_empty_one(
         &spec_meta,
         1,
@@ -504,8 +485,6 @@ fn check_second_spectrum() {
         0,
         20.0,
     );
-
-    // BinaryDataArray
     expect_empty_one(
         &spec_meta,
         1,
@@ -555,7 +534,6 @@ fn check_second_spectrum() {
 }
 
 fn assert_chromatogram_binary_data_array_list(meta: &[Metadatum], item_index: u32) {
-    // BinaryDataArray
     expect_empty_one(
         meta,
         item_index,
@@ -643,8 +621,6 @@ fn check_first_chromatogram() {
     );
     assert_eq!(chrom_meta.len(), 45);
     assert_eq!(item_meta_count(&chrom_meta, 0), 24);
-
-    // Chromatogram
     expect_text_one(
         &chrom_meta,
         0,

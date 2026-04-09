@@ -12,10 +12,10 @@ use crate::{
 
 #[inline]
 pub fn xml_local_name(mut raw: &[u8]) -> &[u8] {
-    if raw.first() == Some(&b'{') {
-        if let Some(end) = raw.iter().position(|&b| b == b'}') {
-            raw = &raw[end + 1..];
-        }
+    if raw.first() == Some(&b'{')
+        && let Some(end) = raw.iter().position(|&b| b == b'}')
+    {
+        raw = &raw[end + 1..];
     }
     if let Some(colon) = raw.iter().rposition(|&b| b == b':') {
         &raw[colon + 1..]

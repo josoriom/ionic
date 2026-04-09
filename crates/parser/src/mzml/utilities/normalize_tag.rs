@@ -1,5 +1,3 @@
-// ── legacy: tag normalisation ────────────────────────
-// All legacy-alias lives here.
 #[inline]
 pub fn normalize_tag(s: &str) -> &str {
     match s {

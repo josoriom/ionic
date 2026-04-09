@@ -16,7 +16,6 @@ const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 #[test]
 fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
     let mzml = parse_b(&MZML_CACHE, PATH);
-    // cvList
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -30,11 +29,7 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         cv0.uri.as_deref(),
         Some("http://psidev.sourceforge.net/ms/xml/mzdata/psi-ms.2.0.2.obo")
     );
-
-    // fileDescription
     let file_desc = &mzml.file_description.as_ref().unwrap();
-
-    // fileContent
     assert_eq!(file_desc.file_content.cv_params.len(), 1);
     assert_cv(
         CV_REF_MODE,
@@ -45,8 +40,6 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         Some(""),
         None,
     );
-
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 1);
     let sf0 = &file_desc.source_file_list.source_file[0];
     assert_eq!(sf0.id, "SF1");
@@ -70,8 +63,6 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         Some("71be39fb2700ab2f3c8b2234b91274968b6899b1"),
         None,
     );
-
-    // referenceableParamGroupList
     let rpgl = mzml
         .referenceable_param_group_list
         .as_ref()
@@ -102,15 +93,11 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
             None,
         );
     }
-
-    // sampleList
     let sample_list = mzml.sample_list.as_ref().expect("sampleList parsed");
     assert_eq!(sample_list.samples.len(), 1);
     let sample0 = &sample_list.samples[0];
     assert_eq!(sample0.id, "SP1");
     assert_eq!(sample0.name, "Sample1");
-
-    // instrumentConfigurationList
     let inst_list = mzml
         .instrument_list
         .as_ref()
@@ -136,8 +123,6 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         Some("23433"),
         None,
     );
-
-    // componentList
     let cl0 = inst0.component_list.as_ref().expect("componentList parsed");
     assert_eq!(cl0.source.len(), 1);
     assert_eq!(cl0.analyzer.len(), 1);
@@ -178,8 +163,6 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         Some(""),
         None,
     );
-
-    // softwareList
     let sw_list = mzml.software_list.as_ref().expect("softwareList parsed");
     assert_eq!(sw_list.software.len(), 3);
 
@@ -206,7 +189,7 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         "MS",
         "MS:1000615",
         "ProteoWizard software",
-        Some("1"),
+        Some("1.0"),
     );
 
     let sw2 = &sw_list.software[2];
@@ -221,8 +204,6 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
         "Xcalibur",
         Some("2.0.5"),
     );
-
-    // dataProcessingList
     let dp_list = mzml
         .data_processing_list
         .as_ref()
@@ -268,18 +249,12 @@ fn tiny_msdata_mzml0_99_10_pwiz_header_sections() {
 fn tiny_msdata_mzml0_99_10_pwiz_first_spectrum() {
     let mzml = parse_b(&MZML_CACHE, PATH);
     let run = &mzml.run;
-
-    // println!("----:::>>{:#?}", run.spectrum_list);
-
-    // sourceFileRefList
     let sfrefl = run
         .source_file_ref_list
         .as_ref()
         .expect("sourceFileRefList parsed");
     assert_eq!(sfrefl.source_file_refs.len(), 1);
     assert_eq!(sfrefl.source_file_refs[0].r#ref, "SF1");
-
-    // spectrumList
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
 
@@ -682,7 +657,6 @@ fn tiny_msdata_mzml0_99_10_pwiz_second_spectrum() {
         (1usize, "intensity array", "MS:1000515"),
     ] {
         let ba = &bal.binary_data_arrays[i];
-        // println!("---:::>>> binary data array: {:#?}", ba);
         assert_eq!(ba.cv_params.len(), 3);
         assert_cv(
             CV_REF_MODE,
@@ -725,7 +699,6 @@ fn tiny_mzml0_99_10_pwiz_chromatograms() {
     assert_eq!(cl.chromatograms.len(), 2);
 
     let tic = chromatogram(cl, "tic");
-    // println!("---:::>>> tic: {:#?}", tic);
     assert_eq!(tic.index, Some(0));
     // assert_eq!(tic.native_id.as_deref(), Some("tic native"));
     assert_cv(
@@ -804,7 +777,6 @@ fn tiny_mzml0_99_10_pwiz_chromatograms() {
         (1usize, "intensity array", "MS:1000515", Some(108usize)),
     ] {
         let ba = &sic_bal.binary_data_arrays[i];
-        // println!("---:::>>> binary data array: {:#?}", ba);
         assert_cv(
             CV_REF_MODE,
             &ba.cv_params,

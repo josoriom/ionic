@@ -14,7 +14,6 @@ const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 #[test]
 fn anpc_mzml1_1_0_header_sections() {
     let mzml = parse_b(&MZML_CACHE, PATH);
-    // cvList
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 2);
 
@@ -38,11 +37,7 @@ fn anpc_mzml1_1_0_header_sections() {
             "https://raw.githubusercontent.com/bio-ontology-research-group/unit-ontology/master/unit.obo"
         )
     );
-
-    // fileDescription
     let file_desc = &mzml.file_description.as_ref().unwrap();
-
-    // fileContent
     assert_eq!(file_desc.file_content.cv_params.len(), 2);
     assert_cv(
         CV_REF_MODE,
@@ -63,7 +58,6 @@ fn anpc_mzml1_1_0_header_sections() {
         None,
     );
 
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 1);
     let sf0 = &file_desc.source_file_list.source_file[0];
     assert_eq!(sf0.id, "anpc_file.d_x005c_Analysis.baf");
@@ -99,7 +93,6 @@ fn anpc_mzml1_1_0_header_sections() {
         None,
     );
 
-    // referenceableParamGroupList
     let rpgl = mzml
         .referenceable_param_group_list
         .as_ref()
@@ -119,7 +112,6 @@ fn anpc_mzml1_1_0_header_sections() {
         None,
     );
 
-    // softwareList
     let sw_list = mzml.software_list.as_ref().expect("softwareList parsed");
 
     assert_eq!(sw_list.software.len(), 3);
@@ -168,7 +160,6 @@ fn anpc_mzml1_1_0_header_sections() {
         None,
     );
 
-    // instrumentConfigurationList
     let inst_list = mzml
         .instrument_list
         .as_ref()
@@ -261,7 +252,6 @@ fn anpc_mzml1_1_0_header_sections() {
         None,
     );
 
-    // dataProcessingList
     let dp_list = mzml
         .data_processing_list
         .as_ref()
@@ -283,7 +273,6 @@ fn anpc_mzml1_1_0_header_sections() {
         None,
     );
 
-    // run: spectrumList + chromatogramList presence
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -363,7 +352,6 @@ fn anpc_mzml1_1_0_first_spectrum() {
         None,
     );
 
-    // scanList/scan
     let scl = spectrum_scan_list(s0);
     assert_eq!(scl.scans.len(), 1);
     // TODO: re-enable once ScanList.cv_params is parsed
@@ -414,17 +402,13 @@ fn anpc_mzml1_1_0_first_spectrum() {
         Some("m/z"),
     );
 
-    // precursorList must be absent for MS1
     assert!(spectrum_precursor_list(s0).is_none());
 
-    // binaryDataArrayList
     let bal = s0
         .binary_data_array_list
         .as_ref()
         .expect("binaryDataArrayList parsed");
     assert_eq!(bal.binary_data_arrays.len(), 2);
-
-    // m/z array
     let mz = &bal.binary_data_arrays[0];
     assert_eq!(mz.encoded_length, Some(3627008));
     assert_cv(
@@ -454,8 +438,6 @@ fn anpc_mzml1_1_0_first_spectrum() {
         Some(""),
         Some("m/z"),
     );
-
-    // intensity array (32-bit float)
     let it = &bal.binary_data_arrays[1];
     assert_eq!(it.encoded_length, Some(1813504));
     assert_cv(
@@ -555,7 +537,6 @@ fn anpc_mzml1_1_0_last_spectrum() {
         None,
     );
 
-    // scanList/scan
     // TODO: re-enable once ScanList.cv_params is parsed
     let scl = spectrum_scan_list(s_last);
     assert_eq!(scl.scans.len(), 1);
@@ -605,8 +586,6 @@ fn anpc_mzml1_1_0_last_spectrum() {
         Some("1000"),
         Some("m/z"),
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s_last).expect("precursorList parsed");
     assert_eq!(pl.precursors.len(), 1);
 
@@ -681,8 +660,6 @@ fn anpc_mzml1_1_0_last_spectrum() {
         Some("20"),
         None,
     );
-
-    // binaryDataArrayList
     let bal = s_last
         .binary_data_array_list
         .as_ref()
@@ -761,7 +738,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         .expect("chromatogramList parsed");
     assert_eq!(cl.chromatograms.len(), 2);
 
-    // TIC
     let tic = &cl.chromatograms[0];
     assert_eq!(tic.index, Some(0));
     assert_eq!(tic.id, "TIC");
@@ -782,8 +758,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         .as_ref()
         .expect("binaryDataArrayList parsed");
     assert_eq!(bal.binary_data_arrays.len(), 3);
-
-    // time array (64-bit float)
     let t = &bal.binary_data_arrays[0];
     assert_eq!(t.encoded_length, Some(37080));
     assert_cv(
@@ -813,8 +787,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         Some(""),
         Some("second"),
     );
-
-    // intensity array (32-bit float)
     let i = &bal.binary_data_arrays[1];
     assert_eq!(i.encoded_length, Some(18540));
     assert_cv(
@@ -876,7 +848,6 @@ fn anpc_mzml1_1_0_chromatograms() {
         Some("dimensionless unit"),
     );
 
-    // BPC
     let bpc = &cl.chromatograms[1];
     assert_eq!(bpc.index, Some(1));
     assert_eq!(bpc.id, "BPC");

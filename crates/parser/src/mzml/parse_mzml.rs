@@ -1,16 +1,15 @@
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::Reader;
 use std::io::Cursor;
 
 use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParseError, attr_u32, attr_usize, drain_until_close, parse_cv_list,
-        parse_data_processing_list, parse_file_description, parse_index_list,
-        parse_instrument_list, parse_ref_param_group_list, parse_run, parse_sample_list,
-        parse_scan_settings_list, parse_software_list, parsing_workspace::ParsingWorkspace,
-        tag_id_from_bytes,
+        attr_u32, attr_usize, drain_until_close, parse_cv_list, parse_data_processing_list,
+        parse_file_description, parse_index_list, parse_instrument_list,
+        parse_ref_param_group_list, parse_run, parse_sample_list, parse_scan_settings_list,
+        parse_software_list, parsing_workspace::ParsingWorkspace, tag_id_from_bytes, ParseError,
     },
 };
 
@@ -101,7 +100,15 @@ pub fn parse_mzml(bytes: &[u8]) -> Result<MzML, ParseError> {
                 }
             }
             Event::End(e) if tag_id_from_bytes(e.name().as_ref()) == TagId::MzML => break Ok(mzml),
-            Event::Eof => break Ok(mzml),
+            Event::Eof => {
+                if inside_mzml {
+                    break Err(ParseError::UnexpectedEof {
+                        context: "mzML".to_string(),
+                        byte_offset: ws.xml_reader.buffer_position(),
+                    });
+                }
+                break Ok(mzml);
+            }
             _ => {}
         }
     }
