@@ -1,5 +1,5 @@
 use crate::{
-    CvParam,
+    decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF},
         utilities::{
@@ -8,7 +8,6 @@ use crate::{
             parse_cv_and_user_params,
         },
     },
-    decoder::decode::Metadatum,
     mzml::{
         schema::TagId,
         structs::{
@@ -16,6 +15,7 @@ use crate::{
             SourceFileRefList, Target, TargetList,
         },
     },
+    CvParam,
 };
 use hashbrown::HashSet;
 
@@ -203,7 +203,7 @@ fn parse_target_list<'a, P: MetadataPolicy>(
     }
 
     let targets = extract_targets_from_cv_params(cv_params);
-    (!targets.is_empty()).then(|| TargetList {
+    (!targets.is_empty()).then_some(TargetList {
         count: Some(targets.len()),
         targets,
     })

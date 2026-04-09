@@ -61,7 +61,7 @@ pub(crate) fn spectrum_by_id<'a>(mzml: &'a MzML, id: &str) -> &'a Spectrum {
 }
 
 #[allow(dead_code)]
-pub(crate) fn spectrum_by_index<'a>(mzml: &'a MzML, idx: usize) -> &'a Spectrum {
+pub(crate) fn spectrum_by_index(mzml: &MzML, idx: usize) -> &Spectrum {
     let sl = mzml
         .run
         .spectrum_list
@@ -81,20 +81,20 @@ pub(crate) fn spectrum_description(s: &Spectrum) -> &SpectrumDescription {
 
 #[allow(dead_code)]
 pub(crate) fn spectrum_scan_list(s: &Spectrum) -> &ScanList {
-    if let Some(sd) = s.spectrum_description.as_ref() {
-        if let Some(sl) = sd.scan_list.as_ref() {
-            return sl;
-        }
+    if let Some(sd) = s.spectrum_description.as_ref()
+        && let Some(sl) = sd.scan_list.as_ref()
+    {
+        return sl;
     }
     s.scan_list.as_ref().expect("scanList parsed")
 }
 
 #[allow(dead_code)]
 pub(crate) fn spectrum_precursor_list(s: &Spectrum) -> Option<&PrecursorList> {
-    if let Some(sd) = s.spectrum_description.as_ref() {
-        if sd.precursor_list.is_some() {
-            return sd.precursor_list.as_ref();
-        }
+    if let Some(sd) = s.spectrum_description.as_ref()
+        && sd.precursor_list.is_some()
+    {
+        return sd.precursor_list.as_ref();
     }
     s.precursor_list.as_ref()
 }
@@ -263,7 +263,7 @@ pub(crate) fn assert_software(
     name: &str,
     version: Option<&str>,
 ) {
-    if let Some(p) = sw.software_param.get(0) {
+    if let Some(p) = sw.software_param.first() {
         assert_software_param(policy, p, cv_ref, accession, name, version);
         return;
     }

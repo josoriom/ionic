@@ -1,10 +1,43 @@
 #[inline(always)]
 pub(crate) fn shuffle_bytes_by_stride(input: &[u8], output: &mut [u8], element_stride: usize) {
+    debug_assert!(
+        element_stride > 0,
+        "shuffle_bytes_by_stride: element_stride must be > 0"
+    );
+    debug_assert_eq!(
+        input.len(),
+        output.len(),
+        "shuffle_bytes_by_stride: input and output must have equal length"
+    );
+    debug_assert!(
+        element_stride <= 1 || input.len().is_multiple_of(element_stride),
+        "shuffle_bytes_by_stride: input length {} is not a multiple of stride {}",
+        input.len(),
+        element_stride
+    );
+
+    // Guard: if input is not a multiple of stride, only shuffle the aligned
+    // portion and copy any trailing bytes verbatim to prevent data loss.
+    let aligned_len = if element_stride > 1 {
+        input.len() - (input.len() % element_stride)
+    } else {
+        input.len()
+    };
+
     match element_stride {
-        8 => shuffle_eight_byte_elements(input, output),
-        4 => shuffle_four_byte_elements(input, output),
-        2 => shuffle_two_byte_elements(input, output),
-        _ => shuffle_arbitrary_stride(input, output, element_stride),
+        8 => shuffle_eight_byte_elements(&input[..aligned_len], &mut output[..aligned_len]),
+        4 => shuffle_four_byte_elements(&input[..aligned_len], &mut output[..aligned_len]),
+        2 => shuffle_two_byte_elements(&input[..aligned_len], &mut output[..aligned_len]),
+        _ => shuffle_arbitrary_stride(
+            &input[..aligned_len],
+            &mut output[..aligned_len],
+            element_stride,
+        ),
+    }
+
+    // Copy any trailing unaligned bytes as-is.
+    if aligned_len < input.len() {
+        output[aligned_len..].copy_from_slice(&input[aligned_len..]);
     }
 }
 

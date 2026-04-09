@@ -28,8 +28,6 @@ fn spectrum_by_id<'a>(mzml: &'a MzML, id: &str) -> &'a Spectrum {
 #[test]
 fn tiny1_mzml0_99_0_header_sections() {
     let mzml = mzml(&MZML_CACHE, PATH);
-
-    // cvList
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -56,8 +54,6 @@ fn tiny1_mzml0_99_0_header_sections() {
         Some(""),
         None,
     );
-
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 1);
     let sf0 = &file_desc.source_file_list.source_file[0];
     assert_eq!(sf0.id, "1");
@@ -81,8 +77,6 @@ fn tiny1_mzml0_99_0_header_sections() {
         Some("71be39fb2700ab2f3c8b2234b91274968b6899b1"),
         None,
     );
-
-    // contact
     let contact = file_desc.contacts.first().expect("contacts parsed");
     assert_cv(
         CV_REF_MODE,
@@ -120,8 +114,6 @@ fn tiny1_mzml0_99_0_header_sections() {
         Some("wpennington@higglesworth.edu"),
         None,
     );
-
-    // referenceableParamGroupList
     let rpgl = mzml
         .referenceable_param_group_list
         .as_ref()
@@ -169,15 +161,11 @@ fn tiny1_mzml0_99_0_header_sections() {
         Some(""),
         None,
     );
-
-    // sampleList
     let sample_list = mzml.sample_list.as_ref().expect("sampleList parsed");
     assert_eq!(sample_list.samples.len(), 1);
     let sample0 = &sample_list.samples[0];
     assert_eq!(sample0.id, "1");
     assert_eq!(sample0.name, "Sample1");
-
-    // instrumentList
     let inst_list = mzml
         .instrument_list
         .as_ref()
@@ -263,8 +251,6 @@ fn tiny1_mzml0_99_0_header_sections() {
     assert_eq!(cl2.source.len(), 1);
     assert_eq!(cl2.analyzer.len(), 2);
     assert_eq!(cl2.detector.len(), 1);
-
-    // softwareList
     let sw_list = mzml.software_list.as_ref().expect("softwareList parsed");
     assert_eq!(sw_list.software.len(), 3);
 
@@ -293,8 +279,6 @@ fn tiny1_mzml0_99_0_header_sections() {
         "Xcalibur",
         Some("2.0.5"),
     );
-
-    // dataProcessingList
     let dp_list = mzml
         .data_processing_list
         .as_ref()
@@ -339,8 +323,6 @@ fn tiny1_mzml0_99_0_header_sections() {
 #[test]
 fn tiny1_mzml0_99_0_spectrum_s19() {
     let mzml = mzml(&MZML_CACHE, PATH);
-
-    // run
     let run = &mzml.run;
     assert_eq!(run.id.as_str(), "Exp01");
     assert_eq!(run.sample_ref.as_deref(), Some("1"));
@@ -348,8 +330,6 @@ fn tiny1_mzml0_99_0_spectrum_s19() {
         run.default_instrument_configuration_ref.as_deref(),
         Some("LTQ")
     );
-
-    // spectrumList
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
 
@@ -361,8 +341,6 @@ fn tiny1_mzml0_99_0_spectrum_s19() {
         assert_cv_ref(CV_REF_MODE, mslvl.cv_ref.as_deref(), "MS", "ms level");
         assert_eq!(mslvl.value.as_deref(), Some("1"));
     }
-
-    // spectrumDescription
     let sd = spectrum_description(s);
     assert_cv(
         CV_REF_MODE,
@@ -469,8 +447,6 @@ fn tiny1_mzml0_99_0_spectrum_s19() {
         1800.0,
         None,
     );
-
-    // binaryDataArrayList
     let bal = s
         .binary_data_array_list
         .as_ref()
@@ -608,8 +584,6 @@ fn tiny1_mzml0_99_0_spectrum_s20() {
         1.66755e+007,
         None,
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s).expect("precursorList parsed");
     assert_eq!(pl.precursors.len(), 1);
     let p0 = &pl.precursors[0];
@@ -659,8 +633,6 @@ fn tiny1_mzml0_99_0_spectrum_s20() {
         35.0,
         Some("electron volt"),
     );
-
-    // scan
     let scl = spectrum_scan_list(s);
     assert_eq!(scl.scans.len(), 1);
     let scan0 = &scl.scans[0];
@@ -708,8 +680,6 @@ fn tiny1_mzml0_99_0_spectrum_s20() {
         905.0,
         None,
     );
-
-    // binaryDataArrayList
     let bal = s
         .binary_data_array_list
         .as_ref()

@@ -20,6 +20,7 @@ pub struct ScanMeta {
 }
 
 pub trait SpectrumSource {
+    #[allow(clippy::type_complexity)]
     fn for_each_scan_in_range(
         &mut self,
         rt_min: f64,
@@ -43,6 +44,7 @@ impl SpectrumSource for MzML {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn for_each_spectra_in_range(
     spectra: &[Spectrum],
     rt_min: f64,

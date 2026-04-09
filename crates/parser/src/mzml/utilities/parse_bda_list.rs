@@ -1,18 +1,18 @@
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 use quick_xml::events::BytesStart;
 use std::io::BufRead;
 
 use crate::{
-    BinaryData, BinaryDataArray, BinaryDataArrayList, NumericType,
     mzml::{
         schema::TagId,
         utilities::{
-            ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize, read_base64_binary,
-            read_cv_param, read_ref_group_ref, read_user_param,
+            attr, attr_usize, read_base64_binary, read_cv_param, read_ref_group_ref,
+            read_user_param, ParamCollector, ParseError, ParsingWorkspace,
         },
     },
+    BinaryData, BinaryDataArray, BinaryDataArrayList, NumericType,
 };
 
 pub(crate) fn parse_bda_list<R: BufRead>(
@@ -116,26 +116,24 @@ fn encoding_for_array(bda: &BinaryDataArray) -> BinaryArrayEncoding {
     };
     let is_zlib_compressed = has("MS:1000574");
     let (f64, f32, f16) = (has("MS:1000523"), has("MS:1000521"), has("MS:1000520"));
-    let (i64, i32) = (has("MS:1000522"), has("MS:1000519"));
+    let (i64, i32, i16) = (has("MS:1000522"), has("MS:1000519"), has("MS:1000518"));
 
     let numeric_type = if let Some(declared) = bda.numeric_type {
         declared
     } else if f16 && !f32 && !f64 {
         NumericType::Float16
+    } else if i16 && !i32 && !i64 {
+        NumericType::Int16
     } else if i32 && !i64 {
         NumericType::Int32
     } else if i64 && !f64 && !f32 {
-        NumericType::Int64
-    } else if f64 && !f32 && !i64 {
-        NumericType::Float64
-    } else if f32 && !f64 && !i64 {
-        NumericType::Float32
-    } else if i64 {
         NumericType::Int64
     } else if f64 {
         NumericType::Float64
     } else if f32 {
         NumericType::Float32
+    } else if i64 {
+        NumericType::Int64
     } else {
         NumericType::Float64
     };

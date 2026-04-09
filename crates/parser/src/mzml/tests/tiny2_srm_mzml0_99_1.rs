@@ -28,8 +28,6 @@ fn spectrum_by_id<'a>(mzml: &'a MzML, id: &str) -> &'a Spectrum {
 #[test]
 fn tiny1_srm_mzml0_99_1_header_sections() {
     let mzml = mzml(&MZML_CACHE, PATH);
-
-    // cvList
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -43,11 +41,7 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         cv0.uri.as_deref(),
         Some("http://psidev.sourceforge.net/ms/xml/mzdata/psi-ms.2.0.2.obo")
     );
-
-    // fileDescription
     let file_desc = &mzml.file_description.as_ref().unwrap();
-
-    // fileContent
     assert_eq!(file_desc.file_content.cv_params.len(), 2);
     assert_cv(
         CV_REF_MODE,
@@ -67,8 +61,6 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         Some(""),
         None,
     );
-
-    // sourceFileList
     assert_eq!(file_desc.source_file_list.source_file.len(), 1);
     let sf0 = &file_desc.source_file_list.source_file[0];
     assert_eq!(sf0.id, "1");
@@ -92,8 +84,6 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         Some("71be39fb2700ab2f3c8b2234b91274968b6899b1"),
         None,
     );
-
-    // contact
     let contact = file_desc.contacts.first().expect("contacts parsed");
     assert_cv(
         CV_REF_MODE,
@@ -131,8 +121,6 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         Some("wpennington@higglesworth.edu"),
         None,
     );
-
-    // referenceableParamGroupList
     let rpgl = mzml
         .referenceable_param_group_list
         .as_ref()
@@ -172,15 +160,11 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         Some(""),
         None,
     );
-
-    // sampleList
     let sample_list = mzml.sample_list.as_ref().expect("sampleList parsed");
     assert_eq!(sample_list.samples.len(), 1);
     let sample0 = &sample_list.samples[0];
     assert_eq!(sample0.id, "1");
     assert_eq!(sample0.name, "Sample1");
-
-    // instrumentList
     let inst_list = mzml
         .instrument_list
         .as_ref()
@@ -249,8 +233,6 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         Some(""),
         None,
     );
-
-    // softwareList
     let sw_list = mzml.software_list.as_ref().expect("softwareList parsed");
     assert_eq!(sw_list.software.len(), 3);
 
@@ -279,8 +261,6 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         "Xcalibur",
         Some("2.0.5"),
     );
-
-    // dataProcessingList
     let dp_list = mzml
         .data_processing_list
         .as_ref()
@@ -320,8 +300,6 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
         Some(""),
         None,
     );
-
-    // run
     let run = &mzml.run;
     assert_eq!(run.id.as_str(), "msRun01");
     assert_eq!(run.sample_ref.as_deref(), Some("1"));
@@ -337,16 +315,12 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
 #[test]
 fn tiny1_srm_mzml0_99_1_spectrum_s101() {
     let mzml = mzml(&MZML_CACHE, PATH);
-
-    // spectrumList
     let sl = mzml
         .run
         .spectrum_list
         .as_ref()
         .expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
-
-    // spectrum
     let s0 = spectrum_by_id(mzml, "S101");
     assert!(s0.cv_params.iter().any(|cv| cv.name == "SRM spectrum"));
 
@@ -358,8 +332,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         }
         None => assert_cv_absent(&s0.cv_params, "ms level"),
     }
-
-    // spectrumDescription
     let sd = spectrum_description(s0);
     assert_cv(
         CV_REF_MODE,
@@ -370,8 +342,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         Some(""),
         None,
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s0).expect("precursorList parsed");
     assert_eq!(pl.precursors.len(), 1);
     let p0 = &pl.precursors[0];
@@ -379,8 +349,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         p0.spectrum_ref.is_none(),
         "unexpected spectrumRef for S101 precursor"
     );
-
-    // selectedIonList
     let sil = p0
         .selected_ion_list
         .as_ref()
@@ -396,8 +364,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         445.34,
         None,
     );
-
-    // activation
     let act = p0.activation.as_ref().expect("activation parsed");
     assert_cv(
         CV_REF_MODE,
@@ -417,8 +383,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         26.0,
         Some("electron volt"),
     );
-
-    // scan
     let scl = spectrum_scan_list(s0);
     assert_eq!(scl.scans.len(), 1);
     let scan0 = &scl.scans[0];
@@ -440,8 +404,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         Some("+ c ESI sid=8 SRM ms2 445.34@cid26.00 [515.12-525.14,672.55-672.57]"),
         None,
     );
-
-    // scanWindowList
     let swl = scan0
         .scan_window_list
         .as_ref()
@@ -505,8 +467,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
         0.07,
         Some("second"),
     );
-
-    // binaryDataArrayList
     let bal = s0
         .binary_data_array_list
         .as_ref()
@@ -598,8 +558,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
         }
         None => assert_cv_absent(&s1.cv_params, "ms level"),
     }
-
-    // spectrumDescription
     let sd = spectrum_description(s1);
     assert_cv(
         CV_REF_MODE,
@@ -610,14 +568,10 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
         Some(""),
         None,
     );
-
-    // precursorList
     let pl = spectrum_precursor_list(s1).expect("precursorList parsed");
     assert_eq!(pl.precursors.len(), 1);
     let p0 = &pl.precursors[0];
     assert_eq!(p0.spectrum_ref.as_deref(), Some("101"));
-
-    // selectedIonList
     let sil = p0
         .selected_ion_list
         .as_ref()
@@ -642,8 +596,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
         Some("2"),
         None,
     );
-
-    // activation
     let act = p0.activation.as_ref().expect("activation parsed");
     assert_cv(
         CV_REF_MODE,
@@ -663,8 +615,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
         35.0,
         Some("electron volt"),
     );
-
-    // scan
     let scl = spectrum_scan_list(s1);
     assert_eq!(scl.scans.len(), 1);
     let scan0 = &scl.scans[0];
@@ -711,8 +661,6 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
         905.0,
         None,
     );
-
-    // binaryDataArrayList
     let bal = s1
         .binary_data_array_list
         .as_ref()

@@ -1,4 +1,10 @@
 target/
 .DS_Store
-target/
+.config/
+.opencode/
 checks/
+docs/
+inputs/
+pwiz/
+scripts/
+tmp/
