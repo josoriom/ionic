@@ -70,14 +70,15 @@ This section consists of a contiguous array of **16-byte** entries. It allows th
 
 A contiguous array of 32-byte entries. Each entry represents one array belonging to one spectrum.
 
-| Offset | Size | Name          | Type  | Description                                      |
-| -----: | ---: | ------------- | ----- | ------------------------------------------------ |
-|      0 |    8 | `off_element` | u64   | Starting element index within decompressed block |
-|      8 |    8 | `len_element` | u64   | Number of elements in this array                 |
-|     16 |    4 | `block_id`    | u32   | Block index within container                     |
-|     20 |    4 | `array_type`  | u32   | **MS accession tail** (e.g. `1000515`)           |
-|     24 |    1 | `dtype`       | u8    | `1=F64, 2=F32, 3=F16, 4=I16, 5=I32, 6=I64`       |
-|     25 |    7 | `reserved`    | u8[7] | Reserved (0)                                     |
+| Offset | Size | Name           | Type  | Description                                                                           |
+| -----: | ---: | -------------- | ----- | ------------------------------------------------------------------------------------- |
+|      0 |    8 | `off_element`  | u64   | Starting element index within decompressed block                                      |
+|      8 |    8 | `len_element`  | u64   | Number of elements in this array                                                      |
+|     16 |    4 | `block_id`     | u32   | Block index within container                                                          |
+|     20 |    4 | `array_type`   | u32   | **MS accession tail** (e.g. `1000515`)                                                |
+|     24 |    1 | `dtype`        | u8    | `1=F64, 2=F32, 3=F16, 4=I16, 5=I32, 6=I64`                                            |
+|     25 |    1 | `array_filter` | u8    | Per-array transform: `0=none`, `2=delta+shuffle` for `dtype=1` (`F64`) only; other dtypes must use `0` |
+|     26 |    6 | `reserved`     | u8[6] | Reserved (0)                                                                          |
 
 # Section B: Chromatograms (16 Bytes)
 
@@ -92,14 +93,15 @@ This section consists of a contiguous array of 16-byte entries. It allows the re
 
 A contiguous array of 32-byte entries. Each entry represents one array belonging to one chromatogram.
 
-| Offset | Size | Name          | Type  | Description                                      |
-| -----: | ---: | ------------- | ----- | ------------------------------------------------ |
-|      0 |    8 | `off_element` | u64   | Starting element index within decompressed block |
-|      8 |    8 | `len_element` | u64   | Number of elements in this array                 |
-|     16 |    4 | `block_id`    | u32   | Block index within container                     |
-|     20 |    4 | `array_type`  | u32   | **MS accession tail** (e.g. `1000515`)           |
-|     24 |    1 | `dtype`       | u8    | `1=F64, 2=F32, 3=F16, 4=I16, 5=I32, 6=I64`       |
-|     25 |    7 | `reserved`    | u8[7] | Reserved (0)                                     |
+| Offset | Size | Name           | Type  | Description                                                                           |
+| -----: | ---: | -------------- | ----- | ------------------------------------------------------------------------------------- |
+|      0 |    8 | `off_element`  | u64   | Starting element index within decompressed block                                      |
+|      8 |    8 | `len_element`  | u64   | Number of elements in this array                                                      |
+|     16 |    4 | `block_id`     | u32   | Block index within container                                                          |
+|     20 |    4 | `array_type`   | u32   | **MS accession tail** (e.g. `1000515`)                                                |
+|     24 |    1 | `dtype`        | u8    | `1=F64, 2=F32, 3=F16, 4=I16, 5=I32, 6=I64`                                            |
+|     25 |    1 | `array_filter` | u8    | Per-array transform: `0=none`, `2=delta+shuffle` for `dtype=1` (`F64`) only; other dtypes must use `0` |
+|     26 |    6 | `reserved`     | u8[6] | Reserved (0)                                                                          |
 
 # Section C & D: Metadata (Spectra and Chromatograms)
 

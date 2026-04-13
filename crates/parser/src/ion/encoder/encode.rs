@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 
 use crate::{
-    encoder::utilities::{encoder_output::EncoderOutput, FileHeader},
-    ion::encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor, FilterType},
-    mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
     BinaryData, FilterRecord, NumericType,
+    encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
+    ion::encoder::utilities::{
+        CompressionMode, ContainerBuilder, DefaultCompressor, FilterType, delta_filter,
+    },
+    mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
 };
 
 use crate::encoder::utilities::{
@@ -13,10 +15,10 @@ use crate::encoder::utilities::{
         write_i32_slice_le, write_i64_slice_le, write_u16_slice_le, write_u32_le, write_u64_le,
     },
     meta_collector::{
-        array_type_accession_from_binary_data_array, parse_accession_tail_raw, ArrayPolicy,
-        CompressedMetaSections, GlobalCounts, MetaCollector, PackedMeta, ACCESSION_32BIT_FLOAT,
-        ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY, ACCESSION_MZ_ARRAY,
-        ACCESSION_TIME_ARRAY,
+        ACCESSION_32BIT_FLOAT, ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY,
+        ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY, ArrayPolicy, CompressedMetaSections,
+        GlobalCounts, MetaCollector, PackedMeta, array_type_accession_from_binary_data_array,
+        parse_accession_tail_raw,
     },
 };
 
@@ -109,8 +111,7 @@ fn extract_filter_record(spectrum: &Spectrum) -> FilterRecord {
         for cv in &si.cv_params {
             let tail = parse_accession_tail_raw(cv.accession.as_deref());
             if tail == ACC_SELECTED_ION_MZ
-                && let Some(val) =
-                    cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
+                && let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
             {
                 record.selected_ion_mz = val;
             }
@@ -627,13 +628,15 @@ fn write_arrayref_entry(
     block_id: u32,
     array_accession: u32,
     dtype: u8,
+    array_filter: u8,
 ) {
     write_u64_le(buf, element_offset);
     write_u64_le(buf, element_count);
     write_u32_le(buf, block_id);
     write_u32_le(buf, array_accession);
     buf.push(dtype);
-    buf.extend_from_slice(&[0u8; 7]);
+    buf.push(array_filter);
+    buf.extend_from_slice(&[0u8; 6]);
 }
 
 struct PackedArraySection {
@@ -699,10 +702,27 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
                 validate_array_dtype(data, dtype)?;
                 let elem_bytes = element_byte_size_for_dtype(dtype);
+                let use_delta = acc == ACCESSION_MZ_ARRAY
+                    && dtype == FILE_DTYPE_F64
+                    && matches!(data, ArrayData::F64(_))
+                    && config.compression_is_enabled();
+                let array_filter = if use_delta {
+                    FilterType::DeltaShuffle as u8
+                } else {
+                    0u8
+                };
                 let (block_id, elem_offset) = container_builder.add_item_to_box(
                     data.element_count() * elem_bytes,
                     elem_bytes,
-                    |buf| write_array_data(buf, data, dtype),
+                    |buf| {
+                        if use_delta {
+                            if let ArrayData::F64(slice) = data {
+                                delta_filter::encode_f64(slice, buf);
+                            }
+                        } else {
+                            write_array_data(buf, data, dtype);
+                        }
+                    },
                 )?;
                 write_arrayref_entry(
                     &mut array_refs_bytes,
@@ -711,6 +731,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                     block_id,
                     acc,
                     dtype,
+                    array_filter,
                 );
                 arrayref_cursor += 1;
                 arrayref_count += 1;
@@ -772,10 +793,27 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
                 validate_array_dtype(data, dtype)?;
                 let elem_bytes = element_byte_size_for_dtype(dtype);
+                let use_delta = acc == ACCESSION_MZ_ARRAY
+                    && dtype == FILE_DTYPE_F64
+                    && matches!(data, ArrayData::F64(_))
+                    && config.compression_is_enabled();
+                let array_filter = if use_delta {
+                    FilterType::DeltaShuffle as u8
+                } else {
+                    0u8
+                };
                 let (block_id, elem_offset) = container_builder.add_item_to_box(
                     data.element_count() * elem_bytes,
                     elem_bytes,
-                    |buf| write_array_data(buf, data, dtype),
+                    |buf| {
+                        if use_delta {
+                            if let ArrayData::F64(slice) = data {
+                                delta_filter::encode_f64(slice, buf);
+                            }
+                        } else {
+                            write_array_data(buf, data, dtype);
+                        }
+                    },
                 )?;
                 write_arrayref_entry(
                     &mut array_refs_bytes,
@@ -784,6 +822,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
                     block_id,
                     acc,
                     dtype,
+                    array_filter,
                 );
                 arrayref_cursor += 1;
                 arrayref_count += 1;

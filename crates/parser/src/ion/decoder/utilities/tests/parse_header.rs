@@ -61,57 +61,39 @@ fn check_header() {
     assert!(
         header
             .off_spec_entries
-            .checked_add(header.len_spec_entries)
-            .unwrap_or(u64::MAX)
+            .saturating_add(header.len_spec_entries)
             <= header.off_spec_arrayrefs
     );
     assert!(
         header
             .off_spec_arrayrefs
-            .checked_add(header.len_spec_arrayrefs)
-            .unwrap_or(u64::MAX)
+            .saturating_add(header.len_spec_arrayrefs)
             <= header.off_chrom_entries
     );
     assert!(
         header
             .off_chrom_entries
-            .checked_add(header.len_chrom_entries)
-            .unwrap_or(u64::MAX)
+            .saturating_add(header.len_chrom_entries)
             <= header.off_chrom_arrayrefs
     );
     assert!(
         header
             .off_chrom_arrayrefs
-            .checked_add(header.len_chrom_arrayrefs)
-            .unwrap_or(u64::MAX)
+            .saturating_add(header.len_chrom_arrayrefs)
             <= header.off_spec_meta
     );
-    assert!(
-        header
-            .off_spec_meta
-            .checked_add(header.len_spec_meta)
-            .unwrap_or(u64::MAX)
-            <= header.off_chrom_meta
-    );
-    assert!(
-        header
-            .off_chrom_meta
-            .checked_add(header.len_chrom_meta)
-            .unwrap_or(u64::MAX)
-            <= header.off_global_meta
-    );
+    assert!(header.off_spec_meta.saturating_add(header.len_spec_meta) <= header.off_chrom_meta);
+    assert!(header.off_chrom_meta.saturating_add(header.len_chrom_meta) <= header.off_global_meta);
     assert!(
         header
             .off_container_chrom
-            .checked_add(header.len_container_chrom)
-            .unwrap_or(u64::MAX)
+            .saturating_add(header.len_container_chrom)
             <= header.off_spec_entries
     );
     assert!(
         header
             .off_container_spect
-            .checked_add(header.len_container_spect)
-            .unwrap_or(u64::MAX)
+            .saturating_add(header.len_container_spect)
             <= header.off_container_chrom
     );
     assert!(header.len_container_spect >= header.block_count_spect * 32);
@@ -138,8 +120,7 @@ fn check_header() {
 
     let end = header
         .off_container_chrom
-        .checked_add(header.len_container_chrom)
-        .unwrap_or(u64::MAX);
+        .saturating_add(header.len_container_chrom);
     assert!(
         end <= len,
         "container_chrom end out of bounds (end={end}, len={len})"

@@ -7,7 +7,47 @@ on:
 
 jobs:
   test:
-    name: cargo test
+    name: test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Run tests
+        run: cargo test --all-features --target ${{ matrix.target }}
+
+  test-wasm:
+    name: test (wasm32 byte_transpose)
     runs-on: ubuntu-latest
 
     steps:
@@ -16,9 +56,94 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Create wasm harness
+        run: |
+          mkdir -p .ci/byte_transpose_wasm/src
+          cat > .ci/byte_transpose_wasm/Cargo.toml <<'EOF'
+          [package]
+          name = "byte_transpose_wasm"
+          version = "0.1.0"
+          edition = "2024"
+
+          [lib]
+          crate-type = ["cdylib", "rlib"]
+
+          [dev-dependencies]
+          wasm-bindgen-test = "0.3"
+          EOF
+          cat > .ci/byte_transpose_wasm/src/lib.rs <<'EOF'
+          #[path = "../../../crates/parser/src/ion/byte_transpose/mod.rs"]
+          mod byte_transpose;
+
+          #[cfg(test)]
+          mod tests {
+              use super::byte_transpose;
+
+              #[cfg(target_arch = "wasm32")]
+              use wasm_bindgen_test::wasm_bindgen_test;
+
+              #[cfg(target_arch = "wasm32")]
+              wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_node);
+
+              fn make_input(len: usize) -> Vec<u8> {
+                  (0..len).map(|i| (i % 251) as u8).collect()
+              }
+
+              fn scalar_shuffle(input: &[u8], stride: usize) -> Vec<u8> {
+                  let aligned = (input.len() / stride) * stride;
+                  let count = aligned / stride;
+                  let mut out = vec![0u8; aligned];
+                  for byte_pos in 0..stride {
+                      for i in 0..count {
+                          out[byte_pos * count + i] = input[i * stride + byte_pos];
+                      }
+                  }
+                  out
+              }
+
+              fn scalar_unshuffle(input: &[u8], stride: usize) -> Vec<u8> {
+                  let count = input.len() / stride;
+                  let mut out = vec![0u8; input.len()];
+                  for byte_pos in 0..stride {
+                      for i in 0..count {
+                          out[i * stride + byte_pos] = input[byte_pos * count + i];
+                      }
+                  }
+                  out
+              }
+
+              #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+              fn shuffle_matches_scalar() {
+                  for (stride, len) in [(2usize, 32usize), (4, 64), (8, 128)] {
+                      let input = make_input(len);
+                      let mut out = vec![0u8; input.len()];
+                      byte_transpose::shuffle(&input, &mut out, stride);
+                      assert_eq!(out, scalar_shuffle(&input, stride));
+                  }
+              }
+
+              #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+              fn unshuffle_matches_scalar() {
+                  for (stride, len) in [(2usize, 32usize), (4, 64), (8, 128)] {
+                      let input = scalar_shuffle(&make_input(len), stride);
+                      let mut out = vec![0u8; input.len()];
+                      byte_transpose::unshuffle(&input, &mut out, stride);
+                      assert_eq!(out, scalar_unshuffle(&input, stride));
+                  }
+              }
+          }
+          EOF
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-byte-transpose
 
       - name: Run tests
-        run: cargo test --all-features
+        run: wasm-pack test --node .ci/byte_transpose_wasm

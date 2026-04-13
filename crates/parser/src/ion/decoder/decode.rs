@@ -1,6 +1,7 @@
 use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
 use crate::ion::attr_meta::ACC_ATTR_DEFAULT_SOURCE_FILE_REF;
 use crate::ion::encoder::utilities::container_builder::FilterType;
+use crate::ion::encoder::utilities::delta_filter;
 use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerAccess, ContainerView, DefaultProcessor},
@@ -75,6 +76,7 @@ pub struct ArrayRef {
     pub element_count: u64,
     pub array_type: u32,
     pub dtype: u8,
+    pub array_filter: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +260,7 @@ impl<'a> Decoder<'a> {
             dtype_stride(aref.dtype),
             "read_spectrum_array",
         )?;
-        decode_into(out, raw, aref.dtype);
+        decode_into(out, raw, aref.dtype, aref.array_filter);
         Ok(())
     }
 
@@ -278,7 +280,7 @@ impl<'a> Decoder<'a> {
             dtype_stride(aref.dtype),
             "read_chromatogram_array",
         )?;
-        decode_into(out, raw, aref.dtype);
+        decode_into(out, raw, aref.dtype, aref.array_filter);
         Ok(())
     }
 
@@ -933,6 +935,7 @@ fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
         block_id: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
         array_type: u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
         dtype: bytes[24],
+        array_filter: bytes[25],
     }
 }
 
@@ -975,7 +978,7 @@ fn decode_from_block(
         "scan",
     ) {
         Ok(raw) => {
-            decode_into(buf, raw, aref.dtype);
+            decode_into(buf, raw, aref.dtype, aref.array_filter);
             true
         }
         Err(_) => false,
@@ -999,16 +1002,20 @@ fn reserve_exact_elements(buf: &mut Vec<f64>, len: usize) {
     }
 }
 
-fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8) {
+fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) {
     buf.clear();
     match dtype {
         1 => {
             let len = raw.len() / 8;
             reserve_exact_elements(buf, len);
-            buf.extend(
-                raw.chunks_exact(8)
-                    .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
-            );
+            if array_filter == FilterType::DeltaShuffle as u8 {
+                delta_filter::decode_f64(raw, buf);
+            } else {
+                buf.extend(
+                    raw.chunks_exact(8)
+                        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
+                );
+            }
         }
         2 => {
             let len = raw.len() / 4;
@@ -1080,7 +1087,13 @@ fn attach_binaries<E: BinaryArrayOwner>(
                 dtype_stride(aref.dtype),
                 ctx,
             )?;
-            attach_array(binary_data_array_list, aref.array_type, aref.dtype, raw)?;
+            attach_array(
+                binary_data_array_list,
+                aref.array_type,
+                aref.dtype,
+                raw,
+                aref.array_filter,
+            )?;
         }
         binary_data_array_list.count = Some(binary_data_array_list.binary_data_arrays.len());
     }
@@ -1092,8 +1105,9 @@ fn attach_array(
     array_type: u32,
     dtype: u8,
     raw: &[u8],
+    array_filter: u8,
 ) -> Result<(), String> {
-    let binary = raw_to_binary_data(raw, dtype)?;
+    let binary = raw_to_binary_data(raw, dtype, array_filter)?;
     let numeric_type = dtype_to_numeric_type(dtype)?;
     let found = bdal
         .binary_data_arrays
@@ -1111,9 +1125,17 @@ fn attach_array(
     Ok(())
 }
 
-fn raw_to_binary_data(raw: &[u8], dtype: u8) -> Result<BinaryData, String> {
+fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> Result<BinaryData, String> {
     match dtype {
-        1 => Ok(BinaryData::F64(raw_to_f64_vec(raw)?)),
+        1 => {
+            if array_filter == FilterType::DeltaShuffle as u8 {
+                let mut out = Vec::with_capacity(raw.len() / 8);
+                delta_filter::decode_f64(raw, &mut out);
+                Ok(BinaryData::F64(out))
+            } else {
+                Ok(BinaryData::F64(raw_to_f64_vec(raw)?))
+            }
+        }
         2 => Ok(BinaryData::F32(raw_to_f32_vec(raw)?)),
         3 => Ok(BinaryData::F16(raw_to_u16_vec(raw)?)),
         4 => Ok(BinaryData::I16(raw_to_i16_vec(raw)?)),
@@ -1442,7 +1464,7 @@ mod tests {
         let vals = [1.5f64, 2.5, 3.5];
         let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut buf = Vec::new();
-        decode_into(&mut buf, &raw, 1);
+        decode_into(&mut buf, &raw, 1, 0);
         assert_eq!(buf, vals);
     }
 
@@ -1451,7 +1473,7 @@ mod tests {
         let vals = [1.0f32, 2.0];
         let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut buf = Vec::new();
-        decode_into(&mut buf, &raw, 2);
+        decode_into(&mut buf, &raw, 2, 0);
         assert!((buf[0] - 1.0).abs() < f64::EPSILON);
         assert!((buf[1] - 2.0).abs() < f64::EPSILON);
     }

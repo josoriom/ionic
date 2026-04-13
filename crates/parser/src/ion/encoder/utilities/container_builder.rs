@@ -10,6 +10,7 @@ pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
 pub(crate) enum FilterType {
     None = 0,
     Shuffle = 1,
+    DeltaShuffle = 2,
 }
 
 impl TryFrom<u8> for FilterType {
@@ -19,6 +20,7 @@ impl TryFrom<u8> for FilterType {
         match raw_byte {
             0 => Ok(Self::None),
             1 => Ok(Self::Shuffle),
+            2 => Ok(Self::DeltaShuffle),
             unknown => Err(format!("unknown filter type byte: {unknown}")),
         }
     }
@@ -575,7 +577,8 @@ mod tests {
     fn filter_type_roundtrip() {
         assert_eq!(FilterType::try_from(0), Ok(FilterType::None));
         assert_eq!(FilterType::try_from(1), Ok(FilterType::Shuffle));
-        assert!(FilterType::try_from(2).is_err());
+        assert_eq!(FilterType::try_from(2), Ok(FilterType::DeltaShuffle));
+        assert!(FilterType::try_from(3).is_err());
     }
 
     #[test]

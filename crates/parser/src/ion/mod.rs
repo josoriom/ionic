@@ -1,3 +1,4 @@
+pub(crate) mod byte_transpose;
 pub mod decoder;
 pub use decoder::decode::{Decoder, DecoderConfig};
 pub(crate) use decoder::utilities;

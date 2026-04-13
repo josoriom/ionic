@@ -1,7 +1,10 @@
 use crate::ion::encoder::utilities::container_builder::{
     BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, FilterType, Stride,
 };
-use crate::ion::utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take};
+use crate::ion::{
+    byte_transpose::{shuffle, unshuffle},
+    utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
+};
 use std::ops::Deref;
 
 const LRU_NONE: usize = usize::MAX;
@@ -386,71 +389,7 @@ impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
 
 #[inline(always)]
 fn unshuffle_bytes(source: &[u8], target: &mut [u8], stride: usize) {
-    match stride {
-        8 => unshuffle8(source, target),
-        4 => unshuffle4(source, target),
-        2 => unshuffle2(source, target),
-        _ => unshuffle_any(source, target, stride),
-    }
-}
-
-#[inline(always)]
-fn unshuffle2(source: &[u8], target: &mut [u8]) {
-    let half = source.len() / 2;
-    let (first_half, second_half) = source.split_at(half);
-    for i in 0..half {
-        target[i * 2] = first_half[i];
-        target[i * 2 + 1] = second_half[i];
-    }
-}
-
-#[inline(always)]
-fn unshuffle4(source: &[u8], target: &mut [u8]) {
-    let quarter = source.len() / 4;
-    let (g0, rest) = source.split_at(quarter);
-    let (g1, rest) = rest.split_at(quarter);
-    let (g2, g3) = rest.split_at(quarter);
-    for i in 0..quarter {
-        let offset = i * 4;
-        target[offset] = g0[i];
-        target[offset + 1] = g1[i];
-        target[offset + 2] = g2[i];
-        target[offset + 3] = g3[i];
-    }
-}
-
-#[inline(always)]
-fn unshuffle8(source: &[u8], target: &mut [u8]) {
-    let segment = source.len() / 8;
-    let (g0, rest) = source.split_at(segment);
-    let (g1, rest) = rest.split_at(segment);
-    let (g2, rest) = rest.split_at(segment);
-    let (g3, rest) = rest.split_at(segment);
-    let (g4, rest) = rest.split_at(segment);
-    let (g5, rest) = rest.split_at(segment);
-    let (g6, g7) = rest.split_at(segment);
-    for i in 0..segment {
-        let offset = i * 8;
-        target[offset] = g0[i];
-        target[offset + 1] = g1[i];
-        target[offset + 2] = g2[i];
-        target[offset + 3] = g3[i];
-        target[offset + 4] = g4[i];
-        target[offset + 5] = g5[i];
-        target[offset + 6] = g6[i];
-        target[offset + 7] = g7[i];
-    }
-}
-
-#[inline(always)]
-fn unshuffle_any(source: &[u8], target: &mut [u8], stride: usize) {
-    let element_count = source.len() / stride;
-    for byte_position in 0..stride {
-        let source_base = byte_position * element_count;
-        for element_index in 0..element_count {
-            target[byte_position + element_index * stride] = source[source_base + element_index];
-        }
-    }
+    crate::ion::byte_transpose::unshuffle(source, target, stride);
 }
 
 #[cfg(test)]
@@ -637,31 +576,20 @@ mod tests {
     #[test]
     fn unshuffle2_inverts_shuffle2_output() {
         let original = [1u8, 2, 3, 4, 5, 6, 7, 8];
-        let half = original.len() / 2;
         let mut shuffled = vec![0u8; original.len()];
-        for i in 0..half {
-            shuffled[i] = original[i * 2];
-            shuffled[i + half] = original[i * 2 + 1];
-        }
+        shuffle(&original, &mut shuffled, 2);
         let mut recovered = vec![0u8; original.len()];
-        unshuffle2(&shuffled, &mut recovered);
+        unshuffle(&shuffled, &mut recovered, 2);
         assert_eq!(recovered, original);
     }
 
     #[test]
     fn unshuffle4_inverts_shuffle4_output() {
         let original: Vec<u8> = (0u8..16).collect();
-        let quarter = original.len() / 4;
         let mut shuffled = vec![0u8; original.len()];
-        for i in 0..quarter {
-            let o = i * 4;
-            shuffled[i] = original[o];
-            shuffled[i + quarter] = original[o + 1];
-            shuffled[i + 2 * quarter] = original[o + 2];
-            shuffled[i + 3 * quarter] = original[o + 3];
-        }
+        shuffle(&original, &mut shuffled, 4);
         let mut recovered = vec![0u8; original.len()];
-        unshuffle4(&shuffled, &mut recovered);
+        unshuffle(&shuffled, &mut recovered, 4);
         assert_eq!(recovered, original);
     }
 }
