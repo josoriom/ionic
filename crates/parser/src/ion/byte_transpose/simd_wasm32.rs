@@ -1,3 +1,20 @@
+#[inline]
+fn load128(input: &[u8], offset: usize) -> std::arch::wasm32::v128 {
+    unsafe {
+        std::arch::wasm32::v128_load(input.as_ptr().add(offset) as *const std::arch::wasm32::v128)
+    }
+}
+
+#[inline]
+fn store128(output: &mut [u8], offset: usize, value: std::arch::wasm32::v128) {
+    unsafe {
+        std::arch::wasm32::v128_store(
+            output.as_mut_ptr().add(offset) as *mut std::arch::wasm32::v128,
+            value,
+        )
+    }
+}
+
 pub(super) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
     match stride {
         2 => shuffle2(input, output),
@@ -22,12 +39,12 @@ fn shuffle2(input: &[u8], output: &mut [u8]) {
     let simd_len = half & !15;
     let mut i = 0usize;
     while i < simd_len {
-        let a = v128_load(input.as_ptr().add(i * 2) as *const v128);
-        let b = v128_load(input.as_ptr().add(i * 2 + 16) as *const v128);
+        let a = load128(input, i * 2);
+        let b = load128(input, i * 2 + 16);
         let lo = u8x16_shuffle::<0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30>(a, b);
         let hi = u8x16_shuffle::<1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31>(a, b);
-        v128_store(output.as_mut_ptr().add(i) as *mut v128, lo);
-        v128_store(output.as_mut_ptr().add(half + i) as *mut v128, hi);
+        store128(output, i, lo);
+        store128(output, half + i, hi);
         i += 16;
     }
     for i in simd_len..half {
@@ -42,13 +59,13 @@ fn unshuffle2(input: &[u8], output: &mut [u8]) {
     let simd_len = half & !15;
     let mut i = 0usize;
     while i < simd_len {
-        let lo = v128_load(input.as_ptr().add(i) as *const v128);
-        let hi = v128_load(input.as_ptr().add(half + i) as *const v128);
+        let lo = load128(input, i);
+        let hi = load128(input, half + i);
         let a = u8x16_shuffle::<0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23>(lo, hi);
         let b =
             u8x16_shuffle::<8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31>(lo, hi);
-        v128_store(output.as_mut_ptr().add(i * 2) as *mut v128, a);
-        v128_store(output.as_mut_ptr().add(i * 2 + 16) as *mut v128, b);
+        store128(output, i * 2, a);
+        store128(output, i * 2 + 16, b);
         i += 16;
     }
     for i in simd_len..half {
@@ -63,10 +80,10 @@ fn shuffle4(input: &[u8], output: &mut [u8]) {
     let simd_len = quarter & !15;
     let mut i = 0usize;
     while i < simd_len {
-        let a = v128_load(input.as_ptr().add(i * 4) as *const v128);
-        let b = v128_load(input.as_ptr().add(i * 4 + 16) as *const v128);
-        let c = v128_load(input.as_ptr().add(i * 4 + 32) as *const v128);
-        let d = v128_load(input.as_ptr().add(i * 4 + 48) as *const v128);
+        let a = load128(input, i * 4);
+        let b = load128(input, i * 4 + 16);
+        let c = load128(input, i * 4 + 32);
+        let d = load128(input, i * 4 + 48);
 
         let e0 = u8x16_shuffle::<0, 4, 8, 12, 16, 20, 24, 28, 1, 5, 9, 13, 17, 21, 25, 29>(a, b);
         let e1 = u8x16_shuffle::<0, 4, 8, 12, 16, 20, 24, 28, 1, 5, 9, 13, 17, 21, 25, 29>(c, d);
@@ -80,10 +97,10 @@ fn shuffle4(input: &[u8], output: &mut [u8]) {
         let r3 =
             u8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(f0, f1);
 
-        v128_store(output.as_mut_ptr().add(i) as *mut v128, r0);
-        v128_store(output.as_mut_ptr().add(quarter + i) as *mut v128, r1);
-        v128_store(output.as_mut_ptr().add(2 * quarter + i) as *mut v128, r2);
-        v128_store(output.as_mut_ptr().add(3 * quarter + i) as *mut v128, r3);
+        store128(output, i, r0);
+        store128(output, quarter + i, r1);
+        store128(output, 2 * quarter + i, r2);
+        store128(output, 3 * quarter + i, r3);
         i += 16;
     }
     for i in simd_len..quarter {
@@ -100,10 +117,10 @@ fn unshuffle4(input: &[u8], output: &mut [u8]) {
     let simd_len = quarter & !15;
     let mut i = 0usize;
     while i < simd_len {
-        let b0 = v128_load(input.as_ptr().add(i) as *const v128);
-        let b1 = v128_load(input.as_ptr().add(quarter + i) as *const v128);
-        let b2 = v128_load(input.as_ptr().add(2 * quarter + i) as *const v128);
-        let b3 = v128_load(input.as_ptr().add(3 * quarter + i) as *const v128);
+        let b0 = load128(input, i);
+        let b1 = load128(input, quarter + i);
+        let b2 = load128(input, 2 * quarter + i);
+        let b3 = load128(input, 3 * quarter + i);
 
         let s0 = u8x16_shuffle::<0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23>(b0, b1);
         let s1 =
@@ -119,10 +136,10 @@ fn unshuffle4(input: &[u8], output: &mut [u8]) {
         let r3 =
             u8x16_shuffle::<8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31>(s1, s3);
 
-        v128_store(output.as_mut_ptr().add(i * 4) as *mut v128, r0);
-        v128_store(output.as_mut_ptr().add(i * 4 + 16) as *mut v128, r1);
-        v128_store(output.as_mut_ptr().add(i * 4 + 32) as *mut v128, r2);
-        v128_store(output.as_mut_ptr().add(i * 4 + 48) as *mut v128, r3);
+        store128(output, i * 4, r0);
+        store128(output, i * 4 + 16, r1);
+        store128(output, i * 4 + 32, r2);
+        store128(output, i * 4 + 48, r3);
         i += 16;
     }
     for i in simd_len..quarter {
@@ -139,14 +156,14 @@ fn shuffle8(input: &[u8], output: &mut [u8]) {
     let simd_len = eighth & !15;
     let mut i = 0usize;
     while i < simd_len {
-        let a = v128_load(input.as_ptr().add(i * 8) as *const v128);
-        let b = v128_load(input.as_ptr().add(i * 8 + 16) as *const v128);
-        let c = v128_load(input.as_ptr().add(i * 8 + 32) as *const v128);
-        let d = v128_load(input.as_ptr().add(i * 8 + 48) as *const v128);
-        let e = v128_load(input.as_ptr().add(i * 8 + 64) as *const v128);
-        let f = v128_load(input.as_ptr().add(i * 8 + 80) as *const v128);
-        let g = v128_load(input.as_ptr().add(i * 8 + 96) as *const v128);
-        let h = v128_load(input.as_ptr().add(i * 8 + 112) as *const v128);
+        let a = load128(input, i * 8);
+        let b = load128(input, i * 8 + 16);
+        let c = load128(input, i * 8 + 32);
+        let d = load128(input, i * 8 + 48);
+        let e = load128(input, i * 8 + 64);
+        let f = load128(input, i * 8 + 80);
+        let g = load128(input, i * 8 + 96);
+        let h = load128(input, i * 8 + 112);
 
         let s0 = u8x16_shuffle::<0, 8, 16, 24, 1, 9, 17, 25, 2, 10, 18, 26, 3, 11, 19, 27>(a, b);
         let s1 = u8x16_shuffle::<4, 12, 20, 28, 5, 13, 21, 29, 6, 14, 22, 30, 7, 15, 23, 31>(a, b);
@@ -170,36 +187,44 @@ fn shuffle8(input: &[u8], output: &mut [u8]) {
         let t7 =
             u8x16_shuffle::<8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31>(s5, s7);
 
-        v128_store(
-            output.as_mut_ptr().add(i) as *mut v128,
+        store128(
+            output,
+            i,
             u8x16_shuffle::<0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23>(t0, t4),
         );
-        v128_store(
-            output.as_mut_ptr().add(eighth + i) as *mut v128,
+        store128(
+            output,
+            eighth + i,
             u8x16_shuffle::<0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23>(t2, t6),
         );
-        v128_store(
-            output.as_mut_ptr().add(2 * eighth + i) as *mut v128,
+        store128(
+            output,
+            2 * eighth + i,
             u8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(t0, t4),
         );
-        v128_store(
-            output.as_mut_ptr().add(3 * eighth + i) as *mut v128,
+        store128(
+            output,
+            3 * eighth + i,
             u8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(t2, t6),
         );
-        v128_store(
-            output.as_mut_ptr().add(4 * eighth + i) as *mut v128,
+        store128(
+            output,
+            4 * eighth + i,
             u8x16_shuffle::<0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23>(t1, t5),
         );
-        v128_store(
-            output.as_mut_ptr().add(5 * eighth + i) as *mut v128,
+        store128(
+            output,
+            5 * eighth + i,
             u8x16_shuffle::<0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23>(t3, t7),
         );
-        v128_store(
-            output.as_mut_ptr().add(6 * eighth + i) as *mut v128,
+        store128(
+            output,
+            6 * eighth + i,
             u8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(t1, t5),
         );
-        v128_store(
-            output.as_mut_ptr().add(7 * eighth + i) as *mut v128,
+        store128(
+            output,
+            7 * eighth + i,
             u8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(t3, t7),
         );
         i += 16;
@@ -217,14 +242,14 @@ fn unshuffle8(input: &[u8], output: &mut [u8]) {
     let simd_len = eighth & !15;
     let mut i = 0usize;
     while i < simd_len {
-        let p0 = v128_load(input.as_ptr().add(i) as *const v128);
-        let p1 = v128_load(input.as_ptr().add(eighth + i) as *const v128);
-        let p2 = v128_load(input.as_ptr().add(2 * eighth + i) as *const v128);
-        let p3 = v128_load(input.as_ptr().add(3 * eighth + i) as *const v128);
-        let p4 = v128_load(input.as_ptr().add(4 * eighth + i) as *const v128);
-        let p5 = v128_load(input.as_ptr().add(5 * eighth + i) as *const v128);
-        let p6 = v128_load(input.as_ptr().add(6 * eighth + i) as *const v128);
-        let p7 = v128_load(input.as_ptr().add(7 * eighth + i) as *const v128);
+        let p0 = load128(input, i);
+        let p1 = load128(input, eighth + i);
+        let p2 = load128(input, 2 * eighth + i);
+        let p3 = load128(input, 3 * eighth + i);
+        let p4 = load128(input, 4 * eighth + i);
+        let p5 = load128(input, 5 * eighth + i);
+        let p6 = load128(input, 6 * eighth + i);
+        let p7 = load128(input, 7 * eighth + i);
 
         let s0 = u8x16_shuffle::<0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23>(p0, p4);
         let s1 =
@@ -252,36 +277,44 @@ fn unshuffle8(input: &[u8], output: &mut [u8]) {
         let t7 =
             u8x16_shuffle::<8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31>(s3, s7);
 
-        v128_store(
-            output.as_mut_ptr().add(i * 8) as *mut v128,
+        store128(
+            output,
+            i * 8,
             u8x16_shuffle::<0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23>(t0, t4),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 16) as *mut v128,
+        store128(
+            output,
+            i * 8 + 16,
             u8x16_shuffle::<8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31>(t0, t4),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 32) as *mut v128,
+        store128(
+            output,
+            i * 8 + 32,
             u8x16_shuffle::<0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23>(t1, t5),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 48) as *mut v128,
+        store128(
+            output,
+            i * 8 + 48,
             u8x16_shuffle::<8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31>(t1, t5),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 64) as *mut v128,
+        store128(
+            output,
+            i * 8 + 64,
             u8x16_shuffle::<0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23>(t2, t6),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 80) as *mut v128,
+        store128(
+            output,
+            i * 8 + 80,
             u8x16_shuffle::<8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31>(t2, t6),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 96) as *mut v128,
+        store128(
+            output,
+            i * 8 + 96,
             u8x16_shuffle::<0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23>(t3, t7),
         );
-        v128_store(
-            output.as_mut_ptr().add(i * 8 + 112) as *mut v128,
+        store128(
+            output,
+            i * 8 + 112,
             u8x16_shuffle::<8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31>(t3, t7),
         );
         i += 16;
