@@ -1,13 +1,16 @@
 use crate::ion::encoder::utilities::container_builder::{
     BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, FilterType, Stride,
 };
-use crate::ion::utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take};
+use crate::ion::{
+    IonError, IonResult,
+    utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
+};
 use std::ops::Deref;
 
 const LRU_NONE: usize = usize::MAX;
 
 pub(crate) trait BlockProcessor {
-    fn decompress(&self, source: &[u8], target_len: usize) -> Result<Vec<u8>, String>;
+    fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>>;
     fn unshuffle(&self, source: &[u8], target: &mut [u8], stride: usize);
     fn requires_unshuffle(&self, filter: FilterType) -> bool;
 }
@@ -20,7 +23,7 @@ pub(crate) trait ContainerAccess {
         element_count: u64,
         element_stride: usize,
         ctx: &'static str,
-    ) -> Result<&[u8], String>;
+    ) -> IonResult<&[u8]>;
 }
 
 #[derive(Debug)]
@@ -28,7 +31,7 @@ pub(crate) struct DefaultProcessor;
 
 impl BlockProcessor for DefaultProcessor {
     #[inline]
-    fn decompress(&self, source: &[u8], target_len: usize) -> Result<Vec<u8>, String> {
+    fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>> {
         decompress_zstd(source, target_len)
     }
 
@@ -79,10 +82,10 @@ pub(crate) struct ContainerView<'a, P: BlockProcessor> {
     lru_tail: usize,
     cached_bytes: usize,
     max_cached_bytes: usize,
-    scratch_buffer: Vec<u8>,
     stride_history: Box<[Option<Stride>]>,
     compression_level: u8,
     filter: FilterType,
+    verify_checksums: bool,
     processor: P,
 }
 
@@ -93,15 +96,17 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         block_count: u64,
         compression_level: u8,
         filter: FilterType,
+        verify_checksums: bool,
         ctx: &'static str,
         processor: P,
         max_cached_bytes: usize,
-    ) -> Result<Self, String> {
+    ) -> IonResult<Self> {
         Self::with_max_cached_bytes(
             raw_data,
             block_count,
             compression_level,
             filter,
+            verify_checksums,
             ctx,
             processor,
             max_cached_bytes,
@@ -113,17 +118,16 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         block_count: u64,
         compression_level: u8,
         filter: FilterType,
+        verify_checksums: bool,
         ctx: &'static str,
         processor: P,
         max_cached_bytes: usize,
-    ) -> Result<Self, String> {
+    ) -> IonResult<Self> {
         let block_count = block_count as usize;
         let directory_byte_size = block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
 
         if raw_data.len() < directory_byte_size {
-            return Err(format!(
-                "{ctx}: container too small to hold block directory"
-            ));
+            return Err(format!("{ctx}: container too small to hold block directory").into());
         }
 
         let directory_start_offset = raw_data.len() - directory_byte_size;
@@ -158,12 +162,116 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             lru_tail: LRU_NONE,
             cached_bytes: 0,
             max_cached_bytes,
-            scratch_buffer: Vec::new(),
             stride_history: vec![None; block_count].into_boxed_slice(),
             compression_level,
             filter,
+            verify_checksums,
             processor,
         })
+    }
+
+    fn block_payload(
+        &self,
+        block_index: usize,
+        ctx: &'static str,
+    ) -> IonResult<(BlockDirEntry, &'a [u8])> {
+        let entry = *self.entries.get(block_index).ok_or_else(|| {
+            IonError::from(format!(
+                "{ctx}: block index {block_index} out of range (count={})",
+                self.cache.len()
+            ))
+        })?;
+        let payload_start = entry.payload_offset as usize;
+        let payload_end = payload_start
+            .checked_add(entry.payload_size as usize)
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: block {block_index} payload size overflows"))
+            })?;
+        let payload_limit = self
+            .raw_data
+            .len()
+            .saturating_sub(self.entries.len() * BLOCK_DIRECTORY_ENTRY_SIZE);
+
+        if payload_end > payload_limit {
+            return Err(format!(
+                "{ctx}: block {block_index} payload exceeds payload region bounds"
+            )
+            .into());
+        }
+
+        let payload = &self.raw_data[payload_start..payload_end];
+
+        if self.verify_checksums && entry.checksum != 0 {
+            let computed = crc32fast::hash(payload);
+            if computed != entry.checksum {
+                return Err(format!(
+                    "{ctx}: block {block_index} checksum mismatch (stored={:#010x}, computed={:#010x})",
+                    entry.checksum, computed
+                )
+                .into());
+            }
+        }
+
+        Ok((entry, payload))
+    }
+
+    fn decode_owned(
+        &self,
+        payload: &[u8],
+        uncompressed_len: usize,
+        stride: Stride,
+    ) -> IonResult<Vec<u8>> {
+        let needs_unshuffle =
+            self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
+
+        let mut data = if self.compression_level == 0 {
+            if payload.len() != uncompressed_len {
+                return Err(format!(
+                    "uncompressed payload size mismatch: got {}, expected {uncompressed_len}",
+                    payload.len()
+                )
+                .into());
+            }
+            payload.to_vec()
+        } else {
+            self.processor.decompress(payload, uncompressed_len)?
+        };
+
+        if needs_unshuffle {
+            let mut scratch = vec![0u8; uncompressed_len];
+            self.processor
+                .unshuffle(&data, &mut scratch, stride.as_usize());
+            data = scratch;
+        }
+
+        Ok(data)
+    }
+
+    pub(crate) fn read_block(
+        &self,
+        block_id: u32,
+        element_stride: usize,
+        ctx: &'static str,
+    ) -> IonResult<Vec<u8>> {
+        let block_index = block_id as usize;
+        let stride = Stride::from_size(element_stride);
+        let (entry, payload) = self.block_payload(block_index, ctx)?;
+
+        if self.compression_level == 0
+            && (!self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte)
+        {
+            if payload.len() != entry.uncompressed_len_bytes as usize {
+                return Err(format!(
+                    "uncompressed payload size mismatch: got {}, expected {}",
+                    payload.len(),
+                    entry.uncompressed_len_bytes
+                )
+                .into());
+            }
+            return Ok(payload.to_vec());
+        }
+
+        self.decode_owned(payload, entry.uncompressed_len_bytes as usize, stride)
     }
 
     #[inline]
@@ -238,13 +346,14 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         block_id: u32,
         element_stride: usize,
         ctx: &'static str,
-    ) -> Result<(), String> {
+    ) -> IonResult<()> {
         let block_index = block_id as usize;
         if block_index >= self.cache.len() {
             return Err(format!(
                 "{ctx}: block index {block_index} out of range (count={})",
                 self.cache.len()
-            ));
+            )
+            .into());
         }
         if self.cache[block_index].is_some() {
             return Ok(());
@@ -252,35 +361,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
 
         let stride = Stride::from_size(element_stride);
         self.record_stride_or_fail(block_index, stride, ctx)?;
-
-        let entry = self.entries[block_index];
-        let payload_start = entry.payload_offset as usize;
-        let payload_end = payload_start
-            .checked_add(entry.payload_size as usize)
-            .ok_or_else(|| format!("{ctx}: block {block_index} payload size overflows"))?;
-        let payload_limit = self
-            .raw_data
-            .len()
-            .saturating_sub(self.entries.len() * BLOCK_DIRECTORY_ENTRY_SIZE);
-
-        if payload_end > payload_limit {
-            return Err(format!(
-                "{ctx}: block {block_index} payload exceeds payload region bounds"
-            ));
-        }
-
-        let payload = &self.raw_data[payload_start..payload_end];
-
-        if entry.checksum != 0 {
-            let computed = crc32fast::hash(payload);
-            if computed != entry.checksum {
-                return Err(format!(
-                    "{ctx}: block {block_index} checksum mismatch (stored={:#010x}, computed={:#010x})",
-                    entry.checksum, computed
-                ));
-            }
-        }
-
+        let (entry, payload) = self.block_payload(block_index, ctx)?;
         let decoded =
             self.run_decode_pipeline(payload, entry.uncompressed_len_bytes as usize, stride)?;
         let block_heap = decoded.heap_bytes();
@@ -296,7 +377,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         block_index: usize,
         stride: Stride,
         ctx: &'static str,
-    ) -> Result<(), String> {
+    ) -> IonResult<()> {
         if !self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte {
             return Ok(());
         }
@@ -308,7 +389,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             Some(recorded) if recorded == stride => Ok(()),
             Some(recorded) => Err(format!(
                 "{ctx}: stride mismatch for block {block_index} (expected {recorded:?}, got {stride:?})"
-            )),
+            )
+            .into()),
         }
     }
 
@@ -317,7 +399,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         payload: &'a [u8],
         uncompressed_len: usize,
         stride: Stride,
-    ) -> Result<BlockData<'a>, String> {
+    ) -> IonResult<BlockData<'a>> {
         let needs_unshuffle =
             self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
 
@@ -326,25 +408,17 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
                 return Err(format!(
                     "uncompressed payload size mismatch: got {}, expected {uncompressed_len}",
                     payload.len()
-                ));
+                )
+                .into());
             }
             return Ok(BlockData::Borrowed(payload));
         }
 
-        let mut decompressed = if self.compression_level == 0 {
-            payload.to_vec()
-        } else {
-            self.processor.decompress(payload, uncompressed_len)?
-        };
-
-        if needs_unshuffle {
-            self.scratch_buffer.resize(uncompressed_len, 0);
-            self.processor
-                .unshuffle(&decompressed, &mut self.scratch_buffer, stride.as_usize());
-            std::mem::swap(&mut decompressed, &mut self.scratch_buffer);
-        }
-
-        Ok(BlockData::Owned(decompressed))
+        Ok(BlockData::Owned(self.decode_owned(
+            payload,
+            uncompressed_len,
+            stride,
+        )?))
     }
 }
 
@@ -357,7 +431,7 @@ impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
         element_count: u64,
         element_stride: usize,
         ctx: &'static str,
-    ) -> Result<&[u8], String> {
+    ) -> IonResult<&[u8]> {
         self.ensure_block_loaded(block_id, element_stride, ctx)?;
 
         let block_index = block_id as usize;
@@ -367,18 +441,23 @@ impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
         let start_byte = usize::try_from(element_offset)
             .ok()
             .and_then(|offset| offset.checked_mul(element_stride))
-            .ok_or_else(|| format!("{ctx}: item range overflow for block {block_id}"))?;
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: item range overflow for block {block_id}"))
+            })?;
         let end_byte = usize::try_from(element_count)
             .ok()
             .and_then(|count| count.checked_mul(element_stride))
             .and_then(|len| start_byte.checked_add(len))
-            .ok_or_else(|| format!("{ctx}: item range overflow for block {block_id}"))?;
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: item range overflow for block {block_id}"))
+            })?;
 
         if end_byte > block.len() {
             return Err(format!(
                 "{ctx}: item range [{start_byte}..{end_byte}] out of bounds for block {block_id} (len={})",
                 block.len()
-            ));
+            )
+            .into());
         }
         Ok(&block[start_byte..end_byte])
     }
@@ -386,71 +465,7 @@ impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
 
 #[inline(always)]
 fn unshuffle_bytes(source: &[u8], target: &mut [u8], stride: usize) {
-    match stride {
-        8 => unshuffle8(source, target),
-        4 => unshuffle4(source, target),
-        2 => unshuffle2(source, target),
-        _ => unshuffle_any(source, target, stride),
-    }
-}
-
-#[inline(always)]
-fn unshuffle2(source: &[u8], target: &mut [u8]) {
-    let half = source.len() / 2;
-    let (first_half, second_half) = source.split_at(half);
-    for i in 0..half {
-        target[i * 2] = first_half[i];
-        target[i * 2 + 1] = second_half[i];
-    }
-}
-
-#[inline(always)]
-fn unshuffle4(source: &[u8], target: &mut [u8]) {
-    let quarter = source.len() / 4;
-    let (g0, rest) = source.split_at(quarter);
-    let (g1, rest) = rest.split_at(quarter);
-    let (g2, g3) = rest.split_at(quarter);
-    for i in 0..quarter {
-        let offset = i * 4;
-        target[offset] = g0[i];
-        target[offset + 1] = g1[i];
-        target[offset + 2] = g2[i];
-        target[offset + 3] = g3[i];
-    }
-}
-
-#[inline(always)]
-fn unshuffle8(source: &[u8], target: &mut [u8]) {
-    let segment = source.len() / 8;
-    let (g0, rest) = source.split_at(segment);
-    let (g1, rest) = rest.split_at(segment);
-    let (g2, rest) = rest.split_at(segment);
-    let (g3, rest) = rest.split_at(segment);
-    let (g4, rest) = rest.split_at(segment);
-    let (g5, rest) = rest.split_at(segment);
-    let (g6, g7) = rest.split_at(segment);
-    for i in 0..segment {
-        let offset = i * 8;
-        target[offset] = g0[i];
-        target[offset + 1] = g1[i];
-        target[offset + 2] = g2[i];
-        target[offset + 3] = g3[i];
-        target[offset + 4] = g4[i];
-        target[offset + 5] = g5[i];
-        target[offset + 6] = g6[i];
-        target[offset + 7] = g7[i];
-    }
-}
-
-#[inline(always)]
-fn unshuffle_any(source: &[u8], target: &mut [u8], stride: usize) {
-    let element_count = source.len() / stride;
-    for byte_position in 0..stride {
-        let source_base = byte_position * element_count;
-        for element_index in 0..element_count {
-            target[byte_position + element_index * stride] = source[source_base + element_index];
-        }
-    }
+    crate::ion::byte_transpose::unshuffle(source, target, stride);
 }
 
 #[cfg(test)]
@@ -485,7 +500,16 @@ mod tests {
     #[test]
     fn container_view_rejects_data_smaller_than_directory() {
         let tiny = vec![0u8; 10];
-        let result = ContainerView::new(&tiny, 1, 0, FilterType::None, "test", DefaultProcessor, 0);
+        let result = ContainerView::new(
+            &tiny,
+            1,
+            0,
+            FilterType::None,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        );
         assert!(result.is_err());
     }
 
@@ -493,7 +517,17 @@ mod tests {
     fn container_view_accepts_empty_container_with_zero_blocks() {
         let empty = vec![];
         assert!(
-            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor, 0).is_ok()
+            ContainerView::new(
+                &empty,
+                0,
+                0,
+                FilterType::None,
+                true,
+                "test",
+                DefaultProcessor,
+                0
+            )
+            .is_ok()
         );
     }
 
@@ -505,8 +539,17 @@ mod tests {
         raw.extend_from_slice(&payload);
         raw.extend_from_slice(&dir);
 
-        let mut view =
-            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor, 0).unwrap();
+        let mut view = ContainerView::new(
+            &raw,
+            1,
+            0,
+            FilterType::None,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        )
+        .unwrap();
         assert_eq!(
             view.get_item_from_block(0, 1, 1, 4, "test").unwrap(),
             &[4, 5, 6, 7]
@@ -521,17 +564,34 @@ mod tests {
         raw.extend_from_slice(&payload);
         raw.extend_from_slice(&dir);
 
-        let mut view =
-            ContainerView::new(&raw, 1, 0, FilterType::None, "test", DefaultProcessor, 0).unwrap();
+        let mut view = ContainerView::new(
+            &raw,
+            1,
+            0,
+            FilterType::None,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        )
+        .unwrap();
         assert!(view.get_item_from_block(0, 0, 3, 4, "test").is_err());
     }
 
     #[test]
     fn container_view_rejects_invalid_block_id() {
         let empty = vec![];
-        let mut view =
-            ContainerView::new(&empty, 0, 0, FilterType::None, "test", DefaultProcessor, 0)
-                .unwrap();
+        let mut view = ContainerView::new(
+            &empty,
+            0,
+            0,
+            FilterType::None,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        )
+        .unwrap();
         assert!(view.get_item_from_block(99, 0, 1, 4, "test").is_err());
     }
 
@@ -545,6 +605,7 @@ mod tests {
             3,
             0,
             FilterType::None,
+            true,
             "test",
             DefaultProcessor,
             bs * 2,
@@ -572,6 +633,7 @@ mod tests {
             3,
             0,
             FilterType::None,
+            true,
             "test",
             DefaultProcessor,
             bs * 2,
@@ -598,6 +660,7 @@ mod tests {
             4,
             0,
             FilterType::None,
+            true,
             "test",
             DefaultProcessor,
             0,
@@ -624,6 +687,7 @@ mod tests {
             1,
             0,
             FilterType::None,
+            true,
             "test",
             DefaultProcessor,
             4,
@@ -637,31 +701,20 @@ mod tests {
     #[test]
     fn unshuffle2_inverts_shuffle2_output() {
         let original = [1u8, 2, 3, 4, 5, 6, 7, 8];
-        let half = original.len() / 2;
         let mut shuffled = vec![0u8; original.len()];
-        for i in 0..half {
-            shuffled[i] = original[i * 2];
-            shuffled[i + half] = original[i * 2 + 1];
-        }
+        crate::ion::byte_transpose::shuffle(&original, &mut shuffled, 2);
         let mut recovered = vec![0u8; original.len()];
-        unshuffle2(&shuffled, &mut recovered);
+        crate::ion::byte_transpose::unshuffle(&shuffled, &mut recovered, 2);
         assert_eq!(recovered, original);
     }
 
     #[test]
     fn unshuffle4_inverts_shuffle4_output() {
         let original: Vec<u8> = (0u8..16).collect();
-        let quarter = original.len() / 4;
         let mut shuffled = vec![0u8; original.len()];
-        for i in 0..quarter {
-            let o = i * 4;
-            shuffled[i] = original[o];
-            shuffled[i + quarter] = original[o + 1];
-            shuffled[i + 2 * quarter] = original[o + 2];
-            shuffled[i + 3 * quarter] = original[o + 3];
-        }
+        crate::ion::byte_transpose::shuffle(&original, &mut shuffled, 4);
         let mut recovered = vec![0u8; original.len()];
-        unshuffle4(&shuffled, &mut recovered);
+        crate::ion::byte_transpose::unshuffle(&shuffled, &mut recovered, 4);
         assert_eq!(recovered, original);
     }
 }

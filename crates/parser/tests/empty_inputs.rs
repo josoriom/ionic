@@ -1,6 +1,6 @@
 mod common;
 
-use ionic::ion::{Decoder, WritingMode, encode};
+use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
 use ionic::mzml::{
     bin_to_mzml::bin_to_mzml,
     parse_mzml::{parse_indexed_mzml, parse_mzml},
@@ -118,7 +118,7 @@ fn encode_mzml_no_arrays() {
 
 #[test]
 fn decoder_open_empty_bytes() {
-    let result = Decoder::open(b"");
+    let result = Decoder::open(b"", DecoderConfig::default());
     assert!(
         result.is_err(),
         "empty bytes should not be a valid Ion container"
@@ -128,7 +128,7 @@ fn decoder_open_empty_bytes() {
 #[test]
 fn decoder_open_garbage() {
     let garbage = vec![0xDE, 0xAD, 0xBE, 0xEF];
-    let result = Decoder::open(&garbage);
+    let result = Decoder::open(&garbage, DecoderConfig::default());
     assert!(
         result.is_err(),
         "garbage should not be a valid Ion container"
@@ -137,7 +137,7 @@ fn decoder_open_garbage() {
 
 #[test]
 fn decoder_open_too_small() {
-    let result = Decoder::open(&[0x01, 0x02, 0x03]);
+    let result = Decoder::open(&[0x01, 0x02, 0x03], DecoderConfig::default());
     assert!(
         result.is_err(),
         "3 bytes should not be a valid Ion container"
@@ -157,7 +157,7 @@ fn roundtrip_empty_mzml() {
     let mut buf = Vec::new();
     encode(&mzml, 0, false, WritingMode::Memory, &mut buf).expect("encode should succeed");
 
-    let mut decoder = Decoder::open(&buf).expect("decoder should open");
+    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder should open");
     let decoded = decoder.to_mzml().expect("to_mzml should succeed");
     assert_eq!(decoded.run.id, "roundtrip-empty");
 }

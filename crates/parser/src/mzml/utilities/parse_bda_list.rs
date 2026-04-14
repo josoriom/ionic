@@ -1,18 +1,18 @@
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 use quick_xml::events::BytesStart;
 use std::io::BufRead;
 
 use crate::{
+    BinaryData, BinaryDataArray, BinaryDataArrayList, NumericType,
     mzml::{
         schema::TagId,
         utilities::{
-            attr, attr_usize, read_base64_binary, read_cv_param, read_ref_group_ref,
-            read_user_param, ParamCollector, ParseError, ParsingWorkspace,
+            ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize, read_base64_binary,
+            read_cv_param, read_ref_group_ref, read_user_param,
         },
     },
-    BinaryData, BinaryDataArray, BinaryDataArrayList, NumericType,
 };
 
 pub(crate) fn parse_bda_list<R: BufRead>(

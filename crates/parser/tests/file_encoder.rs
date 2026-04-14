@@ -1,7 +1,7 @@
 mod common;
 
 use common::helpers::{minimal_file_description, synthetic_binary_data_array};
-use ionic::ion::{Decoder, WritingMode, encode};
+use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
 use ionic::mzml::structs::*;
 
 #[test]
@@ -12,7 +12,7 @@ fn memory_mode_roundtrip_multi_spectrum() {
     encode(&mzml, 6, false, WritingMode::Memory, &mut buf).expect("encode should succeed");
     assert!(!buf.is_empty(), "output should not be empty");
 
-    let mut decoder = Decoder::open(&buf).expect("decoder open");
+    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
     let orig_spectra = common::spectra(&mzml);
@@ -50,7 +50,7 @@ fn streaming_mode_roundtrip_via_tempfile() {
     let bytes = fs::read(&temp_path).expect("should read temp file");
     assert!(!bytes.is_empty(), "file should not be empty");
 
-    let mut decoder = Decoder::open(&bytes).expect("decoder open");
+    let mut decoder = Decoder::open(&bytes, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
     assert_eq!(
@@ -79,10 +79,11 @@ fn memory_and_streaming_produce_equivalent_results() {
     drop(file_output); // ensure flush
     let stream_buf = fs::read(&temp_path).expect("read temp file");
 
-    let mut mem_decoder = Decoder::open(&mem_buf).expect("mem decoder");
+    let mut mem_decoder = Decoder::open(&mem_buf, DecoderConfig::default()).expect("mem decoder");
     let mem_decoded = mem_decoder.to_mzml().expect("mem to_mzml");
 
-    let mut stream_decoder = Decoder::open(&stream_buf).expect("stream decoder");
+    let mut stream_decoder =
+        Decoder::open(&stream_buf, DecoderConfig::default()).expect("stream decoder");
     let stream_decoded = stream_decoder.to_mzml().expect("stream to_mzml");
 
     let diffs = common::canonical_diff_paths(&mem_decoded, &stream_decoded);
@@ -140,7 +141,7 @@ fn large_array_roundtrip_stress() {
     let mut buf = Vec::new();
     encode(&mzml, 12, false, WritingMode::Memory, &mut buf).expect("encode large array");
 
-    let mut decoder = Decoder::open(&buf).expect("decoder open");
+    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
     let dec_spectra = common::spectra(&decoded);

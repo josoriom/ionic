@@ -1,8 +1,11 @@
 use crate::{
     decoder::decode::Metadatum,
-    ion::utilities::{
-        common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
-        parse_metadata::{HDR_CODEC_NONE, HDR_CODEC_ZSTD, parse_metadata},
+    ion::{
+        IonError, IonResult,
+        utilities::{
+            common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
+            parse_metadata::{HDR_CODEC_NONE, HDR_CODEC_ZSTD, parse_metadata},
+        },
     },
 };
 
@@ -16,9 +19,9 @@ pub(crate) fn parse_global_metadata(
     str_count: u64,
     compression_codec: u8,
     expected_uncompressed: u64,
-) -> Result<Vec<Metadatum>, String> {
+) -> IonResult<Vec<Metadatum>> {
     let expected_byte_count = usize::try_from(expected_uncompressed)
-        .map_err(|_| "global metadata: expected_uncompressed overflow".to_string())?;
+        .map_err(|_| IonError::from("global metadata: expected_uncompressed overflow"))?;
 
     let owned;
     let bytes = match compression_codec {
@@ -26,11 +29,11 @@ pub(crate) fn parse_global_metadata(
             if expected_byte_count == 0 {
                 bytes
             } else if bytes.len() < expected_byte_count {
-                return Err("global metadata: section too small".to_string());
+                return Err("global metadata: section too small".into());
             } else if bytes.len() > expected_byte_count {
                 let trailing = &bytes[expected_byte_count..];
                 if trailing.len() > 7 || trailing.iter().any(|&b| b != 0) {
-                    return Err("global metadata: trailing bytes".to_string());
+                    return Err("global metadata: trailing bytes".into());
                 }
                 &bytes[..expected_byte_count]
             } else {
@@ -41,11 +44,11 @@ pub(crate) fn parse_global_metadata(
             owned = decompress_zstd_allow_aligned_padding(bytes, expected_byte_count)?;
             owned.as_slice()
         }
-        other => return Err(format!("unsupported compression_codec={other}")),
+        other => return Err(format!("unsupported compression_codec={other}").into()),
     };
 
     if bytes.len() < GLOBAL_SECTION_HEADER_BYTE_SIZE + 4 {
-        return Err("global metadata: section too small".to_string());
+        return Err("global metadata: section too small".into());
     }
 
     let mut read_pos = 0usize;
@@ -77,20 +80,20 @@ pub(crate) fn parse_global_metadata(
     .iter()
     .try_fold(0u64, |acc, &count| {
         acc.checked_add(count)
-            .ok_or("global metadata: item_count overflow")
+            .ok_or_else(|| IonError::from("global metadata: item_count overflow"))
     })?;
 
     if derived_item_count == 0 {
-        return Err("global metadata: header counts are zero".to_string());
+        return Err("global metadata: header counts are zero".into());
     }
 
     if item_count != 0 && item_count != derived_item_count {
-        return Err("global metadata: item_count mismatch".to_string());
+        return Err("global metadata: item_count mismatch".into());
     }
 
     let first_index_entry = read_u32_le_at(bytes, &mut read_pos, "first_index_entry")?;
     if first_index_entry != 0 {
-        return Err("global metadata: missing header or corrupted CI".to_string());
+        return Err("global metadata: missing header or corrupted CI".into());
     }
 
     parse_metadata(

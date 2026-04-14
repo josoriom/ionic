@@ -1,9 +1,9 @@
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 use miniz_oxide::deflate::compress_to_vec_zlib;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use sha1::{Digest, Sha1};
 
 use crate::mzml::structs::*;
@@ -886,21 +886,15 @@ fn write_spectrum(
         write_spectrum_description(writer, sd)?;
     }
 
-    if !sd_has_scan_list
-        && let Some(sl) = &s.scan_list
-    {
+    if !sd_has_scan_list && let Some(sl) = &s.scan_list {
         write_scan_list(writer, sl)?;
     }
 
-    if !sd_has_precursor_list
-        && let Some(pl) = &s.precursor_list
-    {
+    if !sd_has_precursor_list && let Some(pl) = &s.precursor_list {
         write_precursor_list(writer, pl)?;
     }
 
-    if !sd_has_product_list
-        && let Some(pr) = &s.product_list
-    {
+    if !sd_has_product_list && let Some(pr) = &s.product_list {
         write_product_list(writer, pr)?;
     }
 

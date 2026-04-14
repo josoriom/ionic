@@ -5,7 +5,7 @@ use crate::{
             decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes,
         },
     },
-    ion::{attr_meta::format_accession, utilities::common::*},
+    ion::{IonResult, attr_meta::format_accession, utilities::common::*},
     mzml::schema::TagId,
 };
 
@@ -20,7 +20,7 @@ pub(crate) fn parse_metadata(
     str_count: u64,
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
-) -> Result<Vec<Metadatum>, String> {
+) -> IonResult<Vec<Metadatum>> {
     let owned;
     let bytes = match compression_codec {
         HDR_CODEC_NONE => bytes,
@@ -28,7 +28,7 @@ pub(crate) fn parse_metadata(
             owned = decompress_zstd_allow_aligned_padding(bytes, expected_uncompressed_bytes)?;
             owned.as_slice()
         }
-        other => return Err(format!("unsupported compression_codec={other}")),
+        other => return Err(format!("unsupported compression_codec={other}").into()),
     };
 
     let item_count = item_count as usize;
@@ -111,15 +111,15 @@ fn validate_trailing_bytes(
     pos: usize,
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
-) -> Result<(), String> {
+) -> IonResult<()> {
     if compression_codec == HDR_CODEC_ZSTD {
         if pos != bytes.len() {
-            return Err("trailing bytes in decompressed metadata section".to_string());
+            return Err("trailing bytes in decompressed metadata section".into());
         }
     } else {
         let trailing = &bytes[pos..];
         if trailing.len() > 7 || trailing.iter().any(|&b| b != 0) {
-            return Err("trailing bytes in metadata section".to_string());
+            return Err("trailing bytes in metadata section".into());
         }
         let _ = expected_uncompressed_bytes;
     }
@@ -131,17 +131,17 @@ fn validate_children_index(
     children_index: &[u32],
     item_count: usize,
     meta_count: usize,
-) -> Result<(), String> {
+) -> IonResult<()> {
     if children_index.is_empty() || children_index[0] != 0 {
-        return Err("CI[0] must be 0".to_string());
+        return Err("CI[0] must be 0".into());
     }
     if children_index[item_count] as usize != meta_count {
-        return Err("CI[last] must equal meta_count".to_string());
+        return Err("CI[last] must equal meta_count".into());
     }
     let mut previous = 0u32;
     for &entry in children_index {
         if entry < previous || (entry as usize) > meta_count {
-            return Err("CI is not monotonic or out of range".to_string());
+            return Err("CI is not monotonic or out of range".into());
         }
         previous = entry;
     }
@@ -156,19 +156,19 @@ fn parse_value(
     string_offsets: &[u32],
     string_lengths: &[u32],
     string_data: &[u8],
-) -> Result<MetadatumValue, String> {
+) -> IonResult<MetadatumValue> {
     match value_kind {
         0 => {
             let index = value_index as usize;
             if index >= numeric_values.len() {
-                return Err("numeric VI out of range".to_string());
+                return Err("numeric VI out of range".into());
             }
             Ok(MetadatumValue::Number(numeric_values[index]))
         }
         1 => {
             let index = value_index as usize;
             if index >= string_offsets.len() || index >= string_lengths.len() {
-                return Err("string VI out of range".to_string());
+                return Err("string VI out of range".into());
             }
             let offset = string_offsets[index] as usize;
             let length = string_lengths[index] as usize;
@@ -176,7 +176,7 @@ fn parse_value(
                 .checked_add(length)
                 .is_none_or(|end| end > string_data.len())
             {
-                return Err("string slice out of bounds".to_string());
+                return Err("string slice out of bounds".into());
             }
             if length == 0 {
                 return Ok(MetadatumValue::Text(String::new()));
@@ -189,6 +189,6 @@ fn parse_value(
             Ok(MetadatumValue::Text(text))
         }
         2 => Ok(MetadatumValue::Empty),
-        other => Err(format!("invalid value kind VK={other}")),
+        other => Err(format!("invalid value kind VK={other}").into()),
     }
 }

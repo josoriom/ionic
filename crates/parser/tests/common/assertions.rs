@@ -579,7 +579,6 @@ pub(crate) fn effective_binary_data_array_length(array: &BinaryDataArray) -> Opt
         .or_else(|| array.binary.as_ref().map(|b| b.len()))
 }
 
-
 pub(crate) fn assert_binary_data_array_semantic_eq(
     left_context: &SemanticContext<'_>,
     right_context: &SemanticContext<'_>,

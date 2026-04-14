@@ -1,12 +1,11 @@
 mod common;
 
 use common::binary_ext::BinaryDataExt;
-use ionic::ion::{Decoder, WritingMode, encode};
+use common::helpers::{build_mzml, make_spectrum_f64, mzml_with_single_array};
+use common::{decode_ion, encode_to_ion, first_spectrum_binary, roundtrip};
+use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
 use ionic::mzml::structs::*;
 use proptest::prelude::*;
-
-use common::helpers::mzml_with_single_array;
-use common::{first_spectrum_binary, roundtrip};
 
 #[test]
 fn roundtrip_f64_array() {
@@ -117,7 +116,7 @@ fn roundtrip_at_compression_levels() {
         let mut buf = Vec::new();
         encode(&mzml, level, false, WritingMode::Memory, &mut buf)
             .unwrap_or_else(|e| panic!("encode at level {level} failed: {e}"));
-        let mut decoder = Decoder::open(&buf)
+        let mut decoder = Decoder::open(&buf, DecoderConfig::default())
             .unwrap_or_else(|e| panic!("decoder open at level {level} failed: {e}"));
         let decoded = decoder
             .to_mzml()
@@ -138,7 +137,7 @@ fn roundtrip_force_f32_downcasts() {
 
     let mut buf = Vec::new();
     encode(&mzml, 0, true, WritingMode::Memory, &mut buf).expect("encode with force_f32");
-    let mut decoder = Decoder::open(&buf).expect("decoder open");
+    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
     let bin = first_spectrum_binary(&decoded).expect("should have binary data");
@@ -149,6 +148,128 @@ fn roundtrip_force_f32_downcasts() {
             (g - expected_f32).abs() < 1e-6,
             "index {i}: force_f32 value mismatch: {g} vs {expected_f32}"
         );
+    }
+}
+
+fn encode_decode_mz_compressed(mz: Vec<f64>) -> Vec<f64> {
+    let len = mz.len();
+    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(mz), len);
+    let buf = encode_to_ion(&mzml, 3, false);
+    let decoded = decode_ion(&buf).unwrap();
+    first_spectrum_binary(&decoded).unwrap().to_f64_vec()
+}
+
+#[test]
+fn delta_mz_single_element_is_bit_exact() {
+    let input = vec![503.42f64];
+    let got = encode_decode_mz_compressed(input.clone());
+    assert_eq!(got[0].to_bits(), input[0].to_bits());
+}
+
+#[test]
+fn delta_mz_two_elements_are_bit_exact() {
+    let input = vec![100.0f64, 200.5];
+    let got = encode_decode_mz_compressed(input.clone());
+    for (a, b) in got.iter().zip(input.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn delta_mz_monotonic_array_is_bit_exact() {
+    let input: Vec<f64> = (0..10_000).map(|i| 100.0 + i as f64 * 0.01).collect();
+    let got = encode_decode_mz_compressed(input.clone());
+    for (a, b) in got.iter().zip(input.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn delta_mz_special_values_are_bit_exact() {
+    let input = vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0f64, 0.0f64];
+    let got = encode_decode_mz_compressed(input.clone());
+    for (a, b) in got.iter().zip(input.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn delta_mz_via_for_each_scan_is_bit_exact() {
+    use ionic::SpectrumSource;
+    use ionic::decoder::decode::Ion;
+    let input: Vec<f64> = (0..500).map(|i| 100.0 + i as f64 * 0.05).collect();
+    let intensity: Vec<f64> = vec![1.0; input.len()];
+    let mut spectrum = make_spectrum_f64("scan=1", input.clone(), intensity);
+    spectrum.scan_list = Some(ScanList {
+        count: Some(1),
+        scans: vec![Scan {
+            cv_params: vec![CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some("MS:1000016".to_string()),
+                name: "scan start time".to_string(),
+                value: Some("1.0".to_string()),
+                unit_accession: Some("UO:0000031".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let mzml = build_mzml(vec![spectrum], vec![]);
+    let buf = encode_to_ion(&mzml, 3, false);
+    let mut ion = Ion::open(&buf, DecoderConfig::default()).unwrap();
+    let mut got_mz: Vec<f64> = Vec::new();
+    ion.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |_, _, mz: &[f64], _| {
+        got_mz = mz.to_vec();
+    });
+    assert_eq!(got_mz.len(), input.len());
+    for (a, b) in got_mz.iter().zip(input.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn delta_does_not_affect_intensity_array() {
+    use ionic::ion::Decoder as IonDecoder;
+    let mz: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
+    let intensity: Vec<f64> = (0..100).map(|i| (i * 10) as f64).collect();
+    let mzml = build_mzml(
+        vec![make_spectrum_f64("scan=1", mz.clone(), intensity.clone())],
+        vec![],
+    );
+    let buf = encode_to_ion(&mzml, 3, false);
+    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
+    let refs = decoder.spectrum_array_refs(0).unwrap();
+    let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
+    let int_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
+    assert_eq!(mz_ref.array_filter, 2, "m/z must have delta filter");
+    assert_eq!(int_ref.array_filter, 0, "intensity must have no filter");
+    let mut got_mz = Vec::new();
+    decoder.read_spectrum_array(mz_ref, &mut got_mz).unwrap();
+    let mut got_int = Vec::new();
+    decoder.read_spectrum_array(int_ref, &mut got_int).unwrap();
+    for (a, b) in got_mz.iter().zip(mz.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+    for (a, b) in got_int.iter().zip(intensity.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn delta_not_applied_without_compression() {
+    use ionic::ion::Decoder as IonDecoder;
+    let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
+    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(mz.clone()), mz.len());
+    let buf = encode_to_ion(&mzml, 0, false);
+    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
+    let refs = decoder.spectrum_array_refs(0).unwrap();
+    let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
+    assert_eq!(mz_ref.array_filter, 0, "no delta without compression");
+    let mut got = Vec::new();
+    decoder.read_spectrum_array(mz_ref, &mut got).unwrap();
+    for (a, b) in got.iter().zip(mz.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
     }
 }
 

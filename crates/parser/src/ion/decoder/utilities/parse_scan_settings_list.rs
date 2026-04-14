@@ -1,4 +1,5 @@
 use crate::{
+    CvParam,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF},
@@ -15,7 +16,6 @@ use crate::{
             SourceFileRefList, Target, TargetList,
         },
     },
-    CvParam,
 };
 use hashbrown::HashSet;
 
