@@ -13,13 +13,14 @@ use clap::{
     ArgAction, ArgGroup, Args, ColorChoice, CommandFactory, FromArgMatches, Parser, Subcommand,
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
-use rayon::{ThreadPoolBuilder, prelude::*};
 use mimalloc::MiMalloc;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use regex::Regex;
 use serde::Serialize;
 
 use ionic::{
-    ion::{Decoder, FileEncoderOutput, encoder::encode::encode}, mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*}
+    ion::{Decoder, FileEncoderOutput, encoder::encode::encode},
+    mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 
 #[global_allocator]
@@ -218,8 +219,7 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     let ext = file_ext_lower(file_path);
 
     if ext == "ion" {
-        let decoder = Decoder::open(&bytes)
-            .map_err(|e| format!("Decoder::open failed: {e}"))?;
+        let decoder = Decoder::open(&bytes).map_err(|e| format!("Decoder::open failed: {e}"))?;
         return decoder
             .to_mzml_metadata_only()
             .map_err(|e| format!("to_mzml_metadata_only failed: {e}"));
@@ -820,8 +820,7 @@ fn read_mzml_or_ion_from_bytes(file_path: &Path, bytes: &[u8]) -> Result<MzML, S
     let ext = file_ext_lower(file_path);
 
     if ext == "ion" {
-        let mut decoder = Decoder::open(bytes)
-            .map_err(|e| format!("Decoder::open failed: {e}"))?;
+        let mut decoder = Decoder::open(bytes).map_err(|e| format!("Decoder::open failed: {e}"))?;
         #[allow(deprecated)]
         return decoder
             .to_mzml()

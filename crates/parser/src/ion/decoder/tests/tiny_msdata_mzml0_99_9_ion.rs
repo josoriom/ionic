@@ -1,8 +1,8 @@
 use crate::{
     mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{
-        assert_cv, assert_software_param, parse_b, spectrum_description, spectrum_precursor_list,
-        spectrum_scan_list, CvRefMode,
+        CvRefMode, assert_cv, assert_software_param, parse_b, spectrum_description,
+        spectrum_precursor_list, spectrum_scan_list,
     },
 };
 

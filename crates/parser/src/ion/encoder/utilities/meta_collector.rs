@@ -212,9 +212,7 @@ impl ValuePool {
                     || text.contains('e')
                     || text.contains('E')
                     || text.starts_with('-') && text[1..].contains('.');
-                if looks_numeric
-                    && let Ok(n) = text.parse::<f64>()
-                {
+                if looks_numeric && let Ok(n) = text.parse::<f64>() {
                     let index = self.numeric_count;
                     self.numeric_values.push(n);
                     self.numeric_count += 1;
@@ -823,7 +821,8 @@ where
 {
     pack_meta_for_each(items.len(), |writer, i| {
         let item = &items[i];
-        if i == 0 && list_node_id != 0
+        if i == 0
+            && list_node_id != 0
             && let Some(schema) = list_schema
         {
             writer.touch(T::list_tag(), list_node_id, 0);

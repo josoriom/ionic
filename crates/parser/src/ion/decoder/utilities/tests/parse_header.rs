@@ -33,7 +33,7 @@ fn check_header() {
     assert_eq!(header.array_filter, 1);
     assert!(header.spect_array_count > 0);
     assert!(header.chrom_array_count > 0);
-    assert_eq!(header.target_block_uncompressed_bytes, 64 * 1024 * 1024);
+    assert_eq!(header.target_block_uncompressed_bytes, 32 * 1024 * 1024);
     assert!(header.spec_meta_uncompressed_bytes > 0);
     assert!(header.chrom_meta_uncompressed_bytes > 0);
     assert!(header.global_meta_uncompressed_bytes > 0);

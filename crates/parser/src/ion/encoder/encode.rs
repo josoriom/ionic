@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::{
     BinaryData, FilterRecord, NumericType,
     encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
+    ion::IonResult,
     ion::encoder::utilities::{
         CompressionMode, ContainerBuilder, DefaultCompressor, FilterType, delta_filter,
     },
@@ -17,25 +18,25 @@ use crate::encoder::utilities::{
     meta_collector::{
         ACCESSION_32BIT_FLOAT, ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY,
         ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY, ArrayPolicy, CompressedMetaSections,
-        GlobalCounts, MetaCollector, PackedMeta, array_type_accession_from_binary_data_array,
+        MetaCollector, PackedMeta, array_type_accession_from_binary_data_array,
         parse_accession_tail_raw,
     },
 };
 
 pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
-pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 32 * 1024 * 1024;
 pub const FILTER_INDEX_RECORD_SIZE: usize = 128;
 
 const ARRAY_FILTER_NONE: u8 = 0;
 const ARRAY_FILTER_BYTE_SHUFFLE: u8 = 1;
 
-const FILE_DTYPE_F64: u8 = 1;
-const FILE_DTYPE_F32: u8 = 2;
-const FILE_DTYPE_F16: u8 = 3;
-const FILE_DTYPE_I16: u8 = 4;
-const FILE_DTYPE_I32: u8 = 5;
-const FILE_DTYPE_I64: u8 = 6;
+pub(crate) const FILE_DTYPE_F64: u8 = 1;
+pub(crate) const FILE_DTYPE_F32: u8 = 2;
+pub(crate) const FILE_DTYPE_F16: u8 = 3;
+pub(crate) const FILE_DTYPE_I16: u8 = 4;
+pub(crate) const FILE_DTYPE_I32: u8 = 5;
+pub(crate) const FILE_DTYPE_I64: u8 = 6;
 
 const ACC_SCAN_START_TIME: u32 = 1_000_016;
 const ACC_BASE_PEAK_MZ: u32 = 1_000_504;
@@ -168,7 +169,7 @@ impl<'o> Encoder<'o> {
         Self { output, config }
     }
 
-    pub fn encode(&mut self, mzml: &MzML) -> Result<(), String> {
+    pub fn encode(&mut self, mzml: &MzML) -> IonResult<()> {
         let spectra = Self::spectra(mzml);
         let chroms = Self::chromatograms(mzml);
         let mut collector = MetaCollector::new();
@@ -244,15 +245,16 @@ impl<'o> Encoder<'o> {
             &chrom_meta,
             &global_meta,
             &compressed,
-            &global_counts,
-            spectra.len() as u64,
-            chroms.len() as u64,
-            total_file_size,
-            spec_meta_crc32,
-            chrom_meta_crc32,
-            global_meta_crc32,
-            off_filter_index,
-            len_filter_index,
+            &HeaderInfo {
+                spectrum_count: spectra.len() as u64,
+                chrom_count: chroms.len() as u64,
+                total_file_size,
+                spec_meta_crc32,
+                chrom_meta_crc32,
+                global_meta_crc32,
+                off_filter_index,
+                len_filter_index,
+            },
         );
 
         let mut header_bytes = [0u8; HEADER_SIZE];
@@ -283,7 +285,7 @@ impl<'o> Encoder<'o> {
         s: &PackedArraySection,
         c: &PackedArraySection,
         m: &CompressedMetaSections,
-    ) -> Result<SectionOffsets, String> {
+    ) -> IonResult<SectionOffsets> {
         Ok(SectionOffsets {
             offset_spec_entries: write_aligned_section(self.output, &s.index_entries_bytes)?,
             offset_spec_arrayrefs: write_aligned_section(self.output, &s.array_refs_bytes)?,
@@ -297,7 +299,6 @@ impl<'o> Encoder<'o> {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn build_header(
         config: &EncodingConfig,
         offsets: &SectionOffsets,
@@ -307,15 +308,7 @@ impl<'o> Encoder<'o> {
         chrom_meta: &PackedMeta,
         global_meta: &PackedMeta,
         compressed: &CompressedMetaSections,
-        _global_counts: &GlobalCounts,
-        spectrum_count: u64,
-        chrom_count: u64,
-        total_file_size: u64,
-        spec_meta_crc32: u32,
-        chrom_meta_crc32: u32,
-        global_meta_crc32: u32,
-        off_filter_index: u64,
-        len_filter_index: u64,
+        info: &HeaderInfo,
     ) -> FileHeader {
         FileHeader {
             compression_codec: config.codec_id(),
@@ -344,8 +337,8 @@ impl<'o> Encoder<'o> {
 
             spectrum_block_count: spec_arrays.block_count,
             chrom_block_count: chrom_arrays.block_count,
-            spectrum_count,
-            chrom_count,
+            spectrum_count: info.spectrum_count,
+            chrom_count: info.chrom_count,
 
             spec_meta_row_count: spectrum_meta.ref_codes.len() as u64,
             spec_meta_numeric_count: spectrum_meta.numeric_values.len() as u64,
@@ -363,14 +356,14 @@ impl<'o> Encoder<'o> {
             chrom_meta_uncompressed_size: compressed.chromatogram_uncompressed_size,
             global_meta_uncompressed_size: compressed.global_uncompressed_size,
 
-            off_filter_index,
-            len_filter_index,
+            off_filter_index: info.off_filter_index,
+            len_filter_index: info.len_filter_index,
 
-            total_file_size,
+            total_file_size: info.total_file_size,
 
-            spec_meta_crc32,
-            chrom_meta_crc32,
-            global_meta_crc32,
+            spec_meta_crc32: info.spec_meta_crc32,
+            chrom_meta_crc32: info.chrom_meta_crc32,
+            global_meta_crc32: info.global_meta_crc32,
             header_crc32: 0,
         }
     }
@@ -382,11 +375,10 @@ pub fn encode(
     force_f32: bool,
     writing_mode: WritingMode,
     output: &mut dyn EncoderOutput,
-) -> Result<(), String> {
-    assert!(
-        compression_level <= 22,
-        "compression_level must be 0–22, got {compression_level}"
-    );
+) -> IonResult<()> {
+    if compression_level > 22 {
+        return Err(format!("compression_level must be 0–22, got {compression_level}").into());
+    }
     let config = EncodingConfig {
         compression_level,
         force_f32,
@@ -464,6 +456,17 @@ struct SectionOffsets {
     offset_global_meta: u64,
     offset_packed_spectra: u64,
     offset_packed_chroms: u64,
+}
+
+struct HeaderInfo {
+    spectrum_count: u64,
+    chrom_count: u64,
+    total_file_size: u64,
+    spec_meta_crc32: u32,
+    chrom_meta_crc32: u32,
+    global_meta_crc32: u32,
+    off_filter_index: u64,
+    len_filter_index: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -566,7 +569,7 @@ fn declared_float_precision_is_64bit(bda: &BinaryDataArray) -> Option<bool> {
     }
 }
 
-fn validate_array_dtype(data: ArrayData<'_>, dtype: u8) -> Result<(), String> {
+fn validate_array_dtype(data: ArrayData<'_>, dtype: u8) -> IonResult<()> {
     let ok = matches!(
         (dtype, data),
         (FILE_DTYPE_F16, ArrayData::F16(_))
@@ -583,7 +586,8 @@ fn validate_array_dtype(data: ArrayData<'_>, dtype: u8) -> Result<(), String> {
     } else {
         Err(format!(
             "write_array_data: incompatible dtype {dtype} for the given array data variant"
-        ))
+        )
+        .into())
     }
 }
 
@@ -611,11 +615,12 @@ fn write_array_data(buf: &mut Vec<u8>, data: ArrayData<'_>, dtype: u8) {
     }
 }
 
-fn write_aligned_section(output: &mut dyn EncoderOutput, bytes: &[u8]) -> Result<u64, String> {
+fn write_aligned_section(output: &mut dyn EncoderOutput, bytes: &[u8]) -> IonResult<u64> {
+    static PAD: [u8; 7] = [0u8; 7];
     let pos = output.current_byte_position()?;
     let aligned = (pos + 7) & !7;
     if aligned > pos {
-        output.write_bytes(&vec![0u8; (aligned - pos) as usize])?;
+        output.write_bytes(&PAD[..(aligned - pos) as usize])?;
     }
     output.write_bytes(bytes)?;
     Ok(aligned)
@@ -664,29 +669,19 @@ impl HasBinaryDataArrayList for Chromatogram {
     }
 }
 
-fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
+fn fill_container<T: HasBinaryDataArrayList>(
     items: &[T],
     config: EncodingConfig,
     policy: ArrayPolicy,
-    output: &mut dyn EncoderOutput,
-) -> Result<PackedArraySection, String> {
-    let mut container_bytes = Vec::new();
-    let mut index_entries_bytes = Vec::new();
-    let mut array_refs_bytes = Vec::new();
-    let mut seen_array_type_accessions: HashSet<u32> = HashSet::new();
-    let mut arrayref_cursor: u64 = 0;
-
-    let mut container_builder = ContainerBuilder::new(
-        &mut container_bytes,
-        TARGET_BLOCK_UNCOMPRESSED_BYTES,
-        config.compression_mode(),
-        config.filter_type(),
-    );
-
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    index_bytes: &mut Vec<u8>,
+    aref_bytes: &mut Vec<u8>,
+    seen_types: &mut HashSet<u32>,
+) -> IonResult<()> {
+    let mut aref_cursor: u64 = 0;
     for item in items {
-        let arrayref_start = arrayref_cursor;
-        let mut arrayref_count: u64 = 0;
-
+        let aref_start = aref_cursor;
+        let mut aref_count: u64 = 0;
         if let Some(list) = item.binary_data_array_list() {
             for bda in &list.binary_data_arrays {
                 let Some(data) = array_data_from_binary_data_array(bda) else {
@@ -697,7 +692,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                 }
                 let acc = array_type_accession_from_binary_data_array(bda);
                 if acc != 0 {
-                    seen_array_type_accessions.insert(acc);
+                    seen_types.insert(acc);
                 }
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
                 validate_array_dtype(data, dtype)?;
@@ -711,7 +706,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                 } else {
                     0u8
                 };
-                let (block_id, elem_offset) = container_builder.add_item_to_box(
+                let (block_id, elem_offset) = container.add_item_to_box(
                     data.element_count() * elem_bytes,
                     elem_bytes,
                     |buf| {
@@ -725,7 +720,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                     },
                 )?;
                 write_arrayref_entry(
-                    &mut array_refs_bytes,
+                    aref_bytes,
                     elem_offset,
                     data.element_count() as u64,
                     block_id,
@@ -733,24 +728,50 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
                     dtype,
                     array_filter,
                 );
-                arrayref_cursor += 1;
-                arrayref_count += 1;
+                aref_cursor += 1;
+                aref_count += 1;
             }
         }
-        write_u64_le(&mut index_entries_bytes, arrayref_start);
-        write_u64_le(&mut index_entries_bytes, arrayref_count);
+        write_u64_le(index_bytes, aref_start);
+        write_u64_le(index_bytes, aref_count);
     }
+    Ok(())
+}
 
-    let (block_count, container_total_bytes) = container_builder.finish()?;
+fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
+    items: &[T],
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    output: &mut dyn EncoderOutput,
+) -> IonResult<PackedArraySection> {
+    let mut container_bytes = Vec::new();
+    let mut index_bytes = Vec::new();
+    let mut aref_bytes = Vec::new();
+    let mut seen_types: HashSet<u32> = HashSet::new();
+    let mut container = ContainerBuilder::new(
+        &mut container_bytes,
+        TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        config.compression_mode(),
+        config.filter_type(),
+    );
+    fill_container(
+        items,
+        config,
+        policy,
+        &mut container,
+        &mut index_bytes,
+        &mut aref_bytes,
+        &mut seen_types,
+    )?;
+    let (block_count, container_total_bytes) = container.finish()?;
     let container_offset = write_aligned_section(output, &container_bytes)?;
-
     Ok(PackedArraySection {
         block_count: block_count as u64,
         container_offset,
         container_total_bytes,
-        index_entries_bytes,
-        array_refs_bytes,
-        seen_array_type_accessions,
+        index_entries_bytes: index_bytes,
+        array_refs_bytes: aref_bytes,
+        seen_array_type_accessions: seen_types,
     })
 }
 
@@ -759,88 +780,34 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
     config: EncodingConfig,
     policy: ArrayPolicy,
     output: &mut dyn EncoderOutput,
-) -> Result<PackedArraySection, String> {
-    let mut index_entries_bytes = Vec::new();
-    let mut array_refs_bytes = Vec::new();
-    let mut seen_array_type_accessions: HashSet<u32> = HashSet::new();
-    let mut arrayref_cursor: u64 = 0;
-
+) -> IonResult<PackedArraySection> {
+    let mut index_bytes = Vec::new();
+    let mut aref_bytes = Vec::new();
+    let mut seen_types: HashSet<u32> = HashSet::new();
     let container_offset = write_aligned_section(output, &[])?;
-
-    let mut container_builder = ContainerBuilder::new(
+    let mut container = ContainerBuilder::new(
         output,
         TARGET_BLOCK_UNCOMPRESSED_BYTES,
         config.compression_mode(),
         config.filter_type(),
     );
-
-    for item in items {
-        let arrayref_start = arrayref_cursor;
-        let mut arrayref_count: u64 = 0;
-
-        if let Some(list) = item.binary_data_array_list() {
-            for bda in &list.binary_data_arrays {
-                let Some(data) = array_data_from_binary_data_array(bda) else {
-                    continue;
-                };
-                if data.is_empty() {
-                    continue;
-                }
-                let acc = array_type_accession_from_binary_data_array(bda);
-                if acc != 0 {
-                    seen_array_type_accessions.insert(acc);
-                }
-                let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
-                validate_array_dtype(data, dtype)?;
-                let elem_bytes = element_byte_size_for_dtype(dtype);
-                let use_delta = acc == ACCESSION_MZ_ARRAY
-                    && dtype == FILE_DTYPE_F64
-                    && matches!(data, ArrayData::F64(_))
-                    && config.compression_is_enabled();
-                let array_filter = if use_delta {
-                    FilterType::DeltaShuffle as u8
-                } else {
-                    0u8
-                };
-                let (block_id, elem_offset) = container_builder.add_item_to_box(
-                    data.element_count() * elem_bytes,
-                    elem_bytes,
-                    |buf| {
-                        if use_delta {
-                            if let ArrayData::F64(slice) = data {
-                                delta_filter::encode_f64(slice, buf);
-                            }
-                        } else {
-                            write_array_data(buf, data, dtype);
-                        }
-                    },
-                )?;
-                write_arrayref_entry(
-                    &mut array_refs_bytes,
-                    elem_offset,
-                    data.element_count() as u64,
-                    block_id,
-                    acc,
-                    dtype,
-                    array_filter,
-                );
-                arrayref_cursor += 1;
-                arrayref_count += 1;
-            }
-        }
-        write_u64_le(&mut index_entries_bytes, arrayref_start);
-        write_u64_le(&mut index_entries_bytes, arrayref_count);
-    }
-
-    let (block_count, container_total_bytes) = container_builder.finish()?;
-
+    fill_container(
+        items,
+        config,
+        policy,
+        &mut container,
+        &mut index_bytes,
+        &mut aref_bytes,
+        &mut seen_types,
+    )?;
+    let (block_count, container_total_bytes) = container.finish()?;
     Ok(PackedArraySection {
         block_count: block_count as u64,
         container_offset,
         container_total_bytes,
-        index_entries_bytes,
-        array_refs_bytes,
-        seen_array_type_accessions,
+        index_entries_bytes: index_bytes,
+        array_refs_bytes: aref_bytes,
+        seen_array_type_accessions: seen_types,
     })
 }
 
@@ -848,7 +815,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
 mod tests {
     use super::*;
     use crate::ion::utilities::parse_header::{
-        HEADER_CHROM_BLOCK_COUNT, HEADER_SPECTRUM_BLOCK_COUNT,
+        HEADER_CHROM_BLOCK_COUNT, HEADER_SPECTRUM_BLOCK_COUNT, HEADER_TARGET_BLOCK_SIZE,
     };
 
     #[test]
@@ -925,6 +892,20 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(total_file_size, buf.len() as u64);
+    }
+
+    #[test]
+    fn encoder_header_target_block_size_matches_default() {
+        let mzml = MzML::default();
+        let mut buf = Vec::new();
+        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+
+        let target_block_size = u64::from_le_bytes(
+            buf[HEADER_TARGET_BLOCK_SIZE..HEADER_TARGET_BLOCK_SIZE + 8]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(target_block_size, TARGET_BLOCK_UNCOMPRESSED_BYTES as u64);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
 use crate::encoder::utilities::byte_shuffle::shuffle_bytes_by_stride;
 use crate::encoder::utilities::encoder_output::EncoderOutput;
+use crate::ion::{IonError, IonResult};
 
 pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
 
@@ -14,14 +15,16 @@ pub(crate) enum FilterType {
 }
 
 impl TryFrom<u8> for FilterType {
-    type Error = String;
+    type Error = IonError;
 
     fn try_from(raw_byte: u8) -> Result<Self, Self::Error> {
         match raw_byte {
             0 => Ok(Self::None),
             1 => Ok(Self::Shuffle),
             2 => Ok(Self::DeltaShuffle),
-            unknown => Err(format!("unknown filter type byte: {unknown}")),
+            unknown => Err(IonError::from(format!(
+                "unknown filter type byte: {unknown}"
+            ))),
         }
     }
 }
@@ -72,7 +75,7 @@ impl Stride {
 }
 
 pub(crate) trait BlockCompressor {
-    fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> Result<usize, String>;
+    fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize>;
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize);
 }
 
@@ -81,20 +84,21 @@ pub(crate) struct DefaultCompressor {
 }
 
 impl DefaultCompressor {
-    pub(crate) fn new(compression_level: i32) -> Result<Self, String> {
+    pub(crate) fn new(compression_level: i32) -> IonResult<Self> {
         Ok(Self {
-            inner: ZstdCompressor::new(compression_level).map_err(|err| err.to_string())?,
+            inner: ZstdCompressor::new(compression_level)
+                .map_err(|err| IonError::from(err.to_string()))?,
         })
     }
 }
 
 impl BlockCompressor for DefaultCompressor {
-    fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> Result<usize, String> {
+    fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize> {
         output.clear();
         output.reserve(compress_bound(input.len()));
         self.inner
             .compress_to_buffer(input, output)
-            .map_err(|err| err.to_string())
+            .map_err(|err| IonError::from(err.to_string()))
     }
 
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
@@ -142,10 +146,10 @@ impl BlockDirectory {
         new_block_id
     }
 
-    fn seal_block(&mut self, block_id: u32, entry: BlockDirEntry) -> Result<(), String> {
+    fn seal_block(&mut self, block_id: u32, entry: BlockDirEntry) -> IonResult<()> {
         self.entries
             .get_mut(block_id as usize)
-            .ok_or_else(|| format!("seal_block: unknown block_id={block_id}"))?
+            .ok_or_else(|| IonError::from(format!("seal_block: unknown block_id={block_id}")))?
             .clone_from(&entry);
         Ok(())
     }
@@ -265,7 +269,7 @@ impl BlockStore {
         self.slots.take(stride)
     }
 
-    fn seal(&mut self, block_id: u32, entry: BlockDirEntry) -> Result<(), String> {
+    fn seal(&mut self, block_id: u32, entry: BlockDirEntry) -> IonResult<()> {
         self.directory.seal_block(block_id, entry)
     }
 
@@ -323,7 +327,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         item_byte_size: usize,
         element_size: usize,
         write_action: WriteAction,
-    ) -> Result<(u32, u64), String>
+    ) -> IonResult<(u32, u64)>
     where
         WriteAction: FnOnce(&mut Vec<u8>),
     {
@@ -340,7 +344,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         item_byte_size: usize,
         stride: Stride,
         write_action: WriteAction,
-    ) -> Result<(u32, u64), String>
+    ) -> IonResult<(u32, u64)>
     where
         WriteAction: FnOnce(&mut Vec<u8>),
     {
@@ -366,7 +370,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         item_byte_size: usize,
         stride: Stride,
         write_action: WriteAction,
-    ) -> Result<(u32, u64), String>
+    ) -> IonResult<(u32, u64)>
     where
         WriteAction: FnOnce(&mut Vec<u8>),
     {
@@ -382,7 +386,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         Ok((block_id, element_offset))
     }
 
-    fn seal_open_block_for_stride(&mut self, stride: Stride) -> Result<(), String> {
+    fn seal_open_block_for_stride(&mut self, stride: Stride) -> IonResult<()> {
         let Some(active_block) = self.store.take_open_block(stride) else {
             return Ok(());
         };
@@ -412,7 +416,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         &mut self,
         block_data: &[u8],
         stride: Stride,
-    ) -> Result<(u64, u32), String> {
+    ) -> IonResult<(u64, u32)> {
         match &mut self.compressor {
             CompressionMode::Raw => {
                 self.output.write_bytes(block_data)?;
@@ -443,7 +447,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         }
     }
 
-    pub(crate) fn finish(mut self) -> Result<(u32, u64), String> {
+    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)> {
         for stride in Stride::all_variants() {
             self.seal_open_block_for_stride(stride)?;
         }
@@ -677,16 +681,16 @@ mod tests {
     struct VecOutput(Vec<u8>);
 
     impl EncoderOutput for VecOutput {
-        fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
+        fn write_bytes(&mut self, bytes: &[u8]) -> IonResult<()> {
             self.0.extend_from_slice(bytes);
             Ok(())
         }
-        fn patch_bytes_at(&mut self, position: u64, bytes: &[u8]) -> Result<(), String> {
+        fn patch_bytes_at(&mut self, position: u64, bytes: &[u8]) -> IonResult<()> {
             let start = position as usize;
             self.0[start..start + bytes.len()].copy_from_slice(bytes);
             Ok(())
         }
-        fn current_byte_position(&mut self) -> Result<u64, String> {
+        fn current_byte_position(&mut self) -> IonResult<u64> {
             Ok(self.0.len() as u64)
         }
     }
@@ -694,7 +698,7 @@ mod tests {
     struct PassthroughCompressor;
 
     impl BlockCompressor for PassthroughCompressor {
-        fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> Result<usize, String> {
+        fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize> {
             output.clear();
             output.extend_from_slice(input);
             Ok(input.len())

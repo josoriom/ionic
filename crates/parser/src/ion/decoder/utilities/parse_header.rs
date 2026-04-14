@@ -1,11 +1,12 @@
 use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
+use crate::ion::IonResult;
 
 const HEADER_SIZE: usize = 1024;
 const RESERVED_EXT_SIZE: usize = 672;
 
-pub(crate) fn parse_header(bytes: &[u8]) -> Result<Header, String> {
+pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
     if bytes.len() < HEADER_SIZE {
-        return Err("header: file too small".to_string());
+        return Err("header: file too small".into());
     }
 
     let mut r = Reader::new(&bytes[..HEADER_SIZE]);
@@ -148,7 +149,8 @@ pub(crate) fn parse_header(bytes: &[u8]) -> Result<Header, String> {
             "header: file integrity validation failed ({} check(s)):\n{}",
             failures.len(),
             failures.join("\n")
-        ));
+        )
+        .into());
     }
 
     Ok(header)
@@ -221,7 +223,7 @@ impl<'a> Reader<'a> {
     }
 
     #[inline]
-    fn need(&self, n: usize, field: &str) -> Result<(), String> {
+    fn need(&self, n: usize, field: &str) -> IonResult<()> {
         if self.pos + n <= self.bytes.len() {
             Ok(())
         } else {
@@ -229,12 +231,13 @@ impl<'a> Reader<'a> {
                 "header: not enough bytes for {field} at offset {} (need {n}, have {})",
                 self.pos,
                 self.bytes.len().saturating_sub(self.pos)
-            ))
+            )
+            .into())
         }
     }
 
     #[inline]
-    fn read_u8(&mut self, field: &str) -> Result<u8, String> {
+    fn read_u8(&mut self, field: &str) -> IonResult<u8> {
         self.need(1, field)?;
         let v = self.bytes[self.pos];
         self.pos += 1;
@@ -242,7 +245,7 @@ impl<'a> Reader<'a> {
     }
 
     #[inline]
-    fn read_u16_le(&mut self, field: &str) -> Result<u16, String> {
+    fn read_u16_le(&mut self, field: &str) -> IonResult<u16> {
         self.need(2, field)?;
         let v = u16::from_le_bytes(self.bytes[self.pos..self.pos + 2].try_into().unwrap());
         self.pos += 2;
@@ -250,7 +253,7 @@ impl<'a> Reader<'a> {
     }
 
     #[inline]
-    fn read_u32_le(&mut self, field: &str) -> Result<u32, String> {
+    fn read_u32_le(&mut self, field: &str) -> IonResult<u32> {
         self.need(4, field)?;
         let v = u32::from_le_bytes(self.bytes[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
@@ -258,7 +261,7 @@ impl<'a> Reader<'a> {
     }
 
     #[inline]
-    fn read_u64_le(&mut self, field: &str) -> Result<u64, String> {
+    fn read_u64_le(&mut self, field: &str) -> IonResult<u64> {
         self.need(8, field)?;
         let v = u64::from_le_bytes(self.bytes[self.pos..self.pos + 8].try_into().unwrap());
         self.pos += 8;
@@ -266,7 +269,7 @@ impl<'a> Reader<'a> {
     }
 
     #[inline]
-    fn read_arr<const N: usize>(&mut self, field: &str) -> Result<[u8; N], String> {
+    fn read_arr<const N: usize>(&mut self, field: &str) -> IonResult<[u8; N]> {
         self.need(N, field)?;
         let v: [u8; N] = self.bytes[self.pos..self.pos + N].try_into().unwrap();
         self.pos += N;

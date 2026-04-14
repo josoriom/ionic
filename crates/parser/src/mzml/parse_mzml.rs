@@ -1,15 +1,16 @@
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use std::io::Cursor;
 
 use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        attr_u32, attr_usize, drain_until_close, parse_cv_list, parse_data_processing_list,
-        parse_file_description, parse_index_list, parse_instrument_list,
-        parse_ref_param_group_list, parse_run, parse_sample_list, parse_scan_settings_list,
-        parse_software_list, parsing_workspace::ParsingWorkspace, tag_id_from_bytes, ParseError,
+        ParseError, attr_u32, attr_usize, drain_until_close, parse_cv_list,
+        parse_data_processing_list, parse_file_description, parse_index_list,
+        parse_instrument_list, parse_ref_param_group_list, parse_run, parse_sample_list,
+        parse_scan_settings_list, parse_software_list, parsing_workspace::ParsingWorkspace,
+        tag_id_from_bytes,
     },
 };
 

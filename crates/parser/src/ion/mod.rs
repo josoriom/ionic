@@ -5,3 +5,5 @@ pub(crate) use decoder::utilities;
 pub mod encoder;
 pub use encoder::{encode::WritingMode, encode::encode, utilities::FileEncoderOutput};
 pub mod attr_meta;
+pub mod error;
+pub use error::{IonError, IonResult};

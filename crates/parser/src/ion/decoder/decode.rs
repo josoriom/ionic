@@ -1,5 +1,8 @@
 use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
 use crate::ion::attr_meta::ACC_ATTR_DEFAULT_SOURCE_FILE_REF;
+use crate::ion::encoder::encode::{
+    FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32, FILE_DTYPE_I64,
+};
 use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::encoder::utilities::delta_filter;
 use crate::ion::utilities::spectrum_source::ScanMeta;
@@ -8,6 +11,7 @@ use crate::ion::utilities::{
     parse_header::{Header, parse_header},
     spectrum_source::{SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range},
 };
+use crate::ion::{IonError, IonResult};
 use crate::ion::{
     attr_meta::{
         ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
@@ -53,20 +57,15 @@ pub(crate) struct Metadatum {
 }
 
 #[inline]
-pub(crate) fn slice_at<'a>(
-    bytes: &'a [u8],
-    off: u64,
-    len: u64,
-    f: &str,
-) -> Result<&'a [u8], String> {
+pub(crate) fn slice_at<'a>(bytes: &'a [u8], off: u64, len: u64, f: &str) -> IonResult<&'a [u8]> {
     let end = off
         .checked_add(len)
-        .ok_or_else(|| format!("{f}: range error"))?;
-    let start = usize::try_from(off).map_err(|_| format!("{f}: range error"))?;
-    let end = usize::try_from(end).map_err(|_| format!("{f}: range error"))?;
+        .ok_or_else(|| IonError::from(format!("{f}: range error")))?;
+    let start = usize::try_from(off).map_err(|_| IonError::from(format!("{f}: range error")))?;
+    let end = usize::try_from(end).map_err(|_| IonError::from(format!("{f}: range error")))?;
     bytes
         .get(start..end)
-        .ok_or_else(|| format!("{f}: range error"))
+        .ok_or_else(|| IonError::from(format!("{f}: range error")))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -102,25 +101,25 @@ pub struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
-    pub fn open(bytes: &'a [u8]) -> Result<Self, String> {
+    pub fn open(bytes: &'a [u8]) -> IonResult<Self> {
         Self::open_with_config(bytes, DecoderConfig::default())
     }
 
-    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> Result<Self, String> {
+    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
         let filter = FilterType::try_from(header.array_filter).unwrap_or(FilterType::None);
 
         let spec_container = {
             let off = usize::try_from(header.off_container_spect)
-                .map_err(|_| "spectrum container out of bounds".to_string())?;
+                .map_err(|_| IonError::from("spectrum container out of bounds"))?;
             let len = usize::try_from(header.len_container_spect)
-                .map_err(|_| "spectrum container out of bounds".to_string())?;
+                .map_err(|_| IonError::from("spectrum container out of bounds"))?;
             let end = off
                 .checked_add(len)
-                .ok_or_else(|| "spectrum container out of bounds".to_string())?;
+                .ok_or_else(|| IonError::from("spectrum container out of bounds"))?;
             let cb = bytes
                 .get(off..end)
-                .ok_or_else(|| "spectrum container out of bounds".to_string())?;
+                .ok_or_else(|| IonError::from("spectrum container out of bounds"))?;
             ContainerView::with_max_cached_bytes(
                 cb,
                 header.block_count_spect,
@@ -134,15 +133,15 @@ impl<'a> Decoder<'a> {
 
         let chrom_container = if header.block_count_chrom > 0 && header.len_container_chrom > 0 {
             let off = usize::try_from(header.off_container_chrom)
-                .map_err(|_| "chrom container out of bounds".to_string())?;
+                .map_err(|_| IonError::from("chrom container out of bounds"))?;
             let len = usize::try_from(header.len_container_chrom)
-                .map_err(|_| "chrom container out of bounds".to_string())?;
+                .map_err(|_| IonError::from("chrom container out of bounds"))?;
             let end = off
                 .checked_add(len)
-                .ok_or_else(|| "chrom container out of bounds".to_string())?;
+                .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
             let cb = bytes
                 .get(off..end)
-                .ok_or_else(|| "chrom container out of bounds".to_string())?;
+                .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
             Some(ContainerView::with_max_cached_bytes(
                 cb,
                 header.block_count_chrom,
@@ -197,25 +196,26 @@ impl<'a> Decoder<'a> {
         Some(parse_filter_record(b))
     }
 
-    pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
+    pub fn filter_records(&self) -> IonResult<Vec<FilterRecord>> {
         let off = usize::try_from(self.header.off_filter_index)
-            .map_err(|_| "filter index: out of bounds".to_string())?;
+            .map_err(|_| IonError::from("filter index: out of bounds"))?;
         let len = usize::try_from(self.header.len_filter_index)
-            .map_err(|_| "filter index: out of bounds".to_string())?;
+            .map_err(|_| IonError::from("filter index: out of bounds"))?;
         let count = usize::try_from(self.header.spectrum_count)
-            .map_err(|_| "filter index: out of bounds".to_string())?;
+            .map_err(|_| IonError::from("filter index: out of bounds"))?;
         if len != count * FILTER_INDEX_RECORD_SIZE {
             return Err(format!(
                 "filter index: len={len} != count={count} × {FILTER_INDEX_RECORD_SIZE}"
-            ));
+            )
+            .into());
         }
         let end = off
             .checked_add(len)
-            .ok_or_else(|| "filter index: out of bounds".to_string())?;
+            .ok_or_else(|| IonError::from("filter index: out of bounds"))?;
         let section = self
             .bytes
             .get(off..end)
-            .ok_or_else(|| "filter index: out of bounds".to_string())?;
+            .ok_or_else(|| IonError::from("filter index: out of bounds"))?;
         Ok(section
             .chunks_exact(FILTER_INDEX_RECORD_SIZE)
             .map(parse_filter_record)
@@ -248,11 +248,7 @@ impl<'a> Decoder<'a> {
         .map(ArrayRefs::into_vec)
     }
 
-    pub fn read_spectrum_array(
-        &mut self,
-        aref: &ArrayRef,
-        out: &mut Vec<f64>,
-    ) -> Result<(), String> {
+    pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
         let raw = self.spec_container.get_item_from_block(
             aref.block_id,
             aref.element_offset,
@@ -268,11 +264,11 @@ impl<'a> Decoder<'a> {
         &mut self,
         aref: &ArrayRef,
         out: &mut Vec<f64>,
-    ) -> Result<(), String> {
+    ) -> IonResult<()> {
         let container = self
             .chrom_container
             .as_mut()
-            .ok_or_else(|| "no chromatogram container".to_string())?;
+            .ok_or_else(|| IonError::from("no chromatogram container"))?;
         let raw = container.get_item_from_block(
             aref.block_id,
             aref.element_offset,
@@ -284,7 +280,7 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
-    pub(crate) fn global_metadata(&self) -> Result<Vec<Metadatum>, String> {
+    pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
         parse_global_metadata(
             slice_at(
                 self.bytes,
@@ -301,7 +297,7 @@ impl<'a> Decoder<'a> {
         )
     }
 
-    pub(crate) fn spectrum_metadata(&self) -> Result<Vec<Metadatum>, String> {
+    pub(crate) fn spectrum_metadata(&self) -> IonResult<Vec<Metadatum>> {
         parse_metadata(
             slice_at(
                 self.bytes,
@@ -318,7 +314,7 @@ impl<'a> Decoder<'a> {
         )
     }
 
-    pub(crate) fn chromatogram_metadata(&self) -> Result<Vec<Metadatum>, String> {
+    pub(crate) fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
         parse_metadata(
             slice_at(
                 self.bytes,
@@ -335,11 +331,11 @@ impl<'a> Decoder<'a> {
         )
     }
 
-    pub fn to_mzml_metadata_only(&self) -> Result<MzML, String> {
+    pub fn to_mzml_metadata_only(&self) -> IonResult<MzML> {
         MzmlConverter::metadata_only(self)
     }
 
-    pub fn to_mzml(&mut self) -> Result<MzML, String> {
+    pub fn to_mzml(&mut self) -> IonResult<MzML> {
         MzmlConverter::new(self).full()
     }
 }
@@ -348,6 +344,22 @@ impl<'a> Decoder<'a> {
 enum IonBackend<'a> {
     Decoder(Decoder<'a>),
     Materialized,
+}
+
+impl<'a> IonBackend<'a> {
+    fn as_decoder(&self) -> Option<&Decoder<'a>> {
+        match self {
+            Self::Decoder(d) => Some(d),
+            Self::Materialized => None,
+        }
+    }
+
+    fn as_decoder_mut(&mut self) -> Option<&mut Decoder<'a>> {
+        match self {
+            Self::Decoder(d) => Some(d),
+            Self::Materialized => None,
+        }
+    }
 }
 
 pub struct Ion<'a> {
@@ -364,11 +376,11 @@ pub struct Ion<'a> {
 }
 
 impl<'a> Ion<'a> {
-    pub fn open(bytes: &'a [u8]) -> Result<Self, String> {
+    pub fn open(bytes: &'a [u8]) -> IonResult<Self> {
         Self::open_with_config(bytes, DecoderConfig::default())
     }
 
-    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> Result<Self, String> {
+    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let decoder = Decoder::open_with_config(bytes, config)?;
         Ok(Self::empty(IonBackend::Decoder(decoder)))
     }
@@ -422,7 +434,7 @@ impl<'a> Ion<'a> {
         }
     }
 
-    pub fn load_metadata(&mut self) -> Result<(), String> {
+    pub fn load_metadata(&mut self) -> IonResult<()> {
         let mzml = match &mut self.backend {
             IonBackend::Decoder(decoder) => Some(decoder.to_mzml_metadata_only()?),
             IonBackend::Materialized => None,
@@ -435,105 +447,91 @@ impl<'a> Ion<'a> {
 
     #[inline]
     pub fn spectrum_count(&self) -> u64 {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.spectrum_count(),
-            IonBackend::Materialized => self
-                .run
-                .spectrum_list
-                .as_ref()
-                .map_or(0, |list| list.spectra.len() as u64),
-        }
+        self.backend
+            .as_decoder()
+            .map(|d| d.spectrum_count())
+            .unwrap_or_else(|| {
+                self.run
+                    .spectrum_list
+                    .as_ref()
+                    .map_or(0, |l| l.spectra.len() as u64)
+            })
     }
 
     #[inline]
     pub fn chromatogram_count(&self) -> u64 {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.chromatogram_count(),
-            IonBackend::Materialized => self
-                .run
-                .chromatogram_list
-                .as_ref()
-                .map_or(0, |list| list.chromatograms.len() as u64),
-        }
+        self.backend
+            .as_decoder()
+            .map(|d| d.chromatogram_count())
+            .unwrap_or_else(|| {
+                self.run
+                    .chromatogram_list
+                    .as_ref()
+                    .map_or(0, |l| l.chromatograms.len() as u64)
+            })
     }
 
     #[inline]
     pub fn header(&self) -> Option<&Header> {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => Some(decoder.header()),
-            IonBackend::Materialized => None,
-        }
+        self.backend.as_decoder().map(|d| d.header())
     }
 
     #[inline]
     pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.filter_record(index),
-            IonBackend::Materialized => None,
-        }
+        self.backend
+            .as_decoder()
+            .and_then(|d| d.filter_record(index))
     }
 
-    pub fn filter_records(&self) -> Result<Vec<FilterRecord>, String> {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.filter_records(),
-            IonBackend::Materialized => {
-                Err("filter records are unavailable for mzML-backed Ion".to_string())
-            }
-        }
+    pub fn filter_records(&self) -> IonResult<Vec<FilterRecord>> {
+        self.backend
+            .as_decoder()
+            .ok_or_else(|| IonError::from("filter records are unavailable for mzML-backed Ion"))
+            .and_then(|d| d.filter_records())
     }
 
     pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.spectrum_array_refs(index),
-            IonBackend::Materialized => None,
-        }
+        self.backend
+            .as_decoder()
+            .and_then(|d| d.spectrum_array_refs(index))
     }
 
     pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
-        match &self.backend {
-            IonBackend::Decoder(decoder) => decoder.chromatogram_array_refs(index),
-            IonBackend::Materialized => None,
-        }
+        self.backend
+            .as_decoder()
+            .and_then(|d| d.chromatogram_array_refs(index))
     }
 
-    pub fn read_spectrum_array(
-        &mut self,
-        aref: &ArrayRef,
-        out: &mut Vec<f64>,
-    ) -> Result<(), String> {
-        match &mut self.backend {
-            IonBackend::Decoder(decoder) => decoder.read_spectrum_array(aref, out),
-            IonBackend::Materialized => {
-                Err("array refs are unavailable for mzML-backed Ion".to_string())
-            }
-        }
+    pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| IonError::from("array refs are unavailable for mzML-backed Ion"))
+            .and_then(|d| d.read_spectrum_array(aref, out))
     }
 
     pub fn read_chromatogram_array(
         &mut self,
         aref: &ArrayRef,
         out: &mut Vec<f64>,
-    ) -> Result<(), String> {
-        match &mut self.backend {
-            IonBackend::Decoder(decoder) => decoder.read_chromatogram_array(aref, out),
-            IonBackend::Materialized => {
-                Err("array refs are unavailable for mzML-backed Ion".to_string())
-            }
-        }
+    ) -> IonResult<()> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| IonError::from("array refs are unavailable for mzML-backed Ion"))
+            .and_then(|d| d.read_chromatogram_array(aref, out))
     }
 
-    pub fn to_mzml(&mut self) -> Result<MzML, String> {
-        if let IonBackend::Decoder(decoder) = &mut self.backend {
-            return decoder.to_mzml();
-        }
-        Ok(self.clone_as_mzml())
+    pub fn to_mzml(&mut self) -> IonResult<MzML> {
+        self.backend
+            .as_decoder_mut()
+            .map(|d| d.to_mzml())
+            .unwrap_or_else(|| Ok(self.clone_as_mzml()))
     }
 
-    pub fn to_mzml_metadata_only(&self) -> Result<MzML, String> {
-        if let IonBackend::Decoder(decoder) = &self.backend {
-            return decoder.to_mzml_metadata_only();
-        }
-        Ok(self.clone_as_mzml())
+    pub fn to_mzml_metadata_only(&self) -> IonResult<MzML> {
+        self.backend
+            .as_decoder()
+            .map(|d| d.to_mzml_metadata_only())
+            .unwrap_or_else(|| Ok(self.clone_as_mzml()))
     }
 }
 
@@ -631,7 +629,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
         Self { decoder }
     }
 
-    fn metadata_only(decoder: &Decoder<'a>) -> Result<MzML, String> {
+    fn metadata_only(decoder: &Decoder<'a>) -> IonResult<MzML> {
         let global_meta = decoder.global_metadata()?;
         let global_lookup = ChildrenLookup::new(&global_meta);
         let meta_refs: Vec<&Metadatum> = global_meta.iter().collect();
@@ -706,7 +704,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
         })
     }
 
-    fn full(&mut self) -> Result<MzML, String> {
+    fn full(&mut self) -> IonResult<MzML> {
         let mut mzml = Self::metadata_only(self.decoder)?;
 
         if let Some(spectrum_list) = mzml.run.spectrum_list.as_mut() {
@@ -988,73 +986,60 @@ fn decode_from_block(
 #[inline]
 fn dtype_stride(dtype: u8) -> usize {
     match dtype {
-        1 | 6 => 8,
-        2 | 5 => 4,
-        3 | 4 => 2,
+        FILE_DTYPE_F64 | FILE_DTYPE_I64 => 8,
+        FILE_DTYPE_F32 | FILE_DTYPE_I32 => 4,
+        FILE_DTYPE_F16 | FILE_DTYPE_I16 => 2,
         _ => 1,
-    }
-}
-
-#[inline]
-fn reserve_exact_elements(buf: &mut Vec<f64>, len: usize) {
-    if buf.capacity() < len {
-        buf.reserve_exact(len - buf.capacity());
     }
 }
 
 fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) {
     buf.clear();
     match dtype {
-        1 => {
-            let len = raw.len() / 8;
-            reserve_exact_elements(buf, len);
+        FILE_DTYPE_F64 => {
+            buf.reserve(raw.len() / 8);
             if array_filter == FilterType::DeltaShuffle as u8 {
                 delta_filter::decode_f64(raw, buf);
             } else {
                 buf.extend(
                     raw.chunks_exact(8)
-                        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
+                        .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
                 );
             }
         }
-        2 => {
-            let len = raw.len() / 4;
-            reserve_exact_elements(buf, len);
+        FILE_DTYPE_F32 => {
+            buf.reserve(raw.len() / 4);
             buf.extend(
                 raw.chunks_exact(4)
-                    .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()) as f64),
+                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
-        3 => {
-            let len = raw.len() / 2;
-            reserve_exact_elements(buf, len);
+        FILE_DTYPE_F16 => {
+            buf.reserve(raw.len() / 2);
             buf.extend(
                 raw.chunks_exact(2)
-                    .map(|chunk| f16_bits_to_f64(u16::from_le_bytes(chunk.try_into().unwrap()))),
+                    .map(|c| f16_bits_to_f64(u16::from_le_bytes(c.try_into().unwrap()))),
             );
         }
-        4 => {
-            let len = raw.len() / 2;
-            reserve_exact_elements(buf, len);
+        FILE_DTYPE_I16 => {
+            buf.reserve(raw.len() / 2);
             buf.extend(
                 raw.chunks_exact(2)
-                    .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap()) as f64),
+                    .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
-        5 => {
-            let len = raw.len() / 4;
-            reserve_exact_elements(buf, len);
+        FILE_DTYPE_I32 => {
+            buf.reserve(raw.len() / 4);
             buf.extend(
                 raw.chunks_exact(4)
-                    .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()) as f64),
+                    .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
-        6 => {
-            let len = raw.len() / 8;
-            reserve_exact_elements(buf, len);
+        FILE_DTYPE_I64 => {
+            buf.reserve(raw.len() / 8);
             buf.extend(
                 raw.chunks_exact(8)
-                    .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap()) as f64),
+                    .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         _ => {}
@@ -1068,7 +1053,7 @@ fn attach_binaries<E: BinaryArrayOwner>(
     entries: &mut [E],
     container: &mut dyn ContainerAccess,
     ctx: &'static str,
-) -> Result<(), String> {
+) -> IonResult<()> {
     for (index, entry) in entries.iter_mut().enumerate() {
         let Some(refs) = read_array_refs_at(bytes, entry_base, aref_base, index) else {
             continue;
@@ -1106,7 +1091,7 @@ fn attach_array(
     dtype: u8,
     raw: &[u8],
     array_filter: u8,
-) -> Result<(), String> {
+) -> IonResult<()> {
     let binary = raw_to_binary_data(raw, dtype, array_filter)?;
     let numeric_type = dtype_to_numeric_type(dtype)?;
     let found = bdal
@@ -1125,131 +1110,64 @@ fn attach_array(
     Ok(())
 }
 
-fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> Result<BinaryData, String> {
+fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> IonResult<Vec<T>> {
+    if raw.len() % elem_size != 0 {
+        return Err(IonError::from(format!(
+            "array: length {} not a multiple of {elem_size}",
+            raw.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(raw.len() / elem_size);
+    out.extend(raw.chunks_exact(elem_size).map(read));
+    Ok(out)
+}
+
+fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<BinaryData> {
     match dtype {
-        1 => {
+        FILE_DTYPE_F64 => {
             if array_filter == FilterType::DeltaShuffle as u8 {
                 let mut out = Vec::with_capacity(raw.len() / 8);
                 delta_filter::decode_f64(raw, &mut out);
                 Ok(BinaryData::F64(out))
             } else {
-                Ok(BinaryData::F64(raw_to_f64_vec(raw)?))
+                Ok(BinaryData::F64(raw_to_vec(raw, 8, |c| {
+                    f64::from_le_bytes(c.try_into().unwrap())
+                })?))
             }
         }
-        2 => Ok(BinaryData::F32(raw_to_f32_vec(raw)?)),
-        3 => Ok(BinaryData::F16(raw_to_u16_vec(raw)?)),
-        4 => Ok(BinaryData::I16(raw_to_i16_vec(raw)?)),
-        5 => Ok(BinaryData::I32(raw_to_i32_vec(raw)?)),
-        6 => Ok(BinaryData::I64(raw_to_i64_vec(raw)?)),
-        _ => Err(format!("unsupported dtype {dtype} in binary array")),
+        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(raw, 4, |c| {
+            f32::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(raw, 2, |c| {
+            u16::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(raw, 2, |c| {
+            i16::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(raw, 4, |c| {
+            i32::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(raw, 8, |c| {
+            i64::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        _ => Err(IonError::from(format!(
+            "unsupported dtype {dtype} in binary array"
+        ))),
     }
 }
 
-#[inline]
-fn raw_to_f64_vec(raw: &[u8]) -> Result<Vec<f64>, String> {
-    if !raw.len().is_multiple_of(8) {
-        return Err(format!(
-            "f64 array: byte length {} is not a multiple of 8",
-            raw.len()
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 8);
-    out.extend(
-        raw.chunks_exact(8)
-            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())),
-    );
-    Ok(out)
-}
-
-#[inline]
-fn raw_to_f32_vec(raw: &[u8]) -> Result<Vec<f32>, String> {
-    if !raw.len().is_multiple_of(4) {
-        return Err(format!(
-            "f32 array: byte length {} is not a multiple of 4",
-            raw.len()
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 4);
-    out.extend(
-        raw.chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap())),
-    );
-    Ok(out)
-}
-
-#[inline]
-fn raw_to_u16_vec(raw: &[u8]) -> Result<Vec<u16>, String> {
-    if !raw.len().is_multiple_of(2) {
-        return Err(format!(
-            "u16 array: byte length {} is not a multiple of 2",
-            raw.len()
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    out.extend(
-        raw.chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap())),
-    );
-    Ok(out)
-}
-
-#[inline]
-fn raw_to_i16_vec(raw: &[u8]) -> Result<Vec<i16>, String> {
-    if !raw.len().is_multiple_of(2) {
-        return Err(format!(
-            "i16 array: byte length {} is not a multiple of 2",
-            raw.len()
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    out.extend(
-        raw.chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes(chunk.try_into().unwrap())),
-    );
-    Ok(out)
-}
-
-#[inline]
-fn raw_to_i32_vec(raw: &[u8]) -> Result<Vec<i32>, String> {
-    if !raw.len().is_multiple_of(4) {
-        return Err(format!(
-            "i32 array: byte length {} is not a multiple of 4",
-            raw.len()
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 4);
-    out.extend(
-        raw.chunks_exact(4)
-            .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap())),
-    );
-    Ok(out)
-}
-
-#[inline]
-fn raw_to_i64_vec(raw: &[u8]) -> Result<Vec<i64>, String> {
-    if !raw.len().is_multiple_of(8) {
-        return Err(format!(
-            "i64 array: byte length {} is not a multiple of 8",
-            raw.len()
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 8);
-    out.extend(
-        raw.chunks_exact(8)
-            .map(|chunk| i64::from_le_bytes(chunk.try_into().unwrap())),
-    );
-    Ok(out)
-}
-
-fn dtype_to_numeric_type(dtype: u8) -> Result<NumericType, String> {
+fn dtype_to_numeric_type(dtype: u8) -> IonResult<NumericType> {
     match dtype {
-        1 => Ok(NumericType::Float64),
-        2 => Ok(NumericType::Float32),
-        3 => Ok(NumericType::Float16),
-        4 => Ok(NumericType::Int16),
-        5 => Ok(NumericType::Int32),
-        6 => Ok(NumericType::Int64),
-        _ => Err(format!("unsupported dtype {dtype} for numeric type")),
+        FILE_DTYPE_F64 => Ok(NumericType::Float64),
+        FILE_DTYPE_F32 => Ok(NumericType::Float32),
+        FILE_DTYPE_F16 => Ok(NumericType::Float16),
+        FILE_DTYPE_I16 => Ok(NumericType::Int16),
+        FILE_DTYPE_I32 => Ok(NumericType::Int32),
+        FILE_DTYPE_I64 => Ok(NumericType::Int64),
+        _ => Err(IonError::BadDtype {
+            dtype,
+            kind: "numeric type",
+        }),
     }
 }
 

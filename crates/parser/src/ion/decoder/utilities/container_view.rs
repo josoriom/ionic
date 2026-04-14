@@ -2,6 +2,7 @@ use crate::ion::encoder::utilities::container_builder::{
     BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, FilterType, Stride,
 };
 use crate::ion::{
+    IonError, IonResult,
     byte_transpose::{shuffle, unshuffle},
     utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
 };
@@ -10,7 +11,7 @@ use std::ops::Deref;
 const LRU_NONE: usize = usize::MAX;
 
 pub(crate) trait BlockProcessor {
-    fn decompress(&self, source: &[u8], target_len: usize) -> Result<Vec<u8>, String>;
+    fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>>;
     fn unshuffle(&self, source: &[u8], target: &mut [u8], stride: usize);
     fn requires_unshuffle(&self, filter: FilterType) -> bool;
 }
@@ -23,7 +24,7 @@ pub(crate) trait ContainerAccess {
         element_count: u64,
         element_stride: usize,
         ctx: &'static str,
-    ) -> Result<&[u8], String>;
+    ) -> IonResult<&[u8]>;
 }
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ pub(crate) struct DefaultProcessor;
 
 impl BlockProcessor for DefaultProcessor {
     #[inline]
-    fn decompress(&self, source: &[u8], target_len: usize) -> Result<Vec<u8>, String> {
+    fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>> {
         decompress_zstd(source, target_len)
     }
 
@@ -99,7 +100,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         ctx: &'static str,
         processor: P,
         max_cached_bytes: usize,
-    ) -> Result<Self, String> {
+    ) -> IonResult<Self> {
         Self::with_max_cached_bytes(
             raw_data,
             block_count,
@@ -119,14 +120,12 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         ctx: &'static str,
         processor: P,
         max_cached_bytes: usize,
-    ) -> Result<Self, String> {
+    ) -> IonResult<Self> {
         let block_count = block_count as usize;
         let directory_byte_size = block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
 
         if raw_data.len() < directory_byte_size {
-            return Err(format!(
-                "{ctx}: container too small to hold block directory"
-            ));
+            return Err(format!("{ctx}: container too small to hold block directory").into());
         }
 
         let directory_start_offset = raw_data.len() - directory_byte_size;
@@ -241,13 +240,14 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         block_id: u32,
         element_stride: usize,
         ctx: &'static str,
-    ) -> Result<(), String> {
+    ) -> IonResult<()> {
         let block_index = block_id as usize;
         if block_index >= self.cache.len() {
             return Err(format!(
                 "{ctx}: block index {block_index} out of range (count={})",
                 self.cache.len()
-            ));
+            )
+            .into());
         }
         if self.cache[block_index].is_some() {
             return Ok(());
@@ -260,7 +260,9 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         let payload_start = entry.payload_offset as usize;
         let payload_end = payload_start
             .checked_add(entry.payload_size as usize)
-            .ok_or_else(|| format!("{ctx}: block {block_index} payload size overflows"))?;
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: block {block_index} payload size overflows"))
+            })?;
         let payload_limit = self
             .raw_data
             .len()
@@ -269,7 +271,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         if payload_end > payload_limit {
             return Err(format!(
                 "{ctx}: block {block_index} payload exceeds payload region bounds"
-            ));
+            )
+            .into());
         }
 
         let payload = &self.raw_data[payload_start..payload_end];
@@ -280,7 +283,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
                 return Err(format!(
                     "{ctx}: block {block_index} checksum mismatch (stored={:#010x}, computed={:#010x})",
                     entry.checksum, computed
-                ));
+                )
+                .into());
             }
         }
 
@@ -299,7 +303,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         block_index: usize,
         stride: Stride,
         ctx: &'static str,
-    ) -> Result<(), String> {
+    ) -> IonResult<()> {
         if !self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte {
             return Ok(());
         }
@@ -311,7 +315,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             Some(recorded) if recorded == stride => Ok(()),
             Some(recorded) => Err(format!(
                 "{ctx}: stride mismatch for block {block_index} (expected {recorded:?}, got {stride:?})"
-            )),
+            )
+            .into()),
         }
     }
 
@@ -320,7 +325,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         payload: &'a [u8],
         uncompressed_len: usize,
         stride: Stride,
-    ) -> Result<BlockData<'a>, String> {
+    ) -> IonResult<BlockData<'a>> {
         let needs_unshuffle =
             self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
 
@@ -329,7 +334,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
                 return Err(format!(
                     "uncompressed payload size mismatch: got {}, expected {uncompressed_len}",
                     payload.len()
-                ));
+                )
+                .into());
             }
             return Ok(BlockData::Borrowed(payload));
         }
@@ -360,7 +366,7 @@ impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
         element_count: u64,
         element_stride: usize,
         ctx: &'static str,
-    ) -> Result<&[u8], String> {
+    ) -> IonResult<&[u8]> {
         self.ensure_block_loaded(block_id, element_stride, ctx)?;
 
         let block_index = block_id as usize;
@@ -370,18 +376,23 @@ impl<'a, P: BlockProcessor> ContainerAccess for ContainerView<'a, P> {
         let start_byte = usize::try_from(element_offset)
             .ok()
             .and_then(|offset| offset.checked_mul(element_stride))
-            .ok_or_else(|| format!("{ctx}: item range overflow for block {block_id}"))?;
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: item range overflow for block {block_id}"))
+            })?;
         let end_byte = usize::try_from(element_count)
             .ok()
             .and_then(|count| count.checked_mul(element_stride))
             .and_then(|len| start_byte.checked_add(len))
-            .ok_or_else(|| format!("{ctx}: item range overflow for block {block_id}"))?;
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: item range overflow for block {block_id}"))
+            })?;
 
         if end_byte > block.len() {
             return Err(format!(
                 "{ctx}: item range [{start_byte}..{end_byte}] out of bounds for block {block_id} (len={})",
                 block.len()
-            ));
+            )
+            .into());
         }
         Ok(&block[start_byte..end_byte])
     }

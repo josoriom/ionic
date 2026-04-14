@@ -1,14 +1,11 @@
 mod common;
 
 use common::helpers::{
-    full_mzml_all_optional_fields, minimal_data_processing_list, minimal_file_description,
-    minimal_instrument_list, minimal_software_list, default_cv_list_like_writer,
+    default_cv_list_like_writer, full_mzml_all_optional_fields, minimal_data_processing_list,
+    minimal_file_description, minimal_instrument_list, minimal_software_list,
     synthetic_binary_data_array,
 };
-use ionic::mzml::{
-    bin_to_mzml::convert_bin_to_mzml_bytes,
-    structs::*,
-};
+use ionic::mzml::{bin_to_mzml::convert_bin_to_mzml_bytes, structs::*};
 
 const MZML_CHILD_ORDER: &[&str] = &[
     "cvList",
@@ -307,15 +304,13 @@ fn file_checksum_is_valid_sha1() {
     let xml = String::from_utf8(bytes.clone()).expect("valid UTF-8");
 
     let fc_tag = "<fileChecksum>";
-    let fc_open = xml
-        .find(fc_tag)
-        .expect("must contain <fileChecksum>");
+    let fc_open = xml.find(fc_tag).expect("must contain <fileChecksum>");
     let hash_input_end = fc_open + fc_tag.len(); // byte after '>'
 
     let fc_close = xml.find("</fileChecksum>").expect("must have closing tag");
     let claimed = &xml[hash_input_end..fc_close];
 
-    use sha1::{Sha1, Digest};
+    use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(&bytes[..hash_input_end]);
     let computed = format!("{:x}", hasher.finalize());

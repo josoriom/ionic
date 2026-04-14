@@ -31,9 +31,8 @@ fn shuffle2(input: &[u8], output: &mut [u8]) {
 #[target_feature(enable = "sse2")]
 unsafe fn shuffle2_sse2(input: &[u8], output: &mut [u8], half: usize, simd_len: usize) {
     use std::arch::x86_64::*;
-    let load_input = |offset: usize| unsafe {
-        _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i)
-    };
+    let load_input =
+        |offset: usize| unsafe { _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i) };
     let mut store_output = |offset: usize, value: __m128i| unsafe {
         _mm_storeu_si128(output.as_mut_ptr().add(offset) as *mut __m128i, value)
     };
@@ -65,9 +64,8 @@ fn unshuffle2(input: &[u8], output: &mut [u8]) {
 #[target_feature(enable = "sse2")]
 unsafe fn unshuffle2_sse2(input: &[u8], output: &mut [u8], half: usize, simd_len: usize) {
     use std::arch::x86_64::*;
-    let load_input = |offset: usize| unsafe {
-        _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i)
-    };
+    let load_input =
+        |offset: usize| unsafe { _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i) };
     let mut store_output = |offset: usize, value: __m128i| unsafe {
         _mm_storeu_si128(output.as_mut_ptr().add(offset) as *mut __m128i, value)
     };
@@ -100,9 +98,8 @@ fn shuffle4(input: &[u8], output: &mut [u8]) {
 #[target_feature(enable = "sse2")]
 unsafe fn shuffle4_sse2(input: &[u8], output: &mut [u8], quarter: usize, simd_len: usize) {
     use std::arch::x86_64::*;
-    let load_input = |offset: usize| unsafe {
-        _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i)
-    };
+    let load_input =
+        |offset: usize| unsafe { _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i) };
     let mut store_output = |offset: usize, value: __m128i| unsafe {
         _mm_storeu_si128(output.as_mut_ptr().add(offset) as *mut __m128i, value)
     };
@@ -149,9 +146,8 @@ fn unshuffle4(input: &[u8], output: &mut [u8]) {
 #[target_feature(enable = "sse2")]
 unsafe fn unshuffle4_sse2(input: &[u8], output: &mut [u8], quarter: usize, simd_len: usize) {
     use std::arch::x86_64::*;
-    let load_input = |offset: usize| unsafe {
-        _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i)
-    };
+    let load_input =
+        |offset: usize| unsafe { _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i) };
     let mut store_output = |offset: usize, value: __m128i| unsafe {
         _mm_storeu_si128(output.as_mut_ptr().add(offset) as *mut __m128i, value)
     };
@@ -196,9 +192,8 @@ fn shuffle8(input: &[u8], output: &mut [u8]) {
 #[target_feature(enable = "sse2")]
 unsafe fn shuffle8_sse2(input: &[u8], output: &mut [u8], eighth: usize, simd_len: usize) {
     use std::arch::x86_64::*;
-    let load_input = |offset: usize| unsafe {
-        _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i)
-    };
+    let load_input =
+        |offset: usize| unsafe { _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i) };
     let mut store_output = |offset: usize, value: __m128i| unsafe {
         _mm_storeu_si128(output.as_mut_ptr().add(offset) as *mut __m128i, value)
     };
@@ -269,9 +264,8 @@ fn unshuffle8(input: &[u8], output: &mut [u8]) {
 #[target_feature(enable = "sse2")]
 unsafe fn unshuffle8_sse2(input: &[u8], output: &mut [u8], eighth: usize, simd_len: usize) {
     use std::arch::x86_64::*;
-    let load_input = |offset: usize| unsafe {
-        _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i)
-    };
+    let load_input =
+        |offset: usize| unsafe { _mm_loadu_si128(input.as_ptr().add(offset) as *const __m128i) };
     let mut store_output = |offset: usize, value: __m128i| unsafe {
         _mm_storeu_si128(output.as_mut_ptr().add(offset) as *mut __m128i, value)
     };
