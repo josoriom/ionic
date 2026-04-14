@@ -2,7 +2,7 @@ use core::str::FromStr;
 use std::{fs, path::PathBuf, sync::OnceLock};
 
 use crate::{
-    ion::decoder::decode::Decoder,
+    ion::{DecoderConfig, decoder::decode::Decoder},
     mzml::{
         parse_mzml::parse_mzml,
         structs::{
@@ -33,8 +33,8 @@ pub(crate) fn parse_b(cache: &'static OnceLock<MzML>, path: &str) -> &'static Mz
     cache.get_or_init(|| {
         let bytes: &'static [u8] = Box::leak(load_mzml_bytes(path).into_boxed_slice());
 
-        let mut decoder =
-            Decoder::open(bytes).unwrap_or_else(|e| panic!("Decoder::open failed: {e}"));
+        let mut decoder = Decoder::open(bytes, DecoderConfig::default())
+            .unwrap_or_else(|e| panic!("Decoder::open failed: {e}"));
 
         decoder
             .to_mzml()

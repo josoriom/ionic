@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
 use crate::encoder::utilities::byte_shuffle::shuffle_bytes_by_stride;
@@ -76,16 +77,21 @@ impl Stride {
 
 pub(crate) trait BlockCompressor {
     fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize>;
+    fn fork(&self) -> IonResult<Self>
+    where
+        Self: Sized;
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize);
 }
 
 pub(crate) struct DefaultCompressor {
+    level: i32,
     inner: ZstdCompressor<'static>,
 }
 
 impl DefaultCompressor {
     pub(crate) fn new(compression_level: i32) -> IonResult<Self> {
         Ok(Self {
+            level: compression_level,
             inner: ZstdCompressor::new(compression_level)
                 .map_err(|err| IonError::from(err.to_string()))?,
         })
@@ -99,6 +105,10 @@ impl BlockCompressor for DefaultCompressor {
         self.inner
             .compress_to_buffer(input, output)
             .map_err(|err| IonError::from(err.to_string()))
+    }
+
+    fn fork(&self) -> IonResult<Self> {
+        Self::new(self.level)
     }
 
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
@@ -282,27 +292,27 @@ impl BlockStore {
     }
 }
 
-struct SealScratch {
-    shuffled_bytes: Vec<u8>,
-    compressed_bytes: Vec<u8>,
+struct PendingBlock {
+    block_id: u32,
+    stride: Stride,
+    data: Vec<u8>,
 }
 
-impl SealScratch {
-    fn new() -> Self {
-        Self {
-            shuffled_bytes: Vec::new(),
-            compressed_bytes: Vec::new(),
-        }
-    }
+struct ReadyBlock {
+    block_id: u32,
+    bytes: Vec<u8>,
+    raw_len: u64,
+    checksum: u32,
 }
 
 pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
     output: &'output mut dyn EncoderOutput,
-    cumulative_payload_bytes: u64,
     filter_type: FilterType,
     store: BlockStore,
-    seal_scratch: SealScratch,
+    pending: Vec<PendingBlock>,
     compressor: CompressionMode<C>,
+    #[cfg(test)]
+    par_min_blocks: usize,
 }
 
 impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
@@ -314,11 +324,12 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
     ) -> Self {
         Self {
             output,
-            cumulative_payload_bytes: 0,
             filter_type,
             store: BlockStore::new(max_block_uncompressed_size),
-            seal_scratch: SealScratch::new(),
+            pending: Vec::new(),
             compressor,
+            #[cfg(test)]
+            par_min_blocks: 4,
         }
     }
 
@@ -393,63 +404,136 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         if active_block.accumulated_data.is_empty() {
             return Ok(());
         }
-
-        let payload_offset = self.cumulative_payload_bytes;
-        let uncompressed_byte_len = active_block.accumulated_data.len() as u64;
-
-        let (written_byte_len, checksum) =
-            self.compress_and_write_block_payload(&active_block.accumulated_data, stride)?;
-
-        self.cumulative_payload_bytes += written_byte_len;
-        self.store.seal(
-            active_block.block_id,
-            BlockDirEntry {
-                payload_offset,
-                payload_size: written_byte_len,
-                uncompressed_len_bytes: uncompressed_byte_len,
-                checksum,
-            },
-        )
+        self.pending.push(PendingBlock {
+            block_id: active_block.block_id,
+            stride,
+            data: active_block.accumulated_data,
+        });
+        Ok(())
     }
 
-    fn compress_and_write_block_payload(
-        &mut self,
-        block_data: &[u8],
-        stride: Stride,
-    ) -> IonResult<(u64, u32)> {
-        match &mut self.compressor {
-            CompressionMode::Raw => {
-                self.output.write_bytes(block_data)?;
-                Ok((block_data.len() as u64, crc32fast::hash(block_data)))
-            }
+    fn make_block(
+        filter_type: FilterType,
+        block: PendingBlock,
+        mode: &mut CompressionMode<C>,
+    ) -> IonResult<ReadyBlock> {
+        let raw_len = block.data.len() as u64;
+        match mode {
+            CompressionMode::Raw => Ok(ReadyBlock {
+                block_id: block.block_id,
+                checksum: crc32fast::hash(&block.data),
+                raw_len,
+                bytes: block.data,
+            }),
             CompressionMode::Compressed(compressor) => {
-                let shuffle_before_compress =
-                    self.filter_type == FilterType::Shuffle && stride != Stride::OneByte;
-
-                let data_to_compress = if shuffle_before_compress {
-                    self.seal_scratch.shuffled_bytes.resize(block_data.len(), 0);
+                let data = if filter_type == FilterType::Shuffle && block.stride != Stride::OneByte
+                {
+                    let mut shuffled = vec![0u8; block.data.len()];
                     compressor.shuffle_bytes_into(
-                        block_data,
-                        &mut self.seal_scratch.shuffled_bytes,
-                        stride.as_usize(),
+                        &block.data,
+                        &mut shuffled,
+                        block.stride.as_usize(),
                     );
-                    self.seal_scratch.shuffled_bytes.as_slice()
+                    shuffled
                 } else {
-                    block_data
+                    block.data
                 };
-
-                compressor.compress(data_to_compress, &mut self.seal_scratch.compressed_bytes)?;
-                let checksum = crc32fast::hash(&self.seal_scratch.compressed_bytes);
-                self.output
-                    .write_bytes(&self.seal_scratch.compressed_bytes)?;
-                Ok((self.seal_scratch.compressed_bytes.len() as u64, checksum))
+                let mut bytes = Vec::new();
+                compressor.compress(&data, &mut bytes)?;
+                Ok(ReadyBlock {
+                    block_id: block.block_id,
+                    checksum: crc32fast::hash(&bytes),
+                    raw_len,
+                    bytes,
+                })
             }
         }
     }
 
-    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)> {
+    fn finish_seq(&mut self, blocks: Vec<PendingBlock>) -> IonResult<Vec<ReadyBlock>> {
+        let mut out = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            out.push(Self::make_block(
+                self.filter_type,
+                block,
+                &mut self.compressor,
+            )?);
+        }
+        Ok(out)
+    }
+
+    fn finish_par(&self, blocks: Vec<PendingBlock>) -> IonResult<Vec<ReadyBlock>>
+    where
+        C: Send,
+    {
+        match &self.compressor {
+            CompressionMode::Raw => blocks
+                .into_par_iter()
+                .map(|block| {
+                    Ok(ReadyBlock {
+                        block_id: block.block_id,
+                        checksum: crc32fast::hash(&block.data),
+                        raw_len: block.data.len() as u64,
+                        bytes: block.data,
+                    })
+                })
+                .collect(),
+            CompressionMode::Compressed(compressor) => {
+                let mut forks = Vec::with_capacity(blocks.len());
+                for _ in 0..blocks.len() {
+                    forks.push(compressor.fork()?);
+                }
+                let filter_type = self.filter_type;
+                blocks
+                    .into_par_iter()
+                    .zip(forks.into_par_iter())
+                    .map(|(block, compressor)| {
+                        let mut mode = CompressionMode::Compressed(compressor);
+                        Self::make_block(filter_type, block, &mut mode)
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn set_par_min_blocks(&mut self, value: usize) {
+        self.par_min_blocks = value;
+    }
+
+    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)>
+    where
+        C: Send,
+    {
         for stride in Stride::all_variants() {
             self.seal_open_block_for_stride(stride)?;
+        }
+
+        let blocks = std::mem::take(&mut self.pending);
+        #[cfg(test)]
+        let par_min_blocks = self.par_min_blocks;
+        #[cfg(not(test))]
+        let par_min_blocks = 4;
+
+        let blocks = if blocks.len() < par_min_blocks {
+            self.finish_seq(blocks)?
+        } else {
+            self.finish_par(blocks)?
+        };
+
+        let mut payload_bytes = 0u64;
+        for block in blocks {
+            self.output.write_bytes(&block.bytes)?;
+            self.store.seal(
+                block.block_id,
+                BlockDirEntry {
+                    payload_offset: payload_bytes,
+                    payload_size: block.bytes.len() as u64,
+                    uncompressed_len_bytes: block.raw_len,
+                    checksum: block.checksum,
+                },
+            )?;
+            payload_bytes += block.bytes.len() as u64;
         }
 
         let block_count = self.store.block_count();
@@ -458,7 +542,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         self.store.write_directory(&mut directory_bytes);
         self.output.write_bytes(&directory_bytes)?;
 
-        let total_bytes_written = self.cumulative_payload_bytes + directory_bytes.len() as u64;
+        let total_bytes_written = payload_bytes + directory_bytes.len() as u64;
         Ok((block_count, total_bytes_written))
     }
 }
@@ -703,6 +787,9 @@ mod tests {
             output.extend_from_slice(input);
             Ok(input.len())
         }
+        fn fork(&self) -> IonResult<Self> {
+            Ok(Self)
+        }
         fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
             shuffle_bytes_by_stride(input, output, element_stride);
         }
@@ -825,5 +912,53 @@ mod tests {
         assert_eq!(block_count, 0);
         assert_eq!(total_bytes, 0);
         assert!(output.0.is_empty());
+    }
+
+    #[test]
+    fn container_builder_seq_and_par_match() {
+        let mut seq_out = VecOutput(Vec::new());
+        let mut seq = ContainerBuilder::new(
+            &mut seq_out,
+            8,
+            CompressionMode::Compressed(PassthroughCompressor),
+            FilterType::Shuffle,
+        );
+        seq.set_par_min_blocks(usize::MAX);
+
+        let mut par_out = VecOutput(Vec::new());
+        let mut par = ContainerBuilder::new(
+            &mut par_out,
+            8,
+            CompressionMode::Compressed(PassthroughCompressor),
+            FilterType::Shuffle,
+        );
+        par.set_par_min_blocks(0);
+
+        for builder in [&mut seq, &mut par] {
+            builder
+                .add_item_to_box(8, 4, |buf| buf.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))
+                .unwrap();
+            builder
+                .add_item_to_box(8, 4, |buf| {
+                    buf.extend_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16])
+                })
+                .unwrap();
+            builder
+                .add_item_to_box(8, 4, |buf| {
+                    buf.extend_from_slice(&[17, 18, 19, 20, 21, 22, 23, 24])
+                })
+                .unwrap();
+            builder
+                .add_item_to_box(8, 4, |buf| {
+                    buf.extend_from_slice(&[25, 26, 27, 28, 29, 30, 31, 32])
+                })
+                .unwrap();
+        }
+
+        let seq_res = seq.finish().unwrap();
+        let par_res = par.finish().unwrap();
+
+        assert_eq!(seq_res, par_res);
+        assert_eq!(seq_out.0, par_out.0);
     }
 }

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     BinaryData, FilterRecord, NumericType,
     encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
@@ -650,7 +648,7 @@ struct PackedArraySection {
     container_total_bytes: u64,
     index_entries_bytes: Vec<u8>,
     array_refs_bytes: Vec<u8>,
-    seen_array_type_accessions: HashSet<u32>,
+    seen_array_type_accessions: Vec<u32>,
 }
 
 trait HasBinaryDataArrayList {
@@ -676,7 +674,7 @@ fn fill_container<T: HasBinaryDataArrayList>(
     container: &mut ContainerBuilder<'_, DefaultCompressor>,
     index_bytes: &mut Vec<u8>,
     aref_bytes: &mut Vec<u8>,
-    seen_types: &mut HashSet<u32>,
+    seen_types: &mut Vec<u32>,
 ) -> IonResult<()> {
     let mut aref_cursor: u64 = 0;
     for item in items {
@@ -691,8 +689,8 @@ fn fill_container<T: HasBinaryDataArrayList>(
                     continue;
                 }
                 let acc = array_type_accession_from_binary_data_array(bda);
-                if acc != 0 {
-                    seen_types.insert(acc);
+                if acc != 0 && !seen_types.contains(&acc) {
+                    seen_types.push(acc);
                 }
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
                 validate_array_dtype(data, dtype)?;
@@ -747,7 +745,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
     let mut container_bytes = Vec::new();
     let mut index_bytes = Vec::new();
     let mut aref_bytes = Vec::new();
-    let mut seen_types: HashSet<u32> = HashSet::new();
+    let mut seen_types = Vec::new();
     let mut container = ContainerBuilder::new(
         &mut container_bytes,
         TARGET_BLOCK_UNCOMPRESSED_BYTES,
@@ -783,7 +781,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
 ) -> IonResult<PackedArraySection> {
     let mut index_bytes = Vec::new();
     let mut aref_bytes = Vec::new();
-    let mut seen_types: HashSet<u32> = HashSet::new();
+    let mut seen_types = Vec::new();
     let container_offset = write_aligned_section(output, &[])?;
     let mut container = ContainerBuilder::new(
         output,

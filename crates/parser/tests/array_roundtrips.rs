@@ -3,7 +3,7 @@ mod common;
 use common::binary_ext::BinaryDataExt;
 use common::helpers::{build_mzml, make_spectrum_f64, mzml_with_single_array};
 use common::{decode_ion, encode_to_ion, first_spectrum_binary, roundtrip};
-use ionic::ion::{Decoder, WritingMode, encode};
+use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
 use ionic::mzml::structs::*;
 use proptest::prelude::*;
 
@@ -116,7 +116,7 @@ fn roundtrip_at_compression_levels() {
         let mut buf = Vec::new();
         encode(&mzml, level, false, WritingMode::Memory, &mut buf)
             .unwrap_or_else(|e| panic!("encode at level {level} failed: {e}"));
-        let mut decoder = Decoder::open(&buf)
+        let mut decoder = Decoder::open(&buf, DecoderConfig::default())
             .unwrap_or_else(|e| panic!("decoder open at level {level} failed: {e}"));
         let decoded = decoder
             .to_mzml()
@@ -137,7 +137,7 @@ fn roundtrip_force_f32_downcasts() {
 
     let mut buf = Vec::new();
     encode(&mzml, 0, true, WritingMode::Memory, &mut buf).expect("encode with force_f32");
-    let mut decoder = Decoder::open(&buf).expect("decoder open");
+    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
     let bin = first_spectrum_binary(&decoded).expect("should have binary data");
@@ -217,7 +217,7 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
     });
     let mzml = build_mzml(vec![spectrum], vec![]);
     let buf = encode_to_ion(&mzml, 3, false);
-    let mut ion = Ion::open(&buf).unwrap();
+    let mut ion = Ion::open(&buf, DecoderConfig::default()).unwrap();
     let mut got_mz: Vec<f64> = Vec::new();
     ion.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |_, _, mz: &[f64], _| {
         got_mz = mz.to_vec();
@@ -238,7 +238,7 @@ fn delta_does_not_affect_intensity_array() {
         vec![],
     );
     let buf = encode_to_ion(&mzml, 3, false);
-    let mut decoder = IonDecoder::open(&buf).unwrap();
+    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
     let refs = decoder.spectrum_array_refs(0).unwrap();
     let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
     let int_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
@@ -262,7 +262,7 @@ fn delta_not_applied_without_compression() {
     let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
     let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(mz.clone()), mz.len());
     let buf = encode_to_ion(&mzml, 0, false);
-    let mut decoder = IonDecoder::open(&buf).unwrap();
+    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
     let refs = decoder.spectrum_array_refs(0).unwrap();
     let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
     assert_eq!(mz_ref.array_filter, 0, "no delta without compression");

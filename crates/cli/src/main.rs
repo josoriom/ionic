@@ -14,12 +14,12 @@ use clap::{
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
 use mimalloc::MiMalloc;
-use rayon::{ThreadPoolBuilder, prelude::*};
+use rayon::ThreadPoolBuilder;
 use regex::Regex;
 use serde::Serialize;
 
 use ionic::{
-    ion::{Decoder, FileEncoderOutput, encoder::encode::encode},
+    ion::{DecoderConfig, FileEncoderOutput, Ion, encoder::encode::encode},
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 
@@ -219,8 +219,9 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     let ext = file_ext_lower(file_path);
 
     if ext == "ion" {
-        let decoder = Decoder::open(&bytes).map_err(|e| format!("Decoder::open failed: {e}"))?;
-        return decoder
+        let ion = Ion::open_file(file_path, DecoderConfig::default())
+            .map_err(|e| format!("Ion::open_file failed: {e}"))?;
+        return ion
             .to_mzml_metadata_only()
             .map_err(|e| format!("to_mzml_metadata_only failed: {e}"));
     }
@@ -287,7 +288,7 @@ fn build_name_filter(
         None
     };
 
-    let exact = pattern_exact.map(|s| s.to_string());
+    let exact = pattern_exact.map(str::to_string);
 
     let re = if let Some(r) = regex {
         Some(Regex::new(r).map_err(|e| format!("invalid regex: {e}"))?)
@@ -300,16 +301,16 @@ fn build_name_filter(
     }
 
     Ok(Some(Box::new(move |name: &str| {
-        if let Some(needle) = &exact {
-            if name.contains(needle) {
-                return true;
-            }
+        if let Some(needle) = &exact
+            && name.contains(needle)
+        {
+            return true;
         }
 
-        if let Some(r) = &re {
-            if r.is_match(name) {
-                return true;
-            }
+        if let Some(r) = &re
+            && r.is_match(name)
+        {
+            return true;
         }
 
         if let Some(t) = &tree {
@@ -418,7 +419,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         let total = files.len();
 
         pool.install(|| {
-            files.par_iter().for_each(|in_path| {
+            for in_path in &files {
                 let rel = match in_path.strip_prefix(&input_root) {
                     Ok(v) => v,
                     Err(_) => {
@@ -454,33 +455,30 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 let out_path = out_dir.join(out_name);
 
                 let mut fixed_bad = false;
+                if !cmd.overwrite
+                    && let Ok(m) = fs::metadata(&out_path)
+                    && m.is_file()
+                {
+                    let out_len = m.len();
+                    if out_len > 0 && has_valid_trailer(&out_path, out_len) {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
 
-                if !cmd.overwrite {
-                    if let Ok(m) = fs::metadata(&out_path) {
-                        if m.is_file() {
-                            let out_len = m.len();
-                            if out_len > 0 && has_valid_trailer(&out_path, out_len) {
-                                skipped.fetch_add(1, Ordering::Relaxed);
-                                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        let in_mb = fs::metadata(in_path)
+                            .map(|m| m.len() as f64 / MB)
+                            .unwrap_or(0.0);
+                        let out_mb = out_len as f64 / MB;
 
-                                let in_mb = fs::metadata(in_path)
-                                    .map(|m| m.len() as f64 / MB)
-                                    .unwrap_or(0.0);
-                                let out_mb = out_len as f64 / MB;
-
-                                let name = basename(&out_path);
-                                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                                println!(
-                                    "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
-                                    n, total, name, in_mb, out_mb
-                                );
-                                let _ = stdout().flush();
-                                return;
-                            } else {
-                                fixed_bad = true;
-                            }
-                        }
+                        let name = basename(&out_path);
+                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                        println!(
+                            "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
+                            n, total, name, in_mb, out_mb
+                        );
+                        let _ = stdout().flush();
+                        return;
                     }
+                    fixed_bad = true;
                 }
 
                 if let Err(e) = fs::create_dir_all(&out_dir) {
@@ -580,7 +578,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
 
                 let elapsed_s = t0.elapsed().as_secs_f64();
-                
+
                 let (tag, color) = if fixed_bad {
                     ("[fixed]", ANSI_BLUE)
                 } else {
@@ -595,7 +593,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     n, total, name, in_mb, out_mb, elapsed_s
                 );
                 let _ = stdout().flush();
-            })
+            };
         });
 
         let ok = ok.load(Ordering::Relaxed);
@@ -632,7 +630,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         let total = files.len();
 
         pool.install(|| {
-            files.par_iter().for_each(|in_path| {
+            for in_path in &files {
                 let rel = match in_path.strip_prefix(&input_root) {
                     Ok(v) => v,
                     Err(_) => {
@@ -667,28 +665,29 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 let out_dir = output_root.join(parent_rel);
                 let out_path = out_dir.join(out_name);
 
-                if !cmd.overwrite {
-                    if let Ok(m) = fs::metadata(&out_path) {
-                        if m.is_file() && m.len() > 0 {
-                            skipped.fetch_add(1, Ordering::Relaxed);
-                            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+               if !cmd.overwrite
+                    && let Ok(m) = fs::metadata(&out_path)
+                    && m.is_file()
+                    && m.len() > 0
+                {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
 
-                            let in_mb = fs::metadata(in_path)
-                                .map(|m| m.len() as f64 / MB)
-                                .unwrap_or(0.0);
-                            let out_mb = m.len() as f64 / MB;
+                    let in_mb = fs::metadata(in_path)
+                        .map(|m| m.len() as f64 / MB)
+                        .unwrap_or(0.0);
+                    let out_mb = m.len() as f64 / MB;
 
-                            let name = basename(&out_path);
-                            let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                            println!(
-                                "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
-                                n, total, name, in_mb, out_mb
-                            );
-                            let _ = stdout().flush();
-                            return;
-                        }
-                    }
+                    let name = basename(&out_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    println!(
+                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
+                        n, total, name, in_mb, out_mb
+                    );
+                    let _ = stdout().flush();
+                    return;
                 }
+
 
                 if let Err(e) = fs::create_dir_all(&out_dir) {
                     had_failed.store(true, Ordering::Relaxed);
@@ -706,7 +705,11 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
                 let t0 = Instant::now();
 
-                let in_bytes = match fs::read(in_path) {
+                let in_mb = fs::metadata(in_path)
+                    .map(|m| m.len() as f64 / MB)
+                    .unwrap_or(0.0);
+
+                let mut ion = match Ion::open_file(in_path, DecoderConfig::default()) {
                     Ok(v) => v,
                     Err(e) => {
                         had_failed.store(true, Ordering::Relaxed);
@@ -715,7 +718,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                         let name = basename(in_path);
                         let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                         eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: read failed: {e}",
+                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: Ion::open_file failed: {e}",
                             n, total, name
                         );
                         let _ = stderr().flush();
@@ -723,7 +726,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     }
                 };
 
-                let mzml = match read_mzml_or_ion_from_bytes(in_path, &in_bytes) {
+                let mzml = match ion.to_mzml() {
                     Ok(v) => v,
                     Err(e) => {
                         had_failed.store(true, Ordering::Relaxed);
@@ -732,15 +735,13 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                         let name = basename(in_path);
                         let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                         eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: {e}",
+                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: to_mzml failed: {e}",
                             n, total, name
                         );
                         let _ = stderr().flush();
                         return;
                     }
                 };
-                let in_mb = in_bytes.len() as f64 / MB;
-                drop(in_bytes);
 
                 let xml = match bin_to_mzml(&mzml) {
                     Ok(v) => v,
@@ -789,7 +790,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     n, total, name, in_mb, out_mb, elapsed_s
                 );
                 let _ = stdout().flush();
-            })
+            }
         });
 
         let ok = ok.load(Ordering::Relaxed);
@@ -814,25 +815,6 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     }
 
     Err("no convert mode selected".to_string())
-}
-
-fn read_mzml_or_ion_from_bytes(file_path: &Path, bytes: &[u8]) -> Result<MzML, String> {
-    let ext = file_ext_lower(file_path);
-
-    if ext == "ion" {
-        let mut decoder = Decoder::open(bytes).map_err(|e| format!("Decoder::open failed: {e}"))?;
-        #[allow(deprecated)]
-        return decoder
-            .to_mzml()
-            .map_err(|e| format!("to_mzml failed: {e}"));
-    }
-    if ext == "mzml" {
-        return parse_mzml(bytes).map_err(|e| format!("parse_mzml failed: {e}"));
-    }
-
-    Err(format!(
-        "unsupported file extension: {ext:?} (expected .mzML or .ion/.b32)"
-    ))
 }
 
 fn resolve_user_path(cwd: &Path, p: &Path) -> PathBuf {

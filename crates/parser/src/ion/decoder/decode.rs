@@ -1,3 +1,13 @@
+use memmap2::Mmap;
+use rayon::prelude::*;
+use std::collections::HashMap;
+use std::{
+    fs::File,
+    ops::{Deref, DerefMut},
+    path::Path,
+    sync::Arc,
+};
+
 use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
 use crate::ion::attr_meta::ACC_ATTR_DEFAULT_SOURCE_FILE_REF;
 use crate::ion::encoder::encode::{
@@ -81,12 +91,14 @@ pub struct ArrayRef {
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {
     pub max_cached_bytes: usize,
+    pub verify_checksums: bool,
 }
 
 impl Default for DecoderConfig {
     fn default() -> Self {
         Self {
             max_cached_bytes: DEFAULT_MAX_CACHED_BYTES,
+            verify_checksums: true,
         }
     }
 }
@@ -100,12 +112,57 @@ pub struct Decoder<'a> {
     int_buf: Vec<f64>,
 }
 
-impl<'a> Decoder<'a> {
-    pub fn open(bytes: &'a [u8]) -> IonResult<Self> {
-        Self::open_with_config(bytes, DecoderConfig::default())
+#[allow(dead_code)]
+enum IonBacking {
+    Bytes(Arc<[u8]>),
+    Map(Mmap),
+}
+
+pub struct OwnedIon {
+    ion: Ion<'static>,
+    _backing: IonBacking,
+}
+
+impl OwnedIon {
+    pub fn open_bytes(data: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
+        let raw = data.as_ref();
+        let bytes: &'static [u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr(), raw.len()) };
+        let ion = Ion::open(bytes, config)?;
+        Ok(Self {
+            ion,
+            _backing: IonBacking::Bytes(data),
+        })
     }
 
-    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
+    pub fn open(path: &Path, config: DecoderConfig) -> IonResult<Self> {
+        let file = File::open(path).map_err(|err| IonError::from(err.to_string()))?;
+        let map = unsafe { Mmap::map(&file) }.map_err(|err| IonError::from(err.to_string()))?;
+        let raw = map.as_ref();
+        let bytes: &'static [u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr(), raw.len()) };
+        let ion = Ion::open(bytes, config)?;
+        Ok(Self {
+            ion,
+            _backing: IonBacking::Map(map),
+        })
+    }
+}
+
+impl Deref for OwnedIon {
+    type Target = Ion<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ion
+    }
+}
+
+impl DerefMut for OwnedIon {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ion
+    }
+}
+
+impl<'a> Decoder<'a> {
+    pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
         let filter = FilterType::try_from(header.array_filter).unwrap_or(FilterType::None);
 
@@ -125,6 +182,7 @@ impl<'a> Decoder<'a> {
                 header.block_count_spect,
                 header.compression_level,
                 filter,
+                config.verify_checksums,
                 "spec",
                 DefaultProcessor,
                 config.max_cached_bytes,
@@ -147,6 +205,7 @@ impl<'a> Decoder<'a> {
                 header.block_count_chrom,
                 header.compression_level,
                 filter,
+                config.verify_checksums,
                 "chrom",
                 DefaultProcessor,
                 config.max_cached_bytes,
@@ -376,13 +435,17 @@ pub struct Ion<'a> {
 }
 
 impl<'a> Ion<'a> {
-    pub fn open(bytes: &'a [u8]) -> IonResult<Self> {
-        Self::open_with_config(bytes, DecoderConfig::default())
+    pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
+        let decoder = Decoder::open(bytes, config)?;
+        Ok(Self::empty(IonBackend::Decoder(decoder)))
     }
 
-    pub fn open_with_config(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
-        let decoder = Decoder::open_with_config(bytes, config)?;
-        Ok(Self::empty(IonBackend::Decoder(decoder)))
+    pub fn open_bytes(bytes: Arc<[u8]>, config: DecoderConfig) -> IonResult<OwnedIon> {
+        OwnedIon::open_bytes(bytes, config)
+    }
+
+    pub fn open_file(path: &Path, config: DecoderConfig) -> IonResult<OwnedIon> {
+        OwnedIon::open(path, config)
     }
 
     pub fn from_mzml(mzml: MzML) -> Self {
@@ -713,14 +776,14 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                 self.decoder.header.off_spec_entries as usize,
                 self.decoder.header.off_spec_arrayrefs as usize,
                 &mut spectrum_list.spectra,
-                &mut self.decoder.spec_container,
+                &self.decoder.spec_container,
                 "spec",
             )?;
         }
 
         if let (Some(chrom_list), Some(container)) = (
             mzml.run.chromatogram_list.as_mut(),
-            self.decoder.chrom_container.as_mut(),
+            self.decoder.chrom_container.as_ref(),
         ) {
             attach_binaries(
                 self.decoder.bytes,
@@ -1051,37 +1114,96 @@ fn attach_binaries<E: BinaryArrayOwner>(
     entry_base: usize,
     aref_base: usize,
     entries: &mut [E],
-    container: &mut dyn ContainerAccess,
+    container: &ContainerView<'_, DefaultProcessor>,
     ctx: &'static str,
 ) -> IonResult<()> {
-    for (index, entry) in entries.iter_mut().enumerate() {
-        let Some(refs) = read_array_refs_at(bytes, entry_base, aref_base, index) else {
+    let mut refs = Vec::new();
+    let mut blocks = HashMap::new();
+
+    for index in 0..entries.len() {
+        let Some(item_refs) = read_array_refs_at(bytes, entry_base, aref_base, index) else {
             continue;
         };
-        if refs.is_empty() {
+        if item_refs.is_empty() {
             continue;
         }
-        let binary_data_array_list = entry
+        for aref in item_refs.as_slice() {
+            let stride = dtype_stride(aref.dtype);
+            if let Some(old) = blocks.insert(aref.block_id, stride)
+                && old != stride
+            {
+                return Err(IonError::from(format!(
+                    "{ctx}: stride mismatch for block {} (expected {old}, got {stride})",
+                    aref.block_id
+                )));
+            }
+        }
+        refs.push((index, item_refs));
+    }
+
+    let mut block_list: Vec<_> = blocks.into_iter().collect();
+    block_list.sort_unstable_by_key(|(block_id, _)| *block_id);
+
+    let load = |(block_id, stride): (u32, usize)| -> IonResult<(u32, Vec<u8>)> {
+        Ok((block_id, container.read_block(block_id, stride, ctx)?))
+    };
+
+    let data: HashMap<u32, Vec<u8>> = if block_list.len() < 4 {
+        block_list
+            .into_iter()
+            .map(load)
+            .collect::<IonResult<Vec<_>>>()?
+            .into_iter()
+            .collect()
+    } else {
+        block_list
+            .into_par_iter()
+            .map(load)
+            .collect::<IonResult<Vec<_>>>()?
+            .into_iter()
+            .collect()
+    };
+
+    for (index, item_refs) in refs {
+        let list = entries[index]
             .binary_data_array_list_mut()
             .get_or_insert_with(BinaryDataArrayList::default);
-        for aref in refs.as_slice() {
-            let raw = container.get_item_from_block(
-                aref.block_id,
-                aref.element_offset,
-                aref.element_count,
-                dtype_stride(aref.dtype),
-                ctx,
-            )?;
-            attach_array(
-                binary_data_array_list,
-                aref.array_type,
-                aref.dtype,
-                raw,
-                aref.array_filter,
-            )?;
+        for aref in item_refs.as_slice() {
+            let block = data
+                .get(&aref.block_id)
+                .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", aref.block_id)))?;
+            let stride = dtype_stride(aref.dtype);
+            let start = usize::try_from(aref.element_offset)
+                .ok()
+                .and_then(|offset| offset.checked_mul(stride))
+                .ok_or_else(|| {
+                    IonError::from(format!(
+                        "{ctx}: item range overflow for block {}",
+                        aref.block_id
+                    ))
+                })?;
+            let end = usize::try_from(aref.element_count)
+                .ok()
+                .and_then(|count| count.checked_mul(stride))
+                .and_then(|len| start.checked_add(len))
+                .ok_or_else(|| {
+                    IonError::from(format!(
+                        "{ctx}: item range overflow for block {}",
+                        aref.block_id
+                    ))
+                })?;
+            let raw = block.get(start..end).ok_or_else(|| {
+                IonError::from(format!(
+                    "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
+                    aref.block_id,
+                    block.len()
+                ))
+            })?;
+            attach_array(list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
         }
-        binary_data_array_list.count = Some(binary_data_array_list.binary_data_arrays.len());
+        list.count = Some(list.binary_data_arrays.len());
     }
+
     Ok(())
 }
 
@@ -1273,19 +1395,19 @@ mod tests {
 
     #[test]
     fn open_parses_header() {
-        let d = Decoder::open(BYTES).unwrap();
+        let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         assert!(d.spectrum_count() > 0);
     }
 
     #[test]
     fn filter_record_returns_none_out_of_bounds() {
-        let d = Decoder::open(BYTES).unwrap();
+        let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         assert!(d.filter_record(d.spectrum_count() as usize).is_none());
     }
 
     #[test]
     fn filter_record_has_valid_rt() {
-        let d = Decoder::open(BYTES).unwrap();
+        let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let r = d.filter_record(0).unwrap();
         assert!(r.rt_seconds.is_finite() && r.rt_seconds >= 0.0);
         assert!(r.ms_level >= 1);
@@ -1293,7 +1415,7 @@ mod tests {
 
     #[test]
     fn array_refs_contain_mz_and_intensity() {
-        let d = Decoder::open(BYTES).unwrap();
+        let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let refs = d.spectrum_array_refs(0).unwrap();
         assert!(refs.iter().any(|a| a.array_type == ACC_MZ));
         assert!(refs.iter().any(|a| a.array_type == ACC_INT));
@@ -1301,7 +1423,7 @@ mod tests {
 
     #[test]
     fn read_spectrum_array_produces_mz_values() {
-        let mut d = Decoder::open(BYTES).unwrap();
+        let mut d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let refs = d.spectrum_array_refs(0).unwrap();
         let mz_ref = refs.iter().find(|a| a.array_type == ACC_MZ).unwrap();
 
@@ -1314,7 +1436,7 @@ mod tests {
 
     #[test]
     fn for_each_scan_yields_matching_scans() {
-        let mut d = Decoder::open(BYTES).unwrap();
+        let mut d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let mut count = 0usize;
         d.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, _, mz, int| {
             assert!(rt.is_finite());
@@ -1327,7 +1449,7 @@ mod tests {
 
     #[test]
     fn for_each_scan_filters_by_ms_level() {
-        let mut d = Decoder::open(BYTES).unwrap();
+        let mut d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let mut count = 0usize;
         d.for_each_scan_in_range(0.0, f64::MAX, 1, &mut |_, _, _, _| {
             count += 1;
@@ -1341,7 +1463,7 @@ mod tests {
     #[allow(deprecated)]
     #[test]
     fn to_mzml_produces_valid_structure() {
-        let mut d = Decoder::open(BYTES).unwrap();
+        let mut d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let mzml = d.to_mzml().unwrap();
         let sl = mzml.run.spectrum_list.as_ref().unwrap();
         assert!(!sl.spectra.is_empty());
@@ -1358,13 +1480,13 @@ mod tests {
 
     #[test]
     fn global_metadata_returns_entries() {
-        let d = Decoder::open(BYTES).unwrap();
+        let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         assert!(!d.global_metadata().unwrap().is_empty());
     }
 
     #[test]
     fn spectrum_metadata_returns_entries() {
-        let d = Decoder::open(BYTES).unwrap();
+        let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         assert!(!d.spectrum_metadata().unwrap().is_empty());
     }
 
@@ -1372,8 +1494,9 @@ mod tests {
     fn custom_config_opens_successfully() {
         let config = DecoderConfig {
             max_cached_bytes: 1024 * 1024,
+            verify_checksums: true,
         };
-        let d = Decoder::open_with_config(BYTES, config).unwrap();
+        let d = Decoder::open(BYTES, config).unwrap();
         assert!(d.spectrum_count() > 0);
     }
 
@@ -1408,7 +1531,7 @@ mod tests {
 
     #[test]
     fn ion_open_has_metadata() {
-        let mut ion = Ion::open(BYTES).unwrap();
+        let mut ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
         ion.load_metadata().unwrap();
         assert!(ion.spectrum_count() > 0);
         assert!(ion.run.spectrum_list.is_some());
@@ -1417,7 +1540,7 @@ mod tests {
 
     #[test]
     fn ion_for_each_scan_yields_scans() {
-        let mut ion = Ion::open(BYTES).unwrap();
+        let mut ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
         let mut count = 0usize;
         ion.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, _, mz, int| {
             assert!(rt.is_finite());
@@ -1430,7 +1553,7 @@ mod tests {
 
     #[test]
     fn ion_filter_record_matches_decoder() {
-        let ion = Ion::open(BYTES).unwrap();
+        let ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
         let r = ion.filter_record(0).unwrap();
         assert!(r.rt_seconds.is_finite());
         assert!(r.ms_level >= 1);
@@ -1438,7 +1561,7 @@ mod tests {
 
     #[test]
     fn ion_to_mzml_has_binaries() {
-        let mut ion = Ion::open(BYTES).unwrap();
+        let mut ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
         let mzml = ion.to_mzml().unwrap();
         let sl = mzml.run.spectrum_list.as_ref().unwrap();
         assert!(!sl.spectra.is_empty());

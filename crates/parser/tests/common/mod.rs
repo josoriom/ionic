@@ -10,6 +10,7 @@ pub mod test_files;
 
 #[allow(unused_imports)]
 pub(crate) use binary_ext::BinaryDataExt;
+use ionic::ion::DecoderConfig;
 
 use std::collections::BTreeSet;
 use std::{fs, path::PathBuf, sync::OnceLock};
@@ -66,7 +67,7 @@ pub(crate) fn encode_to_ion(mzml: &MzML, compression_level: u8, force_f32: bool)
 }
 
 pub(crate) fn decode_ion(bytes: &[u8]) -> IonResult<MzML> {
-    let mut decoder = Decoder::open(bytes)?;
+    let mut decoder = Decoder::open(bytes, DecoderConfig::default())?;
     decoder.to_mzml()
 }
 
