@@ -1,0 +1,12 @@
+[package]
+name = "byte_transpose_wasm"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

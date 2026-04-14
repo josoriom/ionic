@@ -5,7 +5,10 @@ use zstd::zstd_safe;
 use crate::{
     BinaryData, BinaryDataArray, BinaryDataArrayList,
     decoder::decode::{Metadatum, MetadatumValue},
-    ion::attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
+    ion::{
+        IonError, IonResult,
+        attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
+    },
     mzml::schema::{SchemaNode, SchemaTree as Schema, TagId},
 };
 
@@ -20,25 +23,26 @@ pub(crate) fn take<'a>(
     pos: &mut usize,
     n: usize,
     field: &'static str,
-) -> Result<&'a [u8], String> {
+) -> IonResult<&'a [u8]> {
     let start = *pos;
     let end = start
         .checked_add(n)
-        .ok_or_else(|| format!("overflow while reading {field}"))?;
+        .ok_or_else(|| IonError::from(format!("overflow while reading {field}")))?;
     if end > bytes.len() {
         return Err(format!(
             "unexpected EOF while reading {field}: need {n} bytes at pos {pos}, len {}",
             bytes.len()
-        ));
+        )
+        .into());
     }
     *pos = end;
     Ok(&bytes[start..end])
 }
 
 #[inline]
-pub(crate) fn read_u16_le_at(bytes: &[u8], pos: &mut usize, ctx: &str) -> Result<u16, String> {
+pub(crate) fn read_u16_le_at(bytes: &[u8], pos: &mut usize, ctx: &str) -> IonResult<u16> {
     if *pos + 2 > bytes.len() {
-        return Err(format!("{ctx}: not enough bytes for u16 at offset {pos}"));
+        return Err(format!("{ctx}: not enough bytes for u16 at offset {pos}").into());
     }
     let v = u16::from_le_bytes(bytes[*pos..*pos + 2].try_into().unwrap());
     *pos += 2;
@@ -46,27 +50,19 @@ pub(crate) fn read_u16_le_at(bytes: &[u8], pos: &mut usize, ctx: &str) -> Result
 }
 
 #[inline]
-pub(crate) fn read_u32_le_at(
-    bytes: &[u8],
-    pos: &mut usize,
-    field: &'static str,
-) -> Result<u32, String> {
+pub(crate) fn read_u32_le_at(bytes: &[u8], pos: &mut usize, field: &'static str) -> IonResult<u32> {
     let s = take(bytes, pos, 4, field)?;
     Ok(u32::from_le_bytes(s.try_into().unwrap()))
 }
 
 #[inline]
-pub(crate) fn read_u64_le_at(
-    bytes: &[u8],
-    pos: &mut usize,
-    field: &'static str,
-) -> Result<u64, String> {
+pub(crate) fn read_u64_le_at(bytes: &[u8], pos: &mut usize, field: &'static str) -> IonResult<u64> {
     let s = take(bytes, pos, 8, field)?;
     Ok(u64::from_le_bytes(s.try_into().unwrap()))
 }
 
 #[inline]
-pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> Result<Vec<u32>, String> {
+pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult<Vec<u32>> {
     let raw = take(bytes, pos, n * 4, "u32 vector")?;
     let mut out = Vec::with_capacity(n);
     for chunk in raw.chunks_exact(4) {
@@ -76,7 +72,7 @@ pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> Result<Ve
 }
 
 #[inline]
-pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> Result<Vec<f64>, String> {
+pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult<Vec<f64>> {
     let raw = take(bytes, pos, n * 8, "f64 vector")?;
     let mut out = Vec::with_capacity(n);
     for chunk in raw.chunks_exact(8) {
@@ -86,7 +82,7 @@ pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> Result<Ve
 }
 
 #[inline]
-pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
     }
@@ -98,13 +94,12 @@ pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> Result<Vec<u8>, S
         let dst =
             unsafe { std::slice::from_raw_parts_mut(spare.as_mut_ptr() as *mut u8, expected) };
 
-        zstd_safe::decompress(dst, comp).map_err(|e| format!("zstd decode failed: {e:?}"))?
+        zstd_safe::decompress(dst, comp)
+            .map_err(|e| IonError::from(format!("zstd decode failed: {e:?}")))?
     };
 
     if actual != expected {
-        return Err(format!(
-            "zstd: bad decoded size (got={actual}, expected={expected})"
-        ));
+        return Err(format!("zstd: bad decoded size (got={actual}, expected={expected})").into());
     }
 
     unsafe {
@@ -118,7 +113,7 @@ pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> Result<Vec<u8>, S
 pub(crate) fn decompress_zstd_allow_aligned_padding(
     input: &[u8],
     expected: usize,
-) -> Result<Vec<u8>, String> {
+) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
     }
@@ -208,12 +203,7 @@ pub(crate) fn get_attr_text(rows: &[&Metadatum], tail: AccessionTail) -> Option<
 }
 
 #[inline]
-pub(crate) fn vs_len_bytes(
-    vk: &[u8],
-    vi: &[u32],
-    voff: &[u32],
-    vlen: &[u32],
-) -> Result<usize, String> {
+pub(crate) fn vs_len_bytes(vk: &[u8], vi: &[u32], voff: &[u32], vlen: &[u32]) -> IonResult<usize> {
     let mut max_end = 0usize;
     for (j, &kind) in vk.iter().enumerate() {
         if kind != 1 {
@@ -221,11 +211,11 @@ pub(crate) fn vs_len_bytes(
         }
         let idx = vi[j] as usize;
         if idx >= voff.len() || idx >= vlen.len() {
-            return Err("string value index out of range".to_string());
+            return Err("string value index out of range".into());
         }
         let end = (voff[idx] as usize)
             .checked_add(vlen[idx] as usize)
-            .ok_or("string offset+length overflow")?;
+            .ok_or_else(|| IonError::from("string offset+length overflow"))?;
         if end > max_end {
             max_end = end;
         }

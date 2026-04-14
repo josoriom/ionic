@@ -1,11 +1,11 @@
 use crate::mzml::schema::TagId;
 use crate::mzml::utilities::{
-    drain_until_close, read_ref_group_ref, read_software_param, read_user_param, tag_id_from_bytes,
-    ParamCollector,
+    ParamCollector, drain_until_close, read_ref_group_ref, read_software_param, read_user_param,
+    tag_id_from_bytes,
 };
-use crate::mzml::utilities::{read_cv_param, ParseError};
-use quick_xml::events::{BytesStart, Event};
+use crate::mzml::utilities::{ParseError, read_cv_param};
 use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 use std::io::BufRead;
 
 #[allow(dead_code)]
