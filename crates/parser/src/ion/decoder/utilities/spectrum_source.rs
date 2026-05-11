@@ -5,6 +5,12 @@ const ACC_SCAN_START_TIME: &str = "MS:1000016";
 const ACC_MS_LEVEL: &str = "MS:1000511";
 const ACC_MZ_ARRAY: &str = "MS:1000514";
 const ACC_INTENSITY_ARRAY: &str = "MS:1000515";
+const ACC_BASE_PEAK_MZ: &str = "MS:1000504";
+const ACC_BASE_PEAK_INT: &str = "MS:1000505";
+const ACC_TIC: &str = "MS:1000285";
+const ACC_SELECTED_ION_MZ: &str = "MS:1000744";
+const ACC_POSITIVE_SCAN: &str = "MS:1000130";
+const ACC_NEGATIVE_SCAN: &str = "MS:1000129";
 const UO_MINUTE: &str = "UO:0000031";
 const UO_SECOND: &str = "UO:0000010";
 const UO_MILLISECOND: &str = "UO:0000028";
@@ -209,6 +215,113 @@ where
     let mut out = Vec::with_capacity(iter.len());
     out.extend(iter);
     out
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScanSummary {
+    pub rt: f64,
+    pub ms_level: u8,
+    pub polarity: u8,
+    pub selected_ion_mz: f64,
+    pub base_peak_mz: f64,
+    pub base_peak_int: f64,
+    pub total_ion_current: f64,
+}
+
+pub trait ScanSource {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary));
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool;
+}
+
+impl ScanSource for MzML {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+        let Some(list) = self.run.spectrum_list.as_ref() else {
+            return;
+        };
+        summary_from_spectra(&list.spectra, cb);
+    }
+
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+        let spectra = self
+            .run
+            .spectrum_list
+            .as_ref()
+            .map(|l| l.spectra.as_slice())
+            .unwrap_or_default();
+        scan_at_from_spectra(spectra, index, mz, intensity)
+    }
+}
+
+pub(crate) fn summary_from_spectra(spectra: &[Spectrum], cb: &mut dyn FnMut(usize, ScanSummary)) {
+    for (index, spectrum) in spectra.iter().enumerate() {
+        cb(
+            index,
+            ScanSummary {
+                rt: extract_rt_minutes(spectrum).unwrap_or(f64::NAN),
+                ms_level: extract_ms_level(spectrum).unwrap_or(0),
+                polarity: polarity_from_params(&spectrum.cv_params),
+                selected_ion_mz: selected_ion_mz_from_spectrum(spectrum),
+                base_peak_mz: cv_param_f64(&spectrum.cv_params, ACC_BASE_PEAK_MZ),
+                base_peak_int: cv_param_f64(&spectrum.cv_params, ACC_BASE_PEAK_INT),
+                total_ion_current: cv_param_f64(&spectrum.cv_params, ACC_TIC),
+            },
+        );
+    }
+}
+
+fn cv_param_f64(params: &[CvParam], accession: &str) -> f64 {
+    params
+        .iter()
+        .find(|p| p.accession.as_deref() == Some(accession))
+        .and_then(|p| p.value.as_deref()?.parse().ok())
+        .unwrap_or(f64::NAN)
+}
+
+fn polarity_from_params(params: &[CvParam]) -> u8 {
+    for param in params {
+        match param.accession.as_deref() {
+            Some(ACC_POSITIVE_SCAN) => return 1,
+            Some(ACC_NEGATIVE_SCAN) => return 2,
+            _ => {}
+        }
+    }
+    0
+}
+
+fn selected_ion_mz_from_spectrum(spectrum: &Spectrum) -> f64 {
+    spectrum
+        .precursor_list
+        .as_ref()
+        .and_then(|pl| pl.precursors.first())
+        .and_then(|p| p.selected_ion_list.as_ref())
+        .and_then(|sil| sil.selected_ions.first())
+        .map(|si| cv_param_f64(&si.cv_params, ACC_SELECTED_ION_MZ))
+        .unwrap_or(f64::NAN)
+}
+
+pub(crate) fn scan_at_from_spectra(
+    spectra: &[Spectrum],
+    index: usize,
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<f64>,
+) -> bool {
+    let Some(spectrum) = spectra.get(index) else {
+        return false;
+    };
+    let Some((mz_data, int_data)) = extract_binary_pair(spectrum) else {
+        return false;
+    };
+    let mz_cow = as_f64_cow(mz_data);
+    let int_cow = as_f64_cow(int_data);
+    let len = mz_cow.len().min(int_cow.len());
+    if len == 0 {
+        return false;
+    }
+    mz.clear();
+    mz.extend_from_slice(&mz_cow[..len]);
+    intensity.clear();
+    intensity.extend_from_slice(&int_cow[..len]);
+    true
 }
 
 pub(crate) fn f16_bits_to_f64(bits: u16) -> f64 {

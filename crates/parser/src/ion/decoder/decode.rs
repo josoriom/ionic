@@ -1,4 +1,5 @@
 use memmap2::Mmap;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::{
@@ -19,7 +20,10 @@ use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerAccess, ContainerView, DefaultProcessor},
     parse_header::{Header, parse_header},
-    spectrum_source::{SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range},
+    spectrum_source::{
+        ScanSource, ScanSummary, SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range,
+        scan_at_from_spectra, summary_from_spectra,
+    },
 };
 use crate::ion::{IonError, IonResult};
 use crate::ion::{
@@ -92,6 +96,7 @@ pub struct ArrayRef {
 pub struct DecoderConfig {
     pub max_cached_bytes: usize,
     pub verify_checksums: bool,
+    pub parallel: bool,
 }
 
 impl Default for DecoderConfig {
@@ -99,6 +104,7 @@ impl Default for DecoderConfig {
         Self {
             max_cached_bytes: DEFAULT_MAX_CACHED_BYTES,
             verify_checksums: true,
+            parallel: true,
         }
     }
 }
@@ -110,6 +116,7 @@ pub struct Decoder<'a> {
     chrom_container: Option<ContainerView<'a, DefaultProcessor>>,
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
+    parallel: bool,
 }
 
 #[allow(dead_code)]
@@ -221,6 +228,7 @@ impl<'a> Decoder<'a> {
             chrom_container,
             mz_buf: Vec::new(),
             int_buf: Vec::new(),
+            parallel: config.parallel,
         })
     }
 
@@ -682,6 +690,108 @@ impl<'a> SpectrumSource for Decoder<'a> {
     }
 }
 
+impl ScanSource for Decoder<'_> {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+        let Some(filter_bytes) =
+            usize::try_from(self.header.off_filter_index)
+                .ok()
+                .and_then(|off| {
+                    usize::try_from(self.header.len_filter_index)
+                        .ok()
+                        .and_then(|len| {
+                            off.checked_add(len)
+                                .and_then(|end| self.bytes.get(off..end))
+                        })
+                })
+        else {
+            return;
+        };
+        for (index, chunk) in filter_bytes
+            .chunks_exact(FILTER_INDEX_RECORD_SIZE)
+            .enumerate()
+        {
+            cb(
+                index,
+                ScanSummary {
+                    rt: f64::from_le_bytes(chunk[0..8].try_into().unwrap()) / 60.0,
+                    base_peak_mz: f64::from_le_bytes(chunk[8..16].try_into().unwrap()),
+                    selected_ion_mz: f64::from_le_bytes(chunk[16..24].try_into().unwrap()),
+                    base_peak_int: f64::from_le_bytes(chunk[24..32].try_into().unwrap()),
+                    total_ion_current: f64::from_le_bytes(chunk[32..40].try_into().unwrap()),
+                    ms_level: chunk[40],
+                    polarity: chunk[41],
+                },
+            );
+        }
+    }
+
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+        let count = match usize::try_from(self.header.spectrum_count) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        if index >= count {
+            return false;
+        }
+        let Some(all_entries) = count.checked_mul(ENTRY_A_BYTES).and_then(|total| {
+            usize::try_from(self.header.off_spec_entries)
+                .ok()
+                .and_then(|off| {
+                    off.checked_add(total)
+                        .and_then(|end| self.bytes.get(off..end))
+                })
+        }) else {
+            return false;
+        };
+        let aref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
+            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
+            Err(_) => return false,
+        };
+        let entry_start = index * ENTRY_A_BYTES;
+        let Some(entry) = all_entries.get(entry_start..entry_start + ENTRY_A_BYTES) else {
+            return false;
+        };
+        let Some((mz_ref, int_ref)) = parse_array_pair(entry, aref_bytes) else {
+            return false;
+        };
+        if !decode_from_block(&mut self.spec_container, mz, &mz_ref) {
+            return false;
+        }
+        if !decode_from_block(&mut self.spec_container, intensity, &int_ref) {
+            return false;
+        }
+        mz.len().min(intensity.len()) > 0
+    }
+}
+
+impl<'a> ScanSource for Ion<'a> {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => decoder.for_each_summary(cb),
+            IonBackend::Materialized => {
+                if let Some(list) = self.run.spectrum_list.as_ref() {
+                    summary_from_spectra(&list.spectra, cb);
+                }
+            }
+        }
+    }
+
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => decoder.load_scan(index, mz, intensity),
+            IonBackend::Materialized => {
+                let spectra = self
+                    .run
+                    .spectrum_list
+                    .as_ref()
+                    .map(|l| l.spectra.as_slice())
+                    .unwrap_or_default();
+                scan_at_from_spectra(spectra, index, mz, intensity)
+            }
+        }
+    }
+}
+
 struct MzmlConverter<'a, 'd> {
     decoder: &'d mut Decoder<'a>,
 }
@@ -778,6 +888,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                 &mut spectrum_list.spectra,
                 &self.decoder.spec_container,
                 "spec",
+                self.decoder.parallel,
             )?;
         }
 
@@ -792,6 +903,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                 &mut chrom_list.chromatograms,
                 container,
                 "chrom",
+                self.decoder.parallel,
             )?;
         }
 
@@ -1116,6 +1228,7 @@ fn attach_binaries<E: BinaryArrayOwner>(
     entries: &mut [E],
     container: &ContainerView<'_, DefaultProcessor>,
     ctx: &'static str,
+    parallel: bool,
 ) -> IonResult<()> {
     let mut refs = Vec::new();
     let mut blocks = HashMap::new();
@@ -1148,21 +1261,29 @@ fn attach_binaries<E: BinaryArrayOwner>(
         Ok((block_id, container.read_block(block_id, stride, ctx)?))
     };
 
-    let data: HashMap<u32, Vec<u8>> = if block_list.len() < 4 {
-        block_list
-            .into_iter()
-            .map(load)
-            .collect::<IonResult<Vec<_>>>()?
-            .into_iter()
-            .collect()
-    } else {
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let data: HashMap<u32, Vec<u8>> = if parallel && block_list.len() >= 4 {
         block_list
             .into_par_iter()
             .map(load)
             .collect::<IonResult<Vec<_>>>()?
             .into_iter()
             .collect()
+    } else {
+        block_list
+            .into_iter()
+            .map(load)
+            .collect::<IonResult<Vec<_>>>()?
+            .into_iter()
+            .collect()
     };
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    let data: HashMap<u32, Vec<u8>> = block_list
+        .into_iter()
+        .map(load)
+        .collect::<IonResult<Vec<_>>>()?
+        .into_iter()
+        .collect();
 
     for (index, item_refs) in refs {
         let list = entries[index]
@@ -1495,6 +1616,7 @@ mod tests {
         let config = DecoderConfig {
             max_cached_bytes: 1024 * 1024,
             verify_checksums: true,
+            parallel: true,
         };
         let d = Decoder::open(BYTES, config).unwrap();
         assert!(d.spectrum_count() > 0);

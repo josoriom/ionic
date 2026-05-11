@@ -1,3 +1,4 @@
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
@@ -311,7 +312,6 @@ pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
     store: BlockStore,
     pending: Vec<PendingBlock>,
     compressor: CompressionMode<C>,
-    #[cfg(test)]
     par_min_blocks: usize,
 }
 
@@ -328,9 +328,13 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
             store: BlockStore::new(max_block_uncompressed_size),
             pending: Vec::new(),
             compressor,
-            #[cfg(test)]
             par_min_blocks: 4,
         }
+    }
+
+    pub(crate) fn force_sequential(mut self) -> Self {
+        self.par_min_blocks = usize::MAX;
+        self
     }
 
     pub(crate) fn add_item_to_box<WriteAction>(
@@ -462,6 +466,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         Ok(out)
     }
 
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     fn finish_par(&self, blocks: Vec<PendingBlock>) -> IonResult<Vec<ReadyBlock>>
     where
         C: Send,
@@ -510,16 +515,18 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         }
 
         let blocks = std::mem::take(&mut self.pending);
-        #[cfg(test)]
-        let par_min_blocks = self.par_min_blocks;
-        #[cfg(not(test))]
-        let par_min_blocks = 4;
 
-        let blocks = if blocks.len() < par_min_blocks {
-            self.finish_seq(blocks)?
-        } else {
-            self.finish_par(blocks)?
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        let blocks = {
+            let par_min_blocks = self.par_min_blocks;
+            if blocks.len() < par_min_blocks {
+                self.finish_seq(blocks)?
+            } else {
+                self.finish_par(blocks)?
+            }
         };
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        let blocks = self.finish_seq(blocks)?;
 
         let mut payload_bytes = 0u64;
         for block in blocks {
