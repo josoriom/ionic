@@ -14,12 +14,17 @@ use clap::{
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
 use mimalloc::MiMalloc;
-use rayon::ThreadPoolBuilder;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use regex::Regex;
 use serde::Serialize;
 
 use ionic::{
-    ion::{DecoderConfig, FileEncoderOutput, Ion, encoder::encode::encode},
+    ion::{
+        DecoderConfig, FileEncoderOutput, Ion,
+        encoder::encode::{
+            Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode,
+        },
+    },
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 
@@ -107,6 +112,13 @@ struct ConvertArgs {
         value_parser = clap::value_parser!(u8).range(0..=22)
     )]
     compression_level: u8,
+
+    #[arg(
+        long = "block-size",
+        default_value_t = (TARGET_BLOCK_UNCOMPRESSED_BYTES / (1024 * 1024)) as u32,
+        value_name = "MB"
+    )]
+    block_size_mb: u32,
 
     #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
     overwrite: bool,
@@ -552,7 +564,13 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     }
                 };
 
-                if let Err(e) = encode(&mzml, cmd.compression_level, f32_compress, ionic::encoder::encode::WritingMode::Streaming, &mut file_output) {
+                let config = EncodingConfig {
+                    compression_level: cmd.compression_level,
+                    force_f32: f32_compress,
+                    writing_mode: WritingMode::Streaming,
+                    uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
+                };
+                if let Err(e) = Encoder::new(&mut file_output, config).encode(&mzml) {
                     had_failed.store(true, Ordering::Relaxed);
                     failed.fetch_add(1, Ordering::Relaxed);
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -593,7 +611,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     n, total, name, in_mb, out_mb, elapsed_s
                 );
                 let _ = stdout().flush();
-            };
+            }
         });
 
         let ok = ok.load(Ordering::Relaxed);

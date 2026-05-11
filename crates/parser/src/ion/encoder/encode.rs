@@ -312,7 +312,7 @@ impl<'o> Encoder<'o> {
             compression_codec: config.codec_id(),
             compression_level: config.compression_level,
             array_filter_id: config.array_filter_id(),
-            target_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES as u64,
+            target_block_size: config.uncompressed_block_size as u64,
 
             offset_spec_entries: offsets.offset_spec_entries,
             len_spec_entries: spec_arrays.index_entries_bytes.len() as u64,
@@ -381,6 +381,7 @@ pub fn encode(
         compression_level,
         force_f32,
         writing_mode,
+        uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
     };
     Encoder::new(output, config).encode(mzml)
 }
@@ -390,6 +391,7 @@ pub struct EncodingConfig {
     pub compression_level: u8,
     pub force_f32: bool,
     pub writing_mode: WritingMode,
+    pub uncompressed_block_size: usize,
 }
 
 impl EncodingConfig {
@@ -748,7 +750,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
     let mut seen_types = Vec::new();
     let mut container = ContainerBuilder::new(
         &mut container_bytes,
-        TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        config.uncompressed_block_size,
         config.compression_mode(),
         config.filter_type(),
     );
@@ -785,7 +787,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
     let container_offset = write_aligned_section(output, &[])?;
     let mut container = ContainerBuilder::new(
         output,
-        TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        config.uncompressed_block_size,
         config.compression_mode(),
         config.filter_type(),
     );
@@ -828,6 +830,7 @@ mod tests {
                 compression_level: 0,
                 force_f32: false,
                 writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
         )
         .encode(&mzml)
@@ -867,6 +870,7 @@ mod tests {
                 compression_level: 0,
                 force_f32: false,
                 writing_mode: WritingMode::Streaming,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
         )
         .encode(&mzml)
@@ -950,6 +954,7 @@ mod tests {
             compression_level: 3,
             force_f32: true,
             writing_mode: WritingMode::Streaming,
+            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         };
         let sp = config.spectrum_array_policy();
         assert_eq!(sp.x_array_accession, ACCESSION_MZ_ARRAY);
@@ -967,6 +972,7 @@ mod tests {
             compression_level: 0,
             force_f32: false,
             writing_mode: WritingMode::Streaming,
+            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -980,6 +986,7 @@ mod tests {
             compression_level: 3,
             force_f32: false,
             writing_mode: WritingMode::Streaming,
+            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);
@@ -997,6 +1004,7 @@ mod tests {
                 compression_level: 0,
                 force_f32: false,
                 writing_mode: WritingMode::Streaming,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
         )
         .encode(&mzml)

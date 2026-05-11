@@ -19,7 +19,10 @@ use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerAccess, ContainerView, DefaultProcessor},
     parse_header::{Header, parse_header},
-    spectrum_source::{SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range},
+    spectrum_source::{
+        ScanSource, ScanSummary, SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range,
+        scan_at_from_spectra, summary_from_spectra,
+    },
 };
 use crate::ion::{IonError, IonResult};
 use crate::ion::{
@@ -679,6 +682,108 @@ impl<'a> SpectrumSource for Decoder<'a> {
             ms_level,
         )
         .run(callback);
+    }
+}
+
+impl ScanSource for Decoder<'_> {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+        let Some(filter_bytes) =
+            usize::try_from(self.header.off_filter_index)
+                .ok()
+                .and_then(|off| {
+                    usize::try_from(self.header.len_filter_index)
+                        .ok()
+                        .and_then(|len| {
+                            off.checked_add(len)
+                                .and_then(|end| self.bytes.get(off..end))
+                        })
+                })
+        else {
+            return;
+        };
+        for (index, chunk) in filter_bytes
+            .chunks_exact(FILTER_INDEX_RECORD_SIZE)
+            .enumerate()
+        {
+            cb(
+                index,
+                ScanSummary {
+                    rt: f64::from_le_bytes(chunk[0..8].try_into().unwrap()) / 60.0,
+                    base_peak_mz: f64::from_le_bytes(chunk[8..16].try_into().unwrap()),
+                    selected_ion_mz: f64::from_le_bytes(chunk[16..24].try_into().unwrap()),
+                    base_peak_int: f64::from_le_bytes(chunk[24..32].try_into().unwrap()),
+                    total_ion_current: f64::from_le_bytes(chunk[32..40].try_into().unwrap()),
+                    ms_level: chunk[40],
+                    polarity: chunk[41],
+                },
+            );
+        }
+    }
+
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+        let count = match usize::try_from(self.header.spectrum_count) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        if index >= count {
+            return false;
+        }
+        let Some(all_entries) = count.checked_mul(ENTRY_A_BYTES).and_then(|total| {
+            usize::try_from(self.header.off_spec_entries)
+                .ok()
+                .and_then(|off| {
+                    off.checked_add(total)
+                        .and_then(|end| self.bytes.get(off..end))
+                })
+        }) else {
+            return false;
+        };
+        let aref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
+            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
+            Err(_) => return false,
+        };
+        let entry_start = index * ENTRY_A_BYTES;
+        let Some(entry) = all_entries.get(entry_start..entry_start + ENTRY_A_BYTES) else {
+            return false;
+        };
+        let Some((mz_ref, int_ref)) = parse_array_pair(entry, aref_bytes) else {
+            return false;
+        };
+        if !decode_from_block(&mut self.spec_container, mz, &mz_ref) {
+            return false;
+        }
+        if !decode_from_block(&mut self.spec_container, intensity, &int_ref) {
+            return false;
+        }
+        mz.len().min(intensity.len()) > 0
+    }
+}
+
+impl<'a> ScanSource for Ion<'a> {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => decoder.for_each_summary(cb),
+            IonBackend::Materialized => {
+                if let Some(list) = self.run.spectrum_list.as_ref() {
+                    summary_from_spectra(&list.spectra, cb);
+                }
+            }
+        }
+    }
+
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => decoder.load_scan(index, mz, intensity),
+            IonBackend::Materialized => {
+                let spectra = self
+                    .run
+                    .spectrum_list
+                    .as_ref()
+                    .map(|l| l.spectra.as_slice())
+                    .unwrap_or_default();
+                scan_at_from_spectra(spectra, index, mz, intensity)
+            }
+        }
     }
 }
 
