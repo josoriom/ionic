@@ -21,9 +21,7 @@ use serde::Serialize;
 use ionic::{
     ion::{
         DecoderConfig, FileEncoderOutput, Ion,
-        encoder::encode::{
-            Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode,
-        },
+        encoder::encode::{Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
     },
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
@@ -134,10 +132,14 @@ struct ConvertArgs {
 
     #[arg(
         long = "cores",
-        default_value_t = 1u16,
-        value_parser = clap::value_parser!(u16).range(1..=1024)
+        default_value_t = 0u16,
+        value_parser = clap::value_parser!(u16).range(0..=1024),
+        value_name = "N"
     )]
     cores: u16,
+
+    #[arg(long = "many-files", default_value_t = false, action = ArgAction::SetTrue)]
+    many_files: bool,
 
     #[command(flatten)]
     which: ConvertWhich,
@@ -153,6 +155,12 @@ struct ConvertWhich {
 
     #[arg(long = "ion-to-mzml")]
     ion_to_mzml: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Encoding {
+    Parallel,
+    Sequential,
 }
 
 #[derive(Args)]
@@ -390,14 +398,22 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     const MB: f64 = 1024.0 * 1024.0;
 
-    let cores = cmd.cores as usize;
-    if cores == 0 {
-        return Err("--cores must be >= 1".to_string());
-    }
+    let cores = match cmd.cores {
+        0 => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+        n => n as usize,
+    };
     let pool = ThreadPoolBuilder::new()
         .num_threads(cores)
         .build()
         .map_err(|e| format!("rayon thread pool init failed: {e}"))?;
+
+    let encoding = if cmd.many_files {
+        Encoding::Sequential
+    } else {
+        Encoding::Parallel
+    };
 
     let t_all = Instant::now();
 
@@ -430,188 +446,197 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
         let total = files.len();
 
-        pool.install(|| {
-            for in_path in &files {
-                let rel = match in_path.strip_prefix(&input_root) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: cannot make relative path",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
-
-                let out_name = match out_name_for_mzml_file(in_path, out_ext) {
-                    Some(v) => v,
-                    None => {
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        println!("{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}", n, total, name);
-                        let _ = stdout().flush();
-                        return;
-                    }
-                };
-
-                let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
-                let out_dir = output_root.join(parent_rel);
-                let out_path = out_dir.join(out_name);
-
-                let mut fixed_bad = false;
-                if !cmd.overwrite
-                    && let Ok(m) = fs::metadata(&out_path)
-                    && m.is_file()
-                {
-                    let out_len = m.len();
-                    if out_len > 0 && has_valid_trailer(&out_path, out_len) {
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-                        let in_mb = fs::metadata(in_path)
-                            .map(|m| m.len() as f64 / MB)
-                            .unwrap_or(0.0);
-                        let out_mb = out_len as f64 / MB;
-
-                        let name = basename(&out_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        println!(
-                            "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
-                            n, total, name, in_mb, out_mb
-                        );
-                        let _ = stdout().flush();
-                        return;
-                    }
-                    fixed_bad = true;
-                }
-
-                if let Err(e) = fs::create_dir_all(&out_dir) {
+        let convert_mzml_to_ion = |in_path: &PathBuf| {
+            let rel = match in_path.strip_prefix(&input_root) {
+                Ok(v) => v,
+                Err(_) => {
                     had_failed.store(true, Ordering::Relaxed);
                     failed.fetch_add(1, Ordering::Relaxed);
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(&out_dir);
+                    let name = basename(in_path);
                     let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                     eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: create output dir failed: {e}",
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: cannot make relative path",
                         n, total, name
                     );
                     let _ = stderr().flush();
                     return;
                 }
+            };
 
-                let t0 = Instant::now();
+            let out_name = match out_name_for_mzml_file(in_path, out_ext) {
+                Some(v) => v,
+                None => {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let name = basename(in_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    println!(
+                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}",
+                        n, total, name
+                    );
+                    let _ = stdout().flush();
+                    return;
+                }
+            };
 
-                let bytes = match fs::read(in_path) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: read failed: {e}",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
+            let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
+            let out_dir = output_root.join(parent_rel);
+            let out_path = out_dir.join(out_name);
 
-                let mzml = match parse_mzml(&bytes) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: parse_mzml failed: {e}",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
+            let mut fixed_bad = false;
+            if !cmd.overwrite
+                && let Ok(m) = fs::metadata(&out_path)
+                && m.is_file()
+            {
+                let out_len = m.len();
+                if out_len > 0 && has_valid_trailer(&out_path, out_len) {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
 
-                let in_mb = bytes.len() as f64 / MB;
-                drop(bytes);
+                    let in_mb = fs::metadata(in_path)
+                        .map(|m| m.len() as f64 / MB)
+                        .unwrap_or(0.0);
+                    let out_mb = out_len as f64 / MB;
 
-                let out_path_str = out_path.to_string_lossy();
-                let mut file_output = match FileEncoderOutput::open_for_writing(out_path_str.as_ref()) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(&out_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: open file failed: {e}",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
+                    let name = basename(&out_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    println!(
+                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
+                        n, total, name, in_mb, out_mb
+                    );
+                    let _ = stdout().flush();
+                    return;
+                }
+                fixed_bad = true;
+            }
 
-                let config = EncodingConfig {
-                    compression_level: cmd.compression_level,
-                    force_f32: f32_compress,
-                    writing_mode: WritingMode::Streaming,
-                    uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
-                };
-                if let Err(e) = Encoder::new(&mut file_output, config).encode(&mzml) {
+            if let Err(e) = fs::create_dir_all(&out_dir) {
+                had_failed.store(true, Ordering::Relaxed);
+                failed.fetch_add(1, Ordering::Relaxed);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                let name = basename(&out_dir);
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                eprintln!(
+                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: create output dir failed: {e}",
+                    n, total, name
+                );
+                let _ = stderr().flush();
+                return;
+            }
+
+            let t0 = Instant::now();
+
+            let bytes = match fs::read(in_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let name = basename(in_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: read failed: {e}",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                    return;
+                }
+            };
+
+            let mzml = match parse_mzml(&bytes) {
+                Ok(v) => v,
+                Err(e) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let name = basename(in_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: parse_mzml failed: {e}",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                    return;
+                }
+            };
+
+            let in_mb = bytes.len() as f64 / MB;
+            drop(bytes);
+
+            let out_path_str = out_path.to_string_lossy();
+            let mut file_output = match FileEncoderOutput::open_for_writing(out_path_str.as_ref()) {
+                Ok(f) => f,
+                Err(e) => {
                     had_failed.store(true, Ordering::Relaxed);
                     failed.fetch_add(1, Ordering::Relaxed);
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                     let name = basename(&out_path);
                     let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                     eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: encode failed: {e}",
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: open file failed: {e}",
                         n, total, name
                     );
                     let _ = stderr().flush();
                     return;
                 }
+            };
 
-                drop(mzml);
-                drop(file_output);
-
-                let out_mb = fs::metadata(&out_path).map(|m| m.len() as f64 / MB).unwrap_or(0.0);
-
-                ok.fetch_add(1, Ordering::Relaxed);
-                if fixed_bad {
-                    fixed_bad_total.fetch_add(1, Ordering::Relaxed);
-                }
+            let config = EncodingConfig {
+                compression_level: cmd.compression_level,
+                force_f32: f32_compress,
+                writing_mode: WritingMode::Streaming,
+                uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
+                parallel: matches!(encoding, Encoding::Parallel),
+            };
+            if let Err(e) = Encoder::new(&mut file_output, config).encode(&mzml) {
+                had_failed.store(true, Ordering::Relaxed);
+                failed.fetch_add(1, Ordering::Relaxed);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-                let elapsed_s = t0.elapsed().as_secs_f64();
-
-                let (tag, color) = if fixed_bad {
-                    ("[fixed]", ANSI_BLUE)
-                } else {
-                    ("[ok]", ANSI_GREEN)
-                };
-
                 let name = basename(&out_path);
-
                 let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                println!(
-                    "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
-                    n, total, name, in_mb, out_mb, elapsed_s
+                eprintln!(
+                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: encode failed: {e}",
+                    n, total, name
                 );
-                let _ = stdout().flush();
+                let _ = stderr().flush();
+                return;
             }
+
+            drop(mzml);
+            drop(file_output);
+
+            let out_mb = fs::metadata(&out_path)
+                .map(|m| m.len() as f64 / MB)
+                .unwrap_or(0.0);
+
+            ok.fetch_add(1, Ordering::Relaxed);
+            if fixed_bad {
+                fixed_bad_total.fetch_add(1, Ordering::Relaxed);
+            }
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+
+            let elapsed_s = t0.elapsed().as_secs_f64();
+
+            let (tag, color) = if fixed_bad {
+                ("[fixed]", ANSI_BLUE)
+            } else {
+                ("[ok]", ANSI_GREEN)
+            };
+
+            let name = basename(&out_path);
+
+            let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+            println!(
+                "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
+                n, total, name, in_mb, out_mb, elapsed_s
+            );
+            let _ = stdout().flush();
+        };
+
+        pool.install(|| match encoding {
+            Encoding::Sequential => files.par_iter().for_each(convert_mzml_to_ion),
+            Encoding::Parallel => files.iter().for_each(convert_mzml_to_ion),
         });
 
         let ok = ok.load(Ordering::Relaxed);
@@ -647,168 +672,179 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
         let total = files.len();
 
-        pool.install(|| {
-            for in_path in &files {
-                let rel = match in_path.strip_prefix(&input_root) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: cannot make relative path",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
+        let convert_ion_to_mzml = |in_path: &PathBuf| {
+            let rel = match in_path.strip_prefix(&input_root) {
+                Ok(v) => v,
+                Err(_) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let name = basename(in_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: cannot make relative path",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                    return;
+                }
+            };
 
-                let out_name = match out_name_for_bin_file_as_mzml(in_path) {
-                    Some(v) => v,
-                    None => {
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        println!("{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}", n, total, name);
-                        let _ = stdout().flush();
-                        return;
-                    }
-                };
-
-                let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
-                let out_dir = output_root.join(parent_rel);
-                let out_path = out_dir.join(out_name);
-
-               if !cmd.overwrite
-                    && let Ok(m) = fs::metadata(&out_path)
-                    && m.is_file()
-                    && m.len() > 0
-                {
+            let out_name = match out_name_for_bin_file_as_mzml(in_path) {
+                Some(v) => v,
+                None => {
                     skipped.fetch_add(1, Ordering::Relaxed);
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-                    let in_mb = fs::metadata(in_path)
-                        .map(|m| m.len() as f64 / MB)
-                        .unwrap_or(0.0);
-                    let out_mb = m.len() as f64 / MB;
-
-                    let name = basename(&out_path);
+                    let name = basename(in_path);
                     let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                     println!(
-                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
-                        n, total, name, in_mb, out_mb
+                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}",
+                        n, total, name
                     );
                     let _ = stdout().flush();
                     return;
                 }
+            };
 
+            let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
+            let out_dir = output_root.join(parent_rel);
+            let out_path = out_dir.join(out_name);
 
-                if let Err(e) = fs::create_dir_all(&out_dir) {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(&out_dir);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: create output dir failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-
-                let t0 = Instant::now();
+            if !cmd.overwrite
+                && let Ok(m) = fs::metadata(&out_path)
+                && m.is_file()
+                && m.len() > 0
+            {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
 
                 let in_mb = fs::metadata(in_path)
                     .map(|m| m.len() as f64 / MB)
                     .unwrap_or(0.0);
+                let out_mb = m.len() as f64 / MB;
 
-                let mut ion = match Ion::open_file(in_path, DecoderConfig::default()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: Ion::open_file failed: {e}",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
+                let name = basename(&out_path);
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                println!(
+                    "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
+                    n, total, name, in_mb, out_mb
+                );
+                let _ = stdout().flush();
+                return;
+            }
 
-                let mzml = match ion.to_mzml() {
-                    Ok(v) => v,
-                    Err(e) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: to_mzml failed: {e}",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
+            if let Err(e) = fs::create_dir_all(&out_dir) {
+                had_failed.store(true, Ordering::Relaxed);
+                failed.fetch_add(1, Ordering::Relaxed);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                let name = basename(&out_dir);
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                eprintln!(
+                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: create output dir failed: {e}",
+                    n, total, name
+                );
+                let _ = stderr().flush();
+                return;
+            }
 
-                let xml = match bin_to_mzml(&mzml) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        had_failed.store(true, Ordering::Relaxed);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        let name = basename(in_path);
-                        let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                        eprintln!(
-                            "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: bin_to_mzml failed: {e}",
-                            n, total, name
-                        );
-                        let _ = stderr().flush();
-                        return;
-                    }
-                };
-                drop(mzml);
+            let t0 = Instant::now();
 
-                if let Err(e) = fs::write(&out_path, xml.as_bytes()) {
+            let in_mb = fs::metadata(in_path)
+                .map(|m| m.len() as f64 / MB)
+                .unwrap_or(0.0);
+
+            let mut ion = match Ion::open_file(
+                in_path,
+                DecoderConfig {
+                    parallel: matches!(encoding, Encoding::Parallel),
+                    ..DecoderConfig::default()
+                },
+            ) {
+                Ok(v) => v,
+                Err(e) => {
                     had_failed.store(true, Ordering::Relaxed);
                     failed.fetch_add(1, Ordering::Relaxed);
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(&out_path);
+                    let name = basename(in_path);
                     let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                     eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: write failed: {e}",
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: Ion::open_file failed: {e}",
                         n, total, name
                     );
                     let _ = stderr().flush();
                     return;
                 }
-                let out_mb = xml.len() as f64 / MB;
-                drop(xml);
+            };
 
-                ok.fetch_add(1, Ordering::Relaxed);
+            let mzml = match ion.to_mzml() {
+                Ok(v) => v,
+                Err(e) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let name = basename(in_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: to_mzml failed: {e}",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                    return;
+                }
+            };
+
+            let xml = match bin_to_mzml(&mzml) {
+                Ok(v) => v,
+                Err(e) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let name = basename(in_path);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: bin_to_mzml failed: {e}",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                    return;
+                }
+            };
+            drop(mzml);
+
+            if let Err(e) = fs::write(&out_path, xml.as_bytes()) {
+                had_failed.store(true, Ordering::Relaxed);
+                failed.fetch_add(1, Ordering::Relaxed);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-                let elapsed_s = t0.elapsed().as_secs_f64();
-
                 let name = basename(&out_path);
-
                 let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                println!(
-                    "{ANSI_GREEN}[ok]{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
-                    n, total, name, in_mb, out_mb, elapsed_s
+                eprintln!(
+                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: write failed: {e}",
+                    n, total, name
                 );
-                let _ = stdout().flush();
+                let _ = stderr().flush();
+                return;
             }
+            let out_mb = xml.len() as f64 / MB;
+            drop(xml);
+
+            ok.fetch_add(1, Ordering::Relaxed);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+
+            let elapsed_s = t0.elapsed().as_secs_f64();
+
+            let name = basename(&out_path);
+
+            let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+            println!(
+                "{ANSI_GREEN}[ok]{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
+                n, total, name, in_mb, out_mb, elapsed_s
+            );
+            let _ = stdout().flush();
+        };
+
+        pool.install(|| match encoding {
+            Encoding::Sequential => files.par_iter().for_each(convert_ion_to_mzml),
+            Encoding::Parallel => files.iter().for_each(convert_ion_to_mzml),
         });
 
         let ok = ok.load(Ordering::Relaxed);

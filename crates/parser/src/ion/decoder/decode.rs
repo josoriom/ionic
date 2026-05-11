@@ -1,4 +1,5 @@
 use memmap2::Mmap;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::{
@@ -95,6 +96,7 @@ pub struct ArrayRef {
 pub struct DecoderConfig {
     pub max_cached_bytes: usize,
     pub verify_checksums: bool,
+    pub parallel: bool,
 }
 
 impl Default for DecoderConfig {
@@ -102,6 +104,7 @@ impl Default for DecoderConfig {
         Self {
             max_cached_bytes: DEFAULT_MAX_CACHED_BYTES,
             verify_checksums: true,
+            parallel: true,
         }
     }
 }
@@ -113,6 +116,7 @@ pub struct Decoder<'a> {
     chrom_container: Option<ContainerView<'a, DefaultProcessor>>,
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
+    parallel: bool,
 }
 
 #[allow(dead_code)]
@@ -224,6 +228,7 @@ impl<'a> Decoder<'a> {
             chrom_container,
             mz_buf: Vec::new(),
             int_buf: Vec::new(),
+            parallel: config.parallel,
         })
     }
 
@@ -883,6 +888,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                 &mut spectrum_list.spectra,
                 &self.decoder.spec_container,
                 "spec",
+                self.decoder.parallel,
             )?;
         }
 
@@ -897,6 +903,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
                 &mut chrom_list.chromatograms,
                 container,
                 "chrom",
+                self.decoder.parallel,
             )?;
         }
 
@@ -1221,6 +1228,7 @@ fn attach_binaries<E: BinaryArrayOwner>(
     entries: &mut [E],
     container: &ContainerView<'_, DefaultProcessor>,
     ctx: &'static str,
+    parallel: bool,
 ) -> IonResult<()> {
     let mut refs = Vec::new();
     let mut blocks = HashMap::new();
@@ -1253,21 +1261,29 @@ fn attach_binaries<E: BinaryArrayOwner>(
         Ok((block_id, container.read_block(block_id, stride, ctx)?))
     };
 
-    let data: HashMap<u32, Vec<u8>> = if block_list.len() < 4 {
-        block_list
-            .into_iter()
-            .map(load)
-            .collect::<IonResult<Vec<_>>>()?
-            .into_iter()
-            .collect()
-    } else {
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let data: HashMap<u32, Vec<u8>> = if parallel && block_list.len() >= 4 {
         block_list
             .into_par_iter()
             .map(load)
             .collect::<IonResult<Vec<_>>>()?
             .into_iter()
             .collect()
+    } else {
+        block_list
+            .into_iter()
+            .map(load)
+            .collect::<IonResult<Vec<_>>>()?
+            .into_iter()
+            .collect()
     };
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    let data: HashMap<u32, Vec<u8>> = block_list
+        .into_iter()
+        .map(load)
+        .collect::<IonResult<Vec<_>>>()?
+        .into_iter()
+        .collect();
 
     for (index, item_refs) in refs {
         let list = entries[index]
@@ -1600,6 +1616,7 @@ mod tests {
         let config = DecoderConfig {
             max_cached_bytes: 1024 * 1024,
             verify_checksums: true,
+            parallel: true,
         };
         let d = Decoder::open(BYTES, config).unwrap();
         assert!(d.spectrum_count() > 0);

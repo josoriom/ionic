@@ -382,6 +382,7 @@ pub fn encode(
         force_f32,
         writing_mode,
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        parallel: true,
     };
     Encoder::new(output, config).encode(mzml)
 }
@@ -392,6 +393,7 @@ pub struct EncodingConfig {
     pub force_f32: bool,
     pub writing_mode: WritingMode,
     pub uncompressed_block_size: usize,
+    pub parallel: bool,
 }
 
 impl EncodingConfig {
@@ -748,12 +750,17 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
     let mut index_bytes = Vec::new();
     let mut aref_bytes = Vec::new();
     let mut seen_types = Vec::new();
-    let mut container = ContainerBuilder::new(
+    let builder = ContainerBuilder::new(
         &mut container_bytes,
         config.uncompressed_block_size,
         config.compression_mode(),
         config.filter_type(),
     );
+    let mut container = if config.parallel {
+        builder
+    } else {
+        builder.force_sequential()
+    };
     fill_container(
         items,
         config,
@@ -785,12 +792,17 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
     let mut aref_bytes = Vec::new();
     let mut seen_types = Vec::new();
     let container_offset = write_aligned_section(output, &[])?;
-    let mut container = ContainerBuilder::new(
+    let builder = ContainerBuilder::new(
         output,
         config.uncompressed_block_size,
         config.compression_mode(),
         config.filter_type(),
     );
+    let mut container = if config.parallel {
+        builder
+    } else {
+        builder.force_sequential()
+    };
     fill_container(
         items,
         config,
@@ -831,6 +843,7 @@ mod tests {
                 force_f32: false,
                 writing_mode: WritingMode::Memory,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
             },
         )
         .encode(&mzml)
@@ -871,6 +884,7 @@ mod tests {
                 force_f32: false,
                 writing_mode: WritingMode::Streaming,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
             },
         )
         .encode(&mzml)
@@ -955,6 +969,7 @@ mod tests {
             force_f32: true,
             writing_mode: WritingMode::Streaming,
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
         };
         let sp = config.spectrum_array_policy();
         assert_eq!(sp.x_array_accession, ACCESSION_MZ_ARRAY);
@@ -973,6 +988,7 @@ mod tests {
             force_f32: false,
             writing_mode: WritingMode::Streaming,
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -987,6 +1003,7 @@ mod tests {
             force_f32: false,
             writing_mode: WritingMode::Streaming,
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);
@@ -1005,6 +1022,7 @@ mod tests {
                 force_f32: false,
                 writing_mode: WritingMode::Streaming,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
             },
         )
         .encode(&mzml)
