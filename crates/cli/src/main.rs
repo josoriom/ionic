@@ -21,9 +21,7 @@ use serde::Serialize;
 use ionic::{
     ion::{
         DecoderConfig, FileEncoderOutput, Ion,
-        encoder::encode::{
-            Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode,
-        },
+        encoder::encode::{Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
     },
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
@@ -589,6 +587,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 force_f32: f32_compress,
                 writing_mode: WritingMode::Streaming,
                 uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
+                parallel: matches!(encoding, Encoding::Parallel),
             };
             if let Err(e) = Encoder::new(&mut file_output, config).encode(&mzml) {
                 had_failed.store(true, Ordering::Relaxed);
