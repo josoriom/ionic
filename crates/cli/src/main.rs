@@ -21,7 +21,9 @@ use serde::Serialize;
 use ionic::{
     ion::{
         DecoderConfig, FileEncoderOutput, Ion,
-        encoder::encode::{Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
+        encoder::encode::{
+            Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode,
+        },
     },
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
@@ -587,7 +589,6 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 force_f32: f32_compress,
                 writing_mode: WritingMode::Streaming,
                 uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
-                parallel: matches!(encoding, Encoding::Parallel),
             };
             if let Err(e) = Encoder::new(&mut file_output, config).encode(&mzml) {
                 had_failed.store(true, Ordering::Relaxed);
@@ -626,12 +627,14 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
             let name = basename(&out_path);
 
-            let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-            println!(
-                "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
-                n, total, name, in_mb, out_mb, elapsed_s
-            );
-            let _ = stdout().flush();
+            {
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                println!(
+                    "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
+                    n, total, name, in_mb, out_mb, elapsed_s
+                );
+                let _ = stdout().flush();
+            }
         };
 
         pool.install(|| match encoding {
