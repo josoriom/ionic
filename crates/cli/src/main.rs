@@ -26,6 +26,10 @@ use ionic::{
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 
+mod utilities;
+
+use utilities::print_ion_header;
+
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -46,7 +50,7 @@ const AFTER_HELP: &str = "
                -i, --input-path DIR
                -o, --output-path DIR
 
-  \x1b[96mionic cat\x1b[0m PATH
+  \x1b[96mionic cat\x1b[0m [--header] PATH
 
 \x1b[1;32mOPTIONS:\x1b[0m
   \x1b[96m-h\x1b[0m, \x1b[96m--help\x1b[0m
@@ -170,6 +174,9 @@ struct CatArgs {
 
     #[arg(long = "full", short = 'f', action = ArgAction::SetTrue, default_value_t = false)]
     full: bool,
+
+    #[arg(long = "header", action = ArgAction::SetTrue, default_value_t = false, conflicts_with = "full")]
+    header: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -203,6 +210,9 @@ fn print_json_full<T: Serialize>(v: &T) -> Result<(), String> {
 fn cat(cmd: CatArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
     let file_path = resolve_user_path(&cwd, &cmd.file_path);
+    if cmd.header {
+        return print_ion_header(&file_path);
+    }
     let mut mzml = read_mzml_or_ion(&file_path)?;
     if !cmd.full {
         trim_mzml_for_cat(&mut mzml);
