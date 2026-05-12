@@ -1,5 +1,5 @@
 use crate::{
-    BinaryData, FilterRecord, NumericType,
+    BinaryData, ChromFilterRecord, NumericType, SpecFilterRecord,
     encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
     ion::IonResult,
     ion::encoder::utilities::{
@@ -24,7 +24,8 @@ use crate::encoder::utilities::{
 pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 32 * 1024 * 1024;
-pub const FILTER_INDEX_RECORD_SIZE: usize = 128;
+pub(crate) const SPEC_FILTER_RECORD_SIZE: usize = 128;
+pub(crate) const CHROM_FILTER_RECORD_SIZE: usize = 128;
 
 const ARRAY_FILTER_NONE: u8 = 0;
 const ARRAY_FILTER_BYTE_SHUFFLE: u8 = 1;
@@ -45,6 +46,12 @@ const ACC_POSITIVE_SCAN: u32 = 1_000_130;
 const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
 const ACC_UNIT_MINUTE: u32 = 31;
 const ACC_SELECTED_ION_MZ: u32 = 1_000_744;
+const ACC_HIGHEST_OBSERVED_MZ: u32 = 1_000_527;
+const ACC_LOWEST_OBSERVED_MZ: u32 = 1_000_528;
+const ACC_HIGHEST_OBSERVED_WAVELENGTH: u32 = 1_000_618;
+const ACC_LOWEST_OBSERVED_WAVELENGTH: u32 = 1_000_619;
+const ACC_LOWEST_ION_MOBILITY: u32 = 1_003_437;
+const ACC_HIGHEST_ION_MOBILITY: u32 = 1_003_438;
 
 const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
@@ -56,7 +63,7 @@ pub enum WritingMode {
     Streaming,
 }
 
-impl FilterRecord {
+impl SpecFilterRecord {
     fn unknown() -> Self {
         Self {
             rt_seconds: f64::NAN,
@@ -81,8 +88,33 @@ impl FilterRecord {
     }
 }
 
-fn extract_filter_record(spectrum: &Spectrum) -> FilterRecord {
-    let mut record = FilterRecord::unknown();
+impl ChromFilterRecord {
+    fn unknown() -> Self {
+        Self {
+            lowest_mz: f64::NAN,
+            highest_mz: f64::NAN,
+            lowest_wavelength: f64::NAN,
+            highest_wavelength: f64::NAN,
+            lowest_ion_mobility: f64::NAN,
+            highest_ion_mobility: f64::NAN,
+            polarity: POLARITY_UNKNOWN,
+        }
+    }
+
+    fn write_into(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.lowest_mz.to_le_bytes());
+        buf.extend_from_slice(&self.highest_mz.to_le_bytes());
+        buf.extend_from_slice(&self.lowest_wavelength.to_le_bytes());
+        buf.extend_from_slice(&self.highest_wavelength.to_le_bytes());
+        buf.extend_from_slice(&self.lowest_ion_mobility.to_le_bytes());
+        buf.extend_from_slice(&self.highest_ion_mobility.to_le_bytes());
+        buf.push(self.polarity);
+        buf.extend_from_slice(&[0u8; 79]);
+    }
+}
+
+fn extract_spec_filter_record(spectrum: &Spectrum) -> SpecFilterRecord {
+    let mut record = SpecFilterRecord::unknown();
 
     if let Some(sl) = &spectrum.scan_list
         && let Some(scan) = sl.scans.first()
@@ -149,10 +181,62 @@ fn extract_filter_record(spectrum: &Spectrum) -> FilterRecord {
     record
 }
 
-fn build_filter_index(spectra: &[Spectrum]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(spectra.len() * FILTER_INDEX_RECORD_SIZE);
+fn build_spec_filter_index(spectra: &[Spectrum]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(spectra.len() * SPEC_FILTER_RECORD_SIZE);
     for spectrum in spectra {
-        extract_filter_record(spectrum).write_into(&mut buf);
+        extract_spec_filter_record(spectrum).write_into(&mut buf);
+    }
+    buf
+}
+
+fn extract_chrom_filter_record(chrom: &Chromatogram) -> ChromFilterRecord {
+    let mut record = ChromFilterRecord::unknown();
+    for cv in &chrom.cv_params {
+        let tail = parse_accession_tail_raw(cv.accession.as_deref());
+        let val = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok());
+        match tail {
+            ACC_LOWEST_OBSERVED_MZ => {
+                if let Some(v) = val {
+                    record.lowest_mz = v;
+                }
+            }
+            ACC_HIGHEST_OBSERVED_MZ => {
+                if let Some(v) = val {
+                    record.highest_mz = v;
+                }
+            }
+            ACC_LOWEST_OBSERVED_WAVELENGTH => {
+                if let Some(v) = val {
+                    record.lowest_wavelength = v;
+                }
+            }
+            ACC_HIGHEST_OBSERVED_WAVELENGTH => {
+                if let Some(v) = val {
+                    record.highest_wavelength = v;
+                }
+            }
+            ACC_LOWEST_ION_MOBILITY => {
+                if let Some(v) = val {
+                    record.lowest_ion_mobility = v;
+                }
+            }
+            ACC_HIGHEST_ION_MOBILITY => {
+                if let Some(v) = val {
+                    record.highest_ion_mobility = v;
+                }
+            }
+            ACC_POSITIVE_SCAN => record.polarity = POLARITY_POSITIVE,
+            ACC_NEGATIVE_SCAN => record.polarity = POLARITY_NEGATIVE,
+            _ => {}
+        }
+    }
+    record
+}
+
+fn build_chrom_filter_index(chroms: &[Chromatogram]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(chroms.len() * CHROM_FILTER_RECORD_SIZE);
+    for chrom in chroms {
+        extract_chrom_filter_record(chrom).write_into(&mut buf);
     }
     buf
 }
@@ -212,7 +296,8 @@ impl<'o> Encoder<'o> {
         let chrom_meta_crc32 = crc32fast::hash(&compressed.chromatogram_bytes);
         let global_meta_crc32 = crc32fast::hash(&compressed.global_bytes);
 
-        let filter_index_bytes = build_filter_index(spectra);
+        let spec_filter_bytes = build_spec_filter_index(spectra);
+        let chrom_filter_bytes = build_chrom_filter_index(chroms);
 
         self.output.write_bytes(&[0u8; HEADER_SIZE])?;
 
@@ -227,9 +312,13 @@ impl<'o> Encoder<'o> {
             ),
         };
 
-        let offsets = self.write_all_sections(&spec_arrays, &chrom_arrays, &compressed)?;
-        let off_filter_index = write_aligned_section(self.output, &filter_index_bytes)?;
-        let len_filter_index = filter_index_bytes.len() as u64;
+        let offsets = self.write_all_sections(
+            &spec_filter_bytes,
+            &spec_arrays,
+            &chrom_filter_bytes,
+            &chrom_arrays,
+            &compressed,
+        )?;
 
         self.output.write_bytes(&FILE_TRAILER)?;
         let total_file_size = self.output.current_byte_position()?;
@@ -250,8 +339,10 @@ impl<'o> Encoder<'o> {
                 spec_meta_crc32,
                 chrom_meta_crc32,
                 global_meta_crc32,
-                off_filter_index,
-                len_filter_index,
+                off_spec_filter: offsets.offset_spec_filter,
+                len_spec_filter: spec_filter_bytes.len() as u64,
+                off_chrom_filter: offsets.offset_chrom_filter,
+                len_chrom_filter: chrom_filter_bytes.len() as u64,
             },
         );
 
@@ -280,13 +371,17 @@ impl<'o> Encoder<'o> {
 
     fn write_all_sections(
         &mut self,
+        spec_filter: &[u8],
         s: &PackedArraySection,
+        chrom_filter: &[u8],
         c: &PackedArraySection,
         m: &CompressedMetaSections,
     ) -> IonResult<SectionOffsets> {
         Ok(SectionOffsets {
+            offset_spec_filter: write_aligned_section(self.output, spec_filter)?,
             offset_spec_entries: write_aligned_section(self.output, &s.index_entries_bytes)?,
             offset_spec_arrayrefs: write_aligned_section(self.output, &s.array_refs_bytes)?,
+            offset_chrom_filter: write_aligned_section(self.output, chrom_filter)?,
             offset_chrom_entries: write_aligned_section(self.output, &c.index_entries_bytes)?,
             offset_chrom_arrayrefs: write_aligned_section(self.output, &c.array_refs_bytes)?,
             offset_spec_meta: write_aligned_section(self.output, &m.spectrum_bytes)?,
@@ -354,8 +449,10 @@ impl<'o> Encoder<'o> {
             chrom_meta_uncompressed_size: compressed.chromatogram_uncompressed_size,
             global_meta_uncompressed_size: compressed.global_uncompressed_size,
 
-            off_filter_index: info.off_filter_index,
-            len_filter_index: info.len_filter_index,
+            off_spec_filter: info.off_spec_filter,
+            len_spec_filter: info.len_spec_filter,
+            off_chrom_filter: info.off_chrom_filter,
+            len_chrom_filter: info.len_chrom_filter,
 
             total_file_size: info.total_file_size,
 
@@ -449,8 +546,10 @@ impl EncodingConfig {
 }
 
 struct SectionOffsets {
+    offset_spec_filter: u64,
     offset_spec_entries: u64,
     offset_spec_arrayrefs: u64,
+    offset_chrom_filter: u64,
     offset_chrom_entries: u64,
     offset_chrom_arrayrefs: u64,
     offset_spec_meta: u64,
@@ -467,8 +566,10 @@ struct HeaderInfo {
     spec_meta_crc32: u32,
     chrom_meta_crc32: u32,
     global_meta_crc32: u32,
-    off_filter_index: u64,
-    len_filter_index: u64,
+    off_spec_filter: u64,
+    len_spec_filter: u64,
+    off_chrom_filter: u64,
+    len_chrom_filter: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -936,16 +1037,16 @@ mod tests {
     }
 
     #[test]
-    fn filter_index_record_size_is_correct() {
+    fn spec_filter_record_size_is_correct() {
         let mut buf = Vec::new();
-        FilterRecord::unknown().write_into(&mut buf);
-        assert_eq!(buf.len(), FILTER_INDEX_RECORD_SIZE);
+        SpecFilterRecord::unknown().write_into(&mut buf);
+        assert_eq!(buf.len(), SPEC_FILTER_RECORD_SIZE);
     }
 
     #[test]
-    fn filter_index_unknown_record_is_all_nan_and_zero() {
+    fn spec_filter_unknown_record_is_all_nan_and_zero() {
         let mut buf = Vec::new();
-        FilterRecord::unknown().write_into(&mut buf);
+        SpecFilterRecord::unknown().write_into(&mut buf);
         for i in (0..40).step_by(8) {
             let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
             assert!(v.is_nan());
@@ -955,11 +1056,75 @@ mod tests {
     }
 
     #[test]
-    fn filter_index_len_matches_spectrum_count() {
+    fn spec_filter_index_len_matches_spectrum_count() {
         let mzml = MzML::default();
         let spectra = Encoder::spectra(&mzml);
-        let index = build_filter_index(spectra);
-        assert_eq!(index.len(), spectra.len() * FILTER_INDEX_RECORD_SIZE);
+        let index = build_spec_filter_index(spectra);
+        assert_eq!(index.len(), spectra.len() * SPEC_FILTER_RECORD_SIZE);
+    }
+
+    #[test]
+    fn chrom_filter_record_size_is_correct() {
+        let mut buf = Vec::new();
+        ChromFilterRecord::unknown().write_into(&mut buf);
+        assert_eq!(buf.len(), CHROM_FILTER_RECORD_SIZE);
+    }
+
+    #[test]
+    fn chrom_filter_unknown_record_is_all_nan_and_zero() {
+        let mut buf = Vec::new();
+        ChromFilterRecord::unknown().write_into(&mut buf);
+        for i in (0..48).step_by(8) {
+            let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
+            assert!(v.is_nan());
+        }
+        assert_eq!(buf[48], 0);
+    }
+
+    #[test]
+    fn chrom_filter_index_len_matches_chrom_count() {
+        let mzml = MzML::default();
+        let chroms = Encoder::chromatograms(&mzml);
+        let index = build_chrom_filter_index(chroms);
+        assert_eq!(index.len(), chroms.len() * CHROM_FILTER_RECORD_SIZE);
+    }
+
+    #[test]
+    fn chrom_filter_record_extracts_cv_values() {
+        use crate::mzml::structs::{CvParam, Chromatogram};
+
+        fn cv(accession: &str, value: &str) -> CvParam {
+            CvParam {
+                accession: Some(accession.to_string()),
+                value: Some(value.to_string()),
+                ..Default::default()
+            }
+        }
+
+        let chrom = Chromatogram {
+            cv_params: vec![
+                cv("MS:1000528", "100.5"),
+                cv("MS:1000527", "999.9"),
+                cv("MS:1000619", "200.0"),
+                cv("MS:1000618", "800.0"),
+                cv("MS:1003437", "0.5"),
+                cv("MS:1003438", "2.5"),
+                CvParam {
+                    accession: Some("MS:1000130".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let rec = extract_chrom_filter_record(&chrom);
+        assert_eq!(rec.lowest_mz, 100.5);
+        assert_eq!(rec.highest_mz, 999.9);
+        assert_eq!(rec.lowest_wavelength, 200.0);
+        assert_eq!(rec.highest_wavelength, 800.0);
+        assert_eq!(rec.lowest_ion_mobility, 0.5);
+        assert_eq!(rec.highest_ion_mobility, 2.5);
+        assert_eq!(rec.polarity, 1);
     }
 
     #[test]
