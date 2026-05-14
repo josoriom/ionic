@@ -195,7 +195,7 @@ fn delta_mz_special_values_are_bit_exact() {
 
 #[test]
 fn delta_mz_via_for_each_scan_is_bit_exact() {
-    use ionic::SpectrumSource;
+    use ionic::ScanSource;
     use ionic::decoder::decode::Ion;
     let input: Vec<f64> = (0..500).map(|i| 100.0 + i as f64 * 0.05).collect();
     let intensity: Vec<f64> = vec![1.0; input.len()];
@@ -219,7 +219,7 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
     let buf = encode_to_ion(&mzml, 3, false);
     let mut ion = Ion::open(&buf, DecoderConfig::default()).unwrap();
     let mut got_mz: Vec<f64> = Vec::new();
-    ion.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |_, _, mz: &[f64], _| {
+    ion.for_each_in_range(0.0, f64::MAX, 0, |_, mz: &[f64], _| {
         got_mz = mz.to_vec();
     });
     assert_eq!(got_mz.len(), input.len());

@@ -5,6 +5,7 @@ use crate::{
     ion::encoder::utilities::{
         CompressionMode, ContainerBuilder, DefaultCompressor, FilterType, delta_filter,
     },
+    ion::utilities::spectrum_source::summary_from_spectrum,
     mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
 };
 
@@ -37,21 +38,14 @@ pub(crate) const FILE_DTYPE_I16: u8 = 4;
 pub(crate) const FILE_DTYPE_I32: u8 = 5;
 pub(crate) const FILE_DTYPE_I64: u8 = 6;
 
-const ACC_SCAN_START_TIME: u32 = 1_000_016;
-const ACC_BASE_PEAK_MZ: u32 = 1_000_504;
-const ACC_BASE_PEAK_INTENSITY: u32 = 1_000_505;
-const ACC_TOTAL_ION_CURRENT: u32 = 1_000_285;
-const ACC_MS_LEVEL: u32 = 1_000_511;
-const ACC_POSITIVE_SCAN: u32 = 1_000_130;
-const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
-const ACC_UNIT_MINUTE: u32 = 31;
-const ACC_SELECTED_ION_MZ: u32 = 1_000_744;
 const ACC_HIGHEST_OBSERVED_MZ: u32 = 1_000_527;
 const ACC_LOWEST_OBSERVED_MZ: u32 = 1_000_528;
 const ACC_HIGHEST_OBSERVED_WAVELENGTH: u32 = 1_000_618;
 const ACC_LOWEST_OBSERVED_WAVELENGTH: u32 = 1_000_619;
 const ACC_LOWEST_ION_MOBILITY: u32 = 1_003_437;
 const ACC_HIGHEST_ION_MOBILITY: u32 = 1_003_438;
+const ACC_POSITIVE_SCAN: u32 = 1_000_130;
+const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
 
 const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
@@ -64,6 +58,7 @@ pub enum WritingMode {
 }
 
 impl SpecFilterRecord {
+    #[cfg(test)]
     fn unknown() -> Self {
         Self {
             rt_seconds: f64::NAN,
@@ -113,78 +108,23 @@ impl ChromFilterRecord {
     }
 }
 
-fn extract_spec_filter_record(spectrum: &Spectrum) -> SpecFilterRecord {
-    let mut record = SpecFilterRecord::unknown();
-
-    if let Some(sl) = &spectrum.scan_list
-        && let Some(scan) = sl.scans.first()
-    {
-        for cv in &scan.cv_params {
-            let tail = parse_accession_tail_raw(cv.accession.as_deref());
-            if tail == ACC_SCAN_START_TIME
-                && let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
-            {
-                let unit = parse_accession_tail_raw(cv.unit_accession.as_deref());
-                record.rt_seconds = if unit == ACC_UNIT_MINUTE {
-                    val * 60.0
-                } else {
-                    val
-                };
-            }
-        }
+fn spec_filter_record_from_spectrum(spectrum: &Spectrum) -> SpecFilterRecord {
+    let summary = summary_from_spectrum(spectrum);
+    SpecFilterRecord {
+        rt_seconds: summary.rt * 60.0,
+        base_peak_mz: summary.base_peak_mz,
+        selected_ion_mz: summary.selected_ion_mz,
+        base_peak_int: summary.base_peak_int,
+        total_ion_current: summary.total_ion_current,
+        ms_level: summary.ms_level,
+        polarity: summary.polarity,
     }
-
-    if let Some(pl) = &spectrum.precursor_list
-        && let Some(precursor) = pl.precursors.first()
-        && let Some(sil) = &precursor.selected_ion_list
-        && let Some(si) = sil.selected_ions.first()
-    {
-        for cv in &si.cv_params {
-            let tail = parse_accession_tail_raw(cv.accession.as_deref());
-            if tail == ACC_SELECTED_ION_MZ
-                && let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok())
-            {
-                record.selected_ion_mz = val;
-            }
-        }
-    }
-
-    for cv in &spectrum.cv_params {
-        let tail = parse_accession_tail_raw(cv.accession.as_deref());
-        match tail {
-            ACC_BASE_PEAK_MZ => {
-                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
-                    record.base_peak_mz = val;
-                }
-            }
-            ACC_BASE_PEAK_INTENSITY => {
-                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
-                    record.base_peak_int = val;
-                }
-            }
-            ACC_TOTAL_ION_CURRENT => {
-                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok()) {
-                    record.total_ion_current = val;
-                }
-            }
-            ACC_MS_LEVEL => {
-                if let Some(val) = cv.value.as_deref().and_then(|v| v.parse::<u8>().ok()) {
-                    record.ms_level = val;
-                }
-            }
-            ACC_POSITIVE_SCAN => record.polarity = POLARITY_POSITIVE,
-            ACC_NEGATIVE_SCAN => record.polarity = POLARITY_NEGATIVE,
-            _ => {}
-        }
-    }
-
-    record
 }
 
 fn build_spec_filter_index(spectra: &[Spectrum]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(spectra.len() * SPEC_FILTER_RECORD_SIZE);
     for spectrum in spectra {
-        extract_spec_filter_record(spectrum).write_into(&mut buf);
+        spec_filter_record_from_spectrum(spectrum).write_into(&mut buf);
     }
     buf
 }
@@ -267,8 +207,8 @@ impl<'o> Encoder<'o> {
             0
         };
 
-        let spec_policy = self.config.spectrum_array_policy();
-        let chrom_policy = self.config.chromatogram_array_policy();
+        let spec_policy = self.config.array_policy(ACCESSION_MZ_ARRAY);
+        let chrom_policy = self.config.array_policy(ACCESSION_TIME_ARRAY);
 
         let spectrum_meta = collector.collect_item_list_meta(
             spectra,
@@ -528,17 +468,9 @@ impl EncodingConfig {
         }
     }
 
-    fn spectrum_array_policy(self) -> ArrayPolicy {
+    fn array_policy(self, x_array_accession: u32) -> ArrayPolicy {
         ArrayPolicy {
-            x_array_accession: ACCESSION_MZ_ARRAY,
-            y_array_accession: ACCESSION_INTENSITY_ARRAY,
-            force_f32: self.force_f32,
-        }
-    }
-
-    fn chromatogram_array_policy(self) -> ArrayPolicy {
-        ArrayPolicy {
-            x_array_accession: ACCESSION_TIME_ARRAY,
+            x_array_accession,
             y_array_accession: ACCESSION_INTENSITY_ARRAY,
             force_f32: self.force_f32,
         }
@@ -1091,7 +1023,7 @@ mod tests {
 
     #[test]
     fn chrom_filter_record_extracts_cv_values() {
-        use crate::mzml::structs::{CvParam, Chromatogram};
+        use crate::mzml::structs::{Chromatogram, CvParam};
 
         fn cv(accession: &str, value: &str) -> CvParam {
             CvParam {
@@ -1136,12 +1068,12 @@ mod tests {
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
         };
-        let sp = config.spectrum_array_policy();
+        let sp = config.array_policy(ACCESSION_MZ_ARRAY);
         assert_eq!(sp.x_array_accession, ACCESSION_MZ_ARRAY);
         assert_eq!(sp.y_array_accession, ACCESSION_INTENSITY_ARRAY);
         assert!(sp.force_f32);
 
-        let cp = config.chromatogram_array_policy();
+        let cp = config.array_policy(ACCESSION_TIME_ARRAY);
         assert_eq!(cp.x_array_accession, ACCESSION_TIME_ARRAY);
         assert_eq!(cp.y_array_accession, ACCESSION_INTENSITY_ARRAY);
     }

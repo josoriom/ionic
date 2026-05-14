@@ -16,13 +16,12 @@ use crate::ion::encoder::encode::{
 };
 use crate::ion::encoder::utilities::container_builder::FilterType;
 use crate::ion::encoder::utilities::delta_filter;
-use crate::ion::utilities::spectrum_source::ScanMeta;
 use crate::ion::utilities::{
     container_view::{ContainerAccess, ContainerView, DefaultProcessor},
     parse_header::{Header, parse_header},
     spectrum_source::{
-        ScanSource, ScanSummary, SpectrumSource, f16_bits_to_f64, for_each_spectra_in_range,
-        scan_at_from_spectra, summary_from_spectra,
+        ScanSource, ScanSummary, f16_bits_to_f64, load_scan_from_spectra, summary_from_spectra,
+        summary_from_spectrum,
     },
 };
 use crate::ion::{IonError, IonResult};
@@ -71,15 +70,22 @@ pub(crate) struct Metadatum {
 }
 
 #[inline]
-pub(crate) fn slice_at<'a>(bytes: &'a [u8], off: u64, len: u64, f: &str) -> IonResult<&'a [u8]> {
+pub(crate) fn slice_at<'a>(
+    bytes: &'a [u8],
+    off: u64,
+    len: u64,
+    context: &str,
+) -> IonResult<&'a [u8]> {
     let end = off
         .checked_add(len)
-        .ok_or_else(|| IonError::from(format!("{f}: range error")))?;
-    let start = usize::try_from(off).map_err(|_| IonError::from(format!("{f}: range error")))?;
-    let end = usize::try_from(end).map_err(|_| IonError::from(format!("{f}: range error")))?;
+        .ok_or_else(|| IonError::from(format!("{context}: range error")))?;
+    let start =
+        usize::try_from(off).map_err(|_| IonError::from(format!("{context}: range error")))?;
+    let end =
+        usize::try_from(end).map_err(|_| IonError::from(format!("{context}: range error")))?;
     bytes
         .get(start..end)
-        .ok_or_else(|| IonError::from(format!("{f}: range error")))
+        .ok_or_else(|| IonError::from(format!("{context}: range error")))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -204,11 +210,11 @@ impl<'a> Decoder<'a> {
             let end = off
                 .checked_add(len)
                 .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
-            let cb = bytes
+            let container_bytes = bytes
                 .get(off..end)
                 .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
             Some(ContainerView::with_max_cached_bytes(
-                cb,
+                container_bytes,
                 header.chrom_block_count,
                 header.compression_level,
                 filter,
@@ -589,7 +595,9 @@ impl<'a> Ion<'a> {
     pub fn spec_filter_records(&self) -> IonResult<Vec<SpecFilterRecord>> {
         self.backend
             .as_decoder()
-            .ok_or_else(|| IonError::from("spec filter records are unavailable for mzML-backed Ion"))
+            .ok_or_else(|| {
+                IonError::from("spec filter records are unavailable for mzML-backed Ion")
+            })
             .and_then(|d| d.spec_filter_records())
     }
 
@@ -603,7 +611,9 @@ impl<'a> Ion<'a> {
     pub fn chrom_filter_records(&self) -> IonResult<Vec<ChromFilterRecord>> {
         self.backend
             .as_decoder()
-            .ok_or_else(|| IonError::from("chrom filter records are unavailable for mzML-backed Ion"))
+            .ok_or_else(|| {
+                IonError::from("chrom filter records are unavailable for mzML-backed Ion")
+            })
             .and_then(|d| d.chrom_filter_records())
     }
 
@@ -652,92 +662,8 @@ impl<'a> Ion<'a> {
     }
 }
 
-impl<'a> SpectrumSource for Ion<'a> {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
-    ) {
-        if let IonBackend::Decoder(decoder) = &mut self.backend {
-            decoder.for_each_scan_in_range(rt_min, rt_max, ms_level, callback);
-            return;
-        }
-        if let Some(list) = self.run.spectrum_list.as_ref() {
-            for_each_spectra_in_range(&list.spectra, rt_min, rt_max, ms_level, callback);
-        }
-    }
-}
-
-impl<'a> SpectrumSource for Decoder<'a> {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
-    ) {
-        let Some(filter_bytes) =
-            self.header
-                .len_spec_filter
-                .try_into()
-                .ok()
-                .and_then(|len: usize| {
-                    usize::try_from(self.header.off_spec_filter)
-                        .ok()
-                        .and_then(|off| {
-                            off.checked_add(len)
-                                .and_then(|end| self.bytes.get(off..end))
-                        })
-                })
-        else {
-            return;
-        };
-
-        let count = match usize::try_from(self.header.spectrum_count) {
-            Ok(count) => count,
-            Err(_) => return,
-        };
-        let Some(entry_bytes) = count.checked_mul(INDEX_ENTRY_BYTES).and_then(|len| {
-            usize::try_from(self.header.off_spec_entries)
-                .ok()
-                .and_then(|off| {
-                    off.checked_add(len)
-                        .and_then(|end| self.bytes.get(off..end))
-                })
-        }) else {
-            return;
-        };
-
-        let aref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
-            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
-            Err(_) => return,
-        };
-
-        let (container, mz_buf, int_buf) = (
-            &mut self.spec_container as &mut dyn ContainerAccess,
-            &mut self.mz_buf,
-            &mut self.int_buf,
-        );
-
-        ScanIterator::new(
-            filter_bytes,
-            entry_bytes,
-            aref_bytes,
-            container,
-            mz_buf,
-            int_buf,
-            rt_min * 60.0,
-            rt_max * 60.0,
-            ms_level,
-        )
-        .run(callback);
-    }
-}
-
 impl ScanSource for Decoder<'_> {
-    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+    fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
         let Some(filter_bytes) =
             usize::try_from(self.header.off_spec_filter)
                 .ok()
@@ -756,17 +682,17 @@ impl ScanSource for Decoder<'_> {
             .chunks_exact(SPEC_FILTER_RECORD_SIZE)
             .enumerate()
         {
-            let rec = parse_spec_filter_record(chunk);
-            cb(
+            let record = parse_spec_filter_record(chunk);
+            callback(
                 index,
                 ScanSummary {
-                    rt: rec.rt_seconds / 60.0,
-                    base_peak_mz: rec.base_peak_mz,
-                    selected_ion_mz: rec.selected_ion_mz,
-                    base_peak_int: rec.base_peak_int,
-                    total_ion_current: rec.total_ion_current,
-                    ms_level: rec.ms_level,
-                    polarity: rec.polarity,
+                    rt: record.rt_seconds / 60.0,
+                    base_peak_mz: record.base_peak_mz,
+                    selected_ion_mz: record.selected_ion_mz,
+                    base_peak_int: record.base_peak_int,
+                    total_ion_current: record.total_ion_current,
+                    ms_level: record.ms_level,
+                    polarity: record.polarity,
                 },
             );
         }
@@ -790,7 +716,7 @@ impl ScanSource for Decoder<'_> {
         }) else {
             return false;
         };
-        let aref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
+        let array_ref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
             Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
             Err(_) => return false,
         };
@@ -798,7 +724,7 @@ impl ScanSource for Decoder<'_> {
         let Some(entry) = all_entries.get(entry_start..entry_start + INDEX_ENTRY_BYTES) else {
             return false;
         };
-        let Some((mz_ref, int_ref)) = parse_array_pair(entry, aref_bytes) else {
+        let Some((mz_ref, int_ref)) = parse_array_pair(entry, array_ref_bytes) else {
             return false;
         };
         if !decode_from_block(&mut self.spec_container, mz, &mz_ref) {
@@ -809,15 +735,73 @@ impl ScanSource for Decoder<'_> {
         }
         mz.len().min(intensity.len()) > 0
     }
+
+    fn for_each_in_range<F>(&mut self, rt_min: f64, rt_max: f64, ms_level: u8, mut callback: F)
+    where
+        Self: Sized,
+        F: FnMut(&ScanSummary, &[f64], &[f64]),
+    {
+        let Some(filter_bytes) =
+            self.header
+                .len_spec_filter
+                .try_into()
+                .ok()
+                .and_then(|len: usize| {
+                    usize::try_from(self.header.off_spec_filter)
+                        .ok()
+                        .and_then(|off| {
+                            off.checked_add(len)
+                                .and_then(|end| self.bytes.get(off..end))
+                        })
+                })
+        else {
+            return;
+        };
+        let count = match usize::try_from(self.header.spectrum_count) {
+            Ok(count) => count,
+            Err(_) => return,
+        };
+        let Some(entry_bytes) = count.checked_mul(INDEX_ENTRY_BYTES).and_then(|len| {
+            usize::try_from(self.header.off_spec_entries)
+                .ok()
+                .and_then(|off| {
+                    off.checked_add(len)
+                        .and_then(|end| self.bytes.get(off..end))
+                })
+        }) else {
+            return;
+        };
+        let array_ref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
+            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
+            Err(_) => return,
+        };
+        let (container, mz_buf, int_buf) = (
+            &mut self.spec_container as &mut dyn ContainerAccess,
+            &mut self.mz_buf,
+            &mut self.int_buf,
+        );
+        ScanIterator::new(
+            filter_bytes,
+            entry_bytes,
+            array_ref_bytes,
+            container,
+            mz_buf,
+            int_buf,
+            rt_min * 60.0,
+            rt_max * 60.0,
+            ms_level,
+        )
+        .run(&mut callback);
+    }
 }
 
 impl<'a> ScanSource for Ion<'a> {
-    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+    fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
         match &mut self.backend {
-            IonBackend::Decoder(decoder) => decoder.for_each_summary(cb),
+            IonBackend::Decoder(decoder) => decoder.for_each_summary(callback),
             IonBackend::Materialized => {
                 if let Some(list) = self.run.spectrum_list.as_ref() {
-                    summary_from_spectra(&list.spectra, cb);
+                    summary_from_spectra(&list.spectra, callback);
                 }
             }
         }
@@ -833,7 +817,42 @@ impl<'a> ScanSource for Ion<'a> {
                     .as_ref()
                     .map(|l| l.spectra.as_slice())
                     .unwrap_or_default();
-                scan_at_from_spectra(spectra, index, mz, intensity)
+                load_scan_from_spectra(spectra, index, mz, intensity)
+            }
+        }
+    }
+
+    fn for_each_in_range<F>(&mut self, rt_min: f64, rt_max: f64, ms_level: u8, callback: F)
+    where
+        Self: Sized,
+        F: FnMut(&ScanSummary, &[f64], &[f64]),
+    {
+        match &mut self.backend {
+            IonBackend::Decoder(decoder) => {
+                decoder.for_each_in_range(rt_min, rt_max, ms_level, callback);
+            }
+            IonBackend::Materialized => {
+                let spectra = self
+                    .run
+                    .spectrum_list
+                    .as_ref()
+                    .map(|l| l.spectra.as_slice())
+                    .unwrap_or_default();
+                let mut mz = Vec::new();
+                let mut intensity = Vec::new();
+                let mut cb = callback;
+                for (index, spectrum) in spectra.iter().enumerate() {
+                    let summary = summary_from_spectrum(spectrum);
+                    if summary.rt < rt_min
+                        || summary.rt > rt_max
+                        || (ms_level != 0 && summary.ms_level != ms_level)
+                    {
+                        continue;
+                    }
+                    if load_scan_from_spectra(spectra, index, &mut mz, &mut intensity) {
+                        cb(&summary, &mz, &intensity);
+                    }
+                }
             }
         }
     }
@@ -996,22 +1015,23 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    fn run(&mut self, callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64])) {
+    fn run<F>(&mut self, callback: &mut F)
+    where
+        F: FnMut(&ScanSummary, &[f64], &[f64]),
+    {
         for (filter_bytes, entry_bytes) in
             self.filter_chunks.by_ref().zip(self.entry_chunks.by_ref())
         {
-            let rec = parse_spec_filter_record(filter_bytes);
-            if !rec.rt_seconds.is_finite()
-                || rec.rt_seconds < self.rt_min_s
-                || rec.rt_seconds > self.rt_max_s
+            let record = parse_spec_filter_record(filter_bytes);
+            if !record.rt_seconds.is_finite()
+                || record.rt_seconds < self.rt_min_s
+                || record.rt_seconds > self.rt_max_s
             {
                 continue;
             }
-            if self.ms_level != 0 && rec.ms_level != self.ms_level {
+            if self.ms_level != 0 && record.ms_level != self.ms_level {
                 continue;
             }
-
             let Some((mz_ref, int_ref)) = parse_array_pair(entry_bytes, self.aref_bytes) else {
                 continue;
             };
@@ -1021,26 +1041,20 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
             if !decode_from_block(self.container, self.int_buf, &int_ref) {
                 continue;
             }
-
             let len = self.mz_buf.len().min(self.int_buf.len());
             if len == 0 {
                 continue;
             }
-
-            let meta = ScanMeta {
-                ms_level: rec.ms_level,
-                polarity: rec.polarity,
-                base_peak_mz: rec.base_peak_mz,
-                selected_ion_mz: rec.selected_ion_mz,
-                base_peak_int: rec.base_peak_int,
-                total_ion_current: rec.total_ion_current,
+            let summary = ScanSummary {
+                rt: record.rt_seconds / 60.0,
+                ms_level: record.ms_level,
+                polarity: record.polarity,
+                base_peak_mz: record.base_peak_mz,
+                selected_ion_mz: record.selected_ion_mz,
+                base_peak_int: record.base_peak_int,
+                total_ion_current: record.total_ion_current,
             };
-            callback(
-                rec.rt_seconds / 60.0,
-                &meta,
-                &self.mz_buf[..len],
-                &self.int_buf[..len],
-            );
+            callback(&summary, &self.mz_buf[..len], &self.int_buf[..len]);
         }
     }
 }
@@ -1154,7 +1168,9 @@ fn read_array_refs_at(
     aref_base: usize,
     index: usize,
 ) -> Option<ArrayRefs> {
-    let entry_offset = index.checked_mul(INDEX_ENTRY_BYTES)?.checked_add(entry_base)?;
+    let entry_offset = index
+        .checked_mul(INDEX_ENTRY_BYTES)?
+        .checked_add(entry_base)?;
     let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
     let entry = bytes.get(entry_offset..entry_end)?;
     let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
@@ -1400,7 +1416,7 @@ fn attach_binaries<E: BinaryArrayOwner>(
 }
 
 fn attach_array(
-    bdal: &mut BinaryDataArrayList,
+    binary_array_list: &mut BinaryDataArrayList,
     array_type: u32,
     dtype: u8,
     raw: &[u8],
@@ -1408,19 +1424,21 @@ fn attach_array(
 ) -> IonResult<()> {
     let binary = raw_to_binary_data(raw, dtype, array_filter)?;
     let numeric_type = dtype_to_numeric_type(dtype)?;
-    let found = bdal
+    let found = binary_array_list
         .binary_data_arrays
         .iter_mut()
-        .find(|array| bda_matches(array, array_type));
-    let bda = match found {
+        .find(|array| binary_array_has_type(array, array_type));
+    let binary_array = match found {
         Some(existing) => existing,
         None => {
-            bdal.binary_data_arrays.push(make_bda_stub(array_type));
-            bdal.binary_data_arrays.last_mut().unwrap()
+            binary_array_list
+                .binary_data_arrays
+                .push(make_binary_array_stub(array_type));
+            binary_array_list.binary_data_arrays.last_mut().unwrap()
         }
     };
-    bda.binary = Some(binary);
-    sync_numeric_meta(bda, numeric_type);
+    binary_array.binary = Some(binary);
+    sync_numeric_meta(binary_array, numeric_type);
     Ok(())
 }
 
@@ -1485,11 +1503,11 @@ fn dtype_to_numeric_type(dtype: u8) -> IonResult<NumericType> {
     }
 }
 
-fn make_bda_stub(acc: u32) -> BinaryDataArray {
+fn make_binary_array_stub(array_type: u32) -> BinaryDataArray {
     BinaryDataArray {
         cv_params: vec![CvParam {
             cv_ref: Some("MS".to_string()),
-            accession: Some(format!("MS:{acc:07}")),
+            accession: Some(format!("MS:{array_type:07}")),
             name: String::new(),
             ..Default::default()
         }],
@@ -1498,8 +1516,8 @@ fn make_bda_stub(acc: u32) -> BinaryDataArray {
 }
 
 #[inline]
-fn sync_numeric_meta(bda: &mut BinaryDataArray, nt: NumericType) {
-    let target = match nt {
+fn sync_numeric_meta(binary_array: &mut BinaryDataArray, numeric_type: NumericType) {
+    let target = match numeric_type {
         NumericType::Float16 => 1_000_520,
         NumericType::Float32 => 1_000_521,
         NumericType::Float64 => 1_000_523,
@@ -1507,9 +1525,10 @@ fn sync_numeric_meta(bda: &mut BinaryDataArray, nt: NumericType) {
         NumericType::Int32 => 1_000_519,
         NumericType::Int64 => 1_000_522,
     };
-    bda.cv_params
+    binary_array
+        .cv_params
         .retain(|param| !is_numeric_acc(parse_accession_tail(param.accession.as_deref())));
-    bda.cv_params.push(CvParam {
+    binary_array.cv_params.push(CvParam {
         cv_ref: Some("MS".into()),
         accession: Some(format!("MS:{target:07}")),
         name: match target {
@@ -1522,7 +1541,7 @@ fn sync_numeric_meta(bda: &mut BinaryDataArray, nt: NumericType) {
         .into(),
         ..Default::default()
     });
-    bda.numeric_type = Some(nt);
+    binary_array.numeric_type = Some(numeric_type);
 }
 
 #[inline]
@@ -1531,10 +1550,11 @@ fn is_numeric_acc(tail: crate::ion::attr_meta::AccessionTail) -> bool {
 }
 
 #[inline]
-fn bda_matches(bda: &BinaryDataArray, kind: u32) -> bool {
-    bda.cv_params
+fn binary_array_has_type(binary_array: &BinaryDataArray, array_type: u32) -> bool {
+    binary_array
+        .cv_params
         .iter()
-        .any(|param| parse_accession_tail(param.accession.as_deref()).raw() == kind)
+        .any(|param| parse_accession_tail(param.accession.as_deref()).raw() == array_type)
 }
 
 fn parse_run_source_file_refs(
@@ -1630,8 +1650,8 @@ mod tests {
     fn for_each_scan_yields_matching_scans() {
         let mut d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let mut count = 0usize;
-        d.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, _, mz, int| {
-            assert!(rt.is_finite());
+        d.for_each_in_range(0.0, f64::MAX, 0, |summary, mz, int| {
+            assert!(summary.rt.is_finite());
             assert!(!mz.is_empty());
             assert_eq!(mz.len(), int.len());
             count += 1;
@@ -1643,7 +1663,7 @@ mod tests {
     fn for_each_scan_filters_by_ms_level() {
         let mut d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let mut count = 0usize;
-        d.for_each_scan_in_range(0.0, f64::MAX, 1, &mut |_, _, _, _| {
+        d.for_each_in_range(0.0, f64::MAX, 1, |_, _, _| {
             count += 1;
         });
         let expected = (0..d.spectrum_count() as usize)
@@ -1735,8 +1755,8 @@ mod tests {
     fn ion_for_each_scan_yields_scans() {
         let mut ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
         let mut count = 0usize;
-        ion.for_each_scan_in_range(0.0, f64::MAX, 0, &mut |rt, _, mz, int| {
-            assert!(rt.is_finite());
+        ion.for_each_in_range(0.0, f64::MAX, 0, |summary, mz, int| {
+            assert!(summary.rt.is_finite());
             assert!(!mz.is_empty());
             assert_eq!(mz.len(), int.len());
             count += 1;

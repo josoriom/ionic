@@ -472,6 +472,23 @@ pub enum BinaryData {
     I16(Vec<i16>),
 }
 
+impl BinaryData {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F64(v) => v.len(),
+            Self::F32(v) => v.len(),
+            Self::F16(v) => v.len(),
+            Self::I64(v) => v.len(),
+            Self::I32(v) => v.len(),
+            Self::I16(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BinaryDataArray {
     pub array_length: Option<usize>,
