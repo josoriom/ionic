@@ -26,6 +26,10 @@ use ionic::{
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 
+mod utilities;
+
+use utilities::check_ion_file;
+
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -46,7 +50,7 @@ const AFTER_HELP: &str = "
                -i, --input-path DIR
                -o, --output-path DIR
 
-  \x1b[96mionic cat\x1b[0m PATH
+  \x1b[96mionic cat\x1b[0m [--check] PATH
 
 \x1b[1;32mOPTIONS:\x1b[0m
   \x1b[96m-h\x1b[0m, \x1b[96m--help\x1b[0m
@@ -170,6 +174,9 @@ struct CatArgs {
 
     #[arg(long = "full", short = 'f', action = ArgAction::SetTrue, default_value_t = false)]
     full: bool,
+
+    #[arg(long = "check", action = ArgAction::SetTrue, default_value_t = false, conflicts_with = "full")]
+    check: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -203,6 +210,9 @@ fn print_json_full<T: Serialize>(v: &T) -> Result<(), String> {
 fn cat(cmd: CatArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
     let file_path = resolve_user_path(&cwd, &cmd.file_path);
+    if cmd.check {
+        return check_ion_file(&file_path);
+    }
     let mut mzml = read_mzml_or_ion(&file_path)?;
     if !cmd.full {
         trim_mzml_for_cat(&mut mzml);
@@ -626,12 +636,14 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
             let name = basename(&out_path);
 
-            let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-            println!(
-                "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
-                n, total, name, in_mb, out_mb, elapsed_s
-            );
-            let _ = stdout().flush();
+            {
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                println!(
+                    "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
+                    n, total, name, in_mb, out_mb, elapsed_s
+                );
+                let _ = stdout().flush();
+            }
         };
 
         pool.install(|| match encoding {

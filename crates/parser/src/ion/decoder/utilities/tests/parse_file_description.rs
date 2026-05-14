@@ -41,8 +41,8 @@ fn parse_global_metadata_from_test_file() -> Vec<Metadatum> {
         slice,
         0,
         header.global_meta_count,
-        header.global_meta_num_count,
-        header.global_meta_str_count,
+        header.global_meta_numeric_count,
+        header.global_meta_string_count,
         header.compression_codec,
         header.global_meta_uncompressed_bytes,
     )

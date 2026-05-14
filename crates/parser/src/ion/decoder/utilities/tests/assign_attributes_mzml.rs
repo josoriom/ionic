@@ -48,8 +48,8 @@ fn spectra_meta_from_test_ion() -> Vec<Metadatum> {
         &bytes[c0..c1],
         header.spectrum_count,
         header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
+        header.spec_meta_numeric_count,
+        header.spec_meta_string_count,
         header.compression_codec,
         expected,
     )

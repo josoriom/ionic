@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::encoder::encode::FILTER_INDEX_RECORD_SIZE;
+use crate::encoder::encode::{CHROM_FILTER_RECORD_SIZE, SPEC_FILTER_RECORD_SIZE};
 use crate::ion::attr_meta::ACC_ATTR_DEFAULT_SOURCE_FILE_REF;
 use crate::ion::encoder::encode::{
     FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32, FILE_DTYPE_I64,
@@ -42,13 +42,13 @@ use crate::ion::{
         parse_sample_list, parse_scan_settings_list, parse_software_list, parse_spectrum_list,
     },
 };
-use crate::mzml::structs::FilterRecord;
+use crate::mzml::structs::{ChromFilterRecord, SpecFilterRecord};
 use crate::mzml::{schema::TagId, structs::*};
 
 const ACC_MZ: u32 = 1_000_514;
 const ACC_INT: u32 = 1_000_515;
-const ENTRY_A_BYTES: usize = 16;
-const ENTRY_A1_BYTES: usize = 32;
+const INDEX_ENTRY_BYTES: usize = 16;
+const ARRAY_REF_BYTES: usize = 32;
 const DEFAULT_MAX_CACHED_BYTES: usize = 256 * 1024 * 1024;
 const INLINE_ARRAY_REF_CAP: usize = 8;
 
@@ -171,12 +171,12 @@ impl DerefMut for OwnedIon {
 impl<'a> Decoder<'a> {
     pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
-        let filter = FilterType::try_from(header.array_filter).unwrap_or(FilterType::None);
+        let filter = FilterType::try_from(header.default_array_filter).unwrap_or(FilterType::None);
 
         let spec_container = {
-            let off = usize::try_from(header.off_container_spect)
+            let off = usize::try_from(header.off_spec_container)
                 .map_err(|_| IonError::from("spectrum container out of bounds"))?;
-            let len = usize::try_from(header.len_container_spect)
+            let len = usize::try_from(header.len_spec_container)
                 .map_err(|_| IonError::from("spectrum container out of bounds"))?;
             let end = off
                 .checked_add(len)
@@ -186,7 +186,7 @@ impl<'a> Decoder<'a> {
                 .ok_or_else(|| IonError::from("spectrum container out of bounds"))?;
             ContainerView::with_max_cached_bytes(
                 cb,
-                header.block_count_spect,
+                header.spec_block_count,
                 header.compression_level,
                 filter,
                 config.verify_checksums,
@@ -196,10 +196,10 @@ impl<'a> Decoder<'a> {
             )?
         };
 
-        let chrom_container = if header.block_count_chrom > 0 && header.len_container_chrom > 0 {
-            let off = usize::try_from(header.off_container_chrom)
+        let chrom_container = if header.chrom_block_count > 0 && header.len_chrom_container > 0 {
+            let off = usize::try_from(header.off_chrom_container)
                 .map_err(|_| IonError::from("chrom container out of bounds"))?;
-            let len = usize::try_from(header.len_container_chrom)
+            let len = usize::try_from(header.len_chrom_container)
                 .map_err(|_| IonError::from("chrom container out of bounds"))?;
             let end = off
                 .checked_add(len)
@@ -209,7 +209,7 @@ impl<'a> Decoder<'a> {
                 .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
             Some(ContainerView::with_max_cached_bytes(
                 cb,
-                header.block_count_chrom,
+                header.chrom_block_count,
                 header.compression_level,
                 filter,
                 config.verify_checksums,
@@ -247,45 +247,77 @@ impl<'a> Decoder<'a> {
         self.header.chrom_count
     }
 
-    pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
-        let base = self
-            .header
-            .off_filter_index
-            .try_into()
-            .ok()
-            .and_then(|off: usize| {
-                index
-                    .checked_mul(FILTER_INDEX_RECORD_SIZE)
-                    .and_then(|delta| off.checked_add(delta))
-            })?;
-        let end = base.checked_add(FILTER_INDEX_RECORD_SIZE)?;
-        let b = self.bytes.get(base..end)?;
-        Some(parse_filter_record(b))
+    pub fn spec_filter_record(&self, index: usize) -> Option<SpecFilterRecord> {
+        let b = slice_record(
+            &self.bytes,
+            self.header.off_spec_filter,
+            index,
+            SPEC_FILTER_RECORD_SIZE,
+            self.header.spectrum_count,
+        )?;
+        Some(parse_spec_filter_record(b))
     }
 
-    pub fn filter_records(&self) -> IonResult<Vec<FilterRecord>> {
-        let off = usize::try_from(self.header.off_filter_index)
-            .map_err(|_| IonError::from("filter index: out of bounds"))?;
-        let len = usize::try_from(self.header.len_filter_index)
-            .map_err(|_| IonError::from("filter index: out of bounds"))?;
+    pub fn spec_filter_records(&self) -> IonResult<Vec<SpecFilterRecord>> {
+        let off = usize::try_from(self.header.off_spec_filter)
+            .map_err(|_| IonError::from("spec filter: out of bounds"))?;
+        let len = usize::try_from(self.header.len_spec_filter)
+            .map_err(|_| IonError::from("spec filter: out of bounds"))?;
         let count = usize::try_from(self.header.spectrum_count)
-            .map_err(|_| IonError::from("filter index: out of bounds"))?;
-        if len != count * FILTER_INDEX_RECORD_SIZE {
+            .map_err(|_| IonError::from("spec filter: out of bounds"))?;
+        if len != count * SPEC_FILTER_RECORD_SIZE {
             return Err(format!(
-                "filter index: len={len} != count={count} × {FILTER_INDEX_RECORD_SIZE}"
+                "spec filter: len={len} != count={count} × {SPEC_FILTER_RECORD_SIZE}"
             )
             .into());
         }
         let end = off
             .checked_add(len)
-            .ok_or_else(|| IonError::from("filter index: out of bounds"))?;
+            .ok_or_else(|| IonError::from("spec filter: out of bounds"))?;
         let section = self
             .bytes
             .get(off..end)
-            .ok_or_else(|| IonError::from("filter index: out of bounds"))?;
+            .ok_or_else(|| IonError::from("spec filter: out of bounds"))?;
         Ok(section
-            .chunks_exact(FILTER_INDEX_RECORD_SIZE)
-            .map(parse_filter_record)
+            .chunks_exact(SPEC_FILTER_RECORD_SIZE)
+            .map(parse_spec_filter_record)
+            .collect())
+    }
+
+    pub fn chrom_filter_record(&self, index: usize) -> Option<ChromFilterRecord> {
+        let b = slice_record(
+            &self.bytes,
+            self.header.off_chrom_filter,
+            index,
+            CHROM_FILTER_RECORD_SIZE,
+            self.header.chrom_count,
+        )?;
+        Some(parse_chrom_filter_record(b))
+    }
+
+    pub fn chrom_filter_records(&self) -> IonResult<Vec<ChromFilterRecord>> {
+        let off = usize::try_from(self.header.off_chrom_filter)
+            .map_err(|_| IonError::from("chrom filter: out of bounds"))?;
+        let len = usize::try_from(self.header.len_chrom_filter)
+            .map_err(|_| IonError::from("chrom filter: out of bounds"))?;
+        let count = usize::try_from(self.header.chrom_count)
+            .map_err(|_| IonError::from("chrom filter: out of bounds"))?;
+        if len != count * CHROM_FILTER_RECORD_SIZE {
+            return Err(format!(
+                "chrom filter: len={len} != count={count} × {CHROM_FILTER_RECORD_SIZE}"
+            )
+            .into());
+        }
+        let end = off
+            .checked_add(len)
+            .ok_or_else(|| IonError::from("chrom filter: out of bounds"))?;
+        let section = self
+            .bytes
+            .get(off..end)
+            .ok_or_else(|| IonError::from("chrom filter: out of bounds"))?;
+        Ok(section
+            .chunks_exact(CHROM_FILTER_RECORD_SIZE)
+            .map(parse_chrom_filter_record)
             .collect())
     }
 
@@ -357,8 +389,8 @@ impl<'a> Decoder<'a> {
             )?,
             0,
             self.header.global_meta_count,
-            self.header.global_meta_num_count,
-            self.header.global_meta_str_count,
+            self.header.global_meta_numeric_count,
+            self.header.global_meta_string_count,
             self.header.compression_codec,
             self.header.global_meta_uncompressed_bytes,
         )
@@ -374,8 +406,8 @@ impl<'a> Decoder<'a> {
             )?,
             self.header.spectrum_count,
             self.header.spec_meta_count,
-            self.header.spec_meta_num_count,
-            self.header.spec_meta_str_count,
+            self.header.spec_meta_numeric_count,
+            self.header.spec_meta_string_count,
             self.header.compression_codec,
             self.header.spec_meta_uncompressed_bytes as usize,
         )
@@ -391,8 +423,8 @@ impl<'a> Decoder<'a> {
             )?,
             self.header.chrom_count,
             self.header.chrom_meta_count,
-            self.header.chrom_meta_num_count,
-            self.header.chrom_meta_str_count,
+            self.header.chrom_meta_numeric_count,
+            self.header.chrom_meta_string_count,
             self.header.compression_codec,
             self.header.chrom_meta_uncompressed_bytes as usize,
         )
@@ -548,17 +580,31 @@ impl<'a> Ion<'a> {
     }
 
     #[inline]
-    pub fn filter_record(&self, index: usize) -> Option<FilterRecord> {
+    pub fn spec_filter_record(&self, index: usize) -> Option<SpecFilterRecord> {
         self.backend
             .as_decoder()
-            .and_then(|d| d.filter_record(index))
+            .and_then(|d| d.spec_filter_record(index))
     }
 
-    pub fn filter_records(&self) -> IonResult<Vec<FilterRecord>> {
+    pub fn spec_filter_records(&self) -> IonResult<Vec<SpecFilterRecord>> {
         self.backend
             .as_decoder()
-            .ok_or_else(|| IonError::from("filter records are unavailable for mzML-backed Ion"))
-            .and_then(|d| d.filter_records())
+            .ok_or_else(|| IonError::from("spec filter records are unavailable for mzML-backed Ion"))
+            .and_then(|d| d.spec_filter_records())
+    }
+
+    #[inline]
+    pub fn chrom_filter_record(&self, index: usize) -> Option<ChromFilterRecord> {
+        self.backend
+            .as_decoder()
+            .and_then(|d| d.chrom_filter_record(index))
+    }
+
+    pub fn chrom_filter_records(&self) -> IonResult<Vec<ChromFilterRecord>> {
+        self.backend
+            .as_decoder()
+            .ok_or_else(|| IonError::from("chrom filter records are unavailable for mzML-backed Ion"))
+            .and_then(|d| d.chrom_filter_records())
     }
 
     pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
@@ -634,11 +680,11 @@ impl<'a> SpectrumSource for Decoder<'a> {
     ) {
         let Some(filter_bytes) =
             self.header
-                .len_filter_index
+                .len_spec_filter
                 .try_into()
                 .ok()
                 .and_then(|len: usize| {
-                    usize::try_from(self.header.off_filter_index)
+                    usize::try_from(self.header.off_spec_filter)
                         .ok()
                         .and_then(|off| {
                             off.checked_add(len)
@@ -653,7 +699,7 @@ impl<'a> SpectrumSource for Decoder<'a> {
             Ok(count) => count,
             Err(_) => return,
         };
-        let Some(entry_bytes) = count.checked_mul(ENTRY_A_BYTES).and_then(|len| {
+        let Some(entry_bytes) = count.checked_mul(INDEX_ENTRY_BYTES).and_then(|len| {
             usize::try_from(self.header.off_spec_entries)
                 .ok()
                 .and_then(|off| {
@@ -693,10 +739,10 @@ impl<'a> SpectrumSource for Decoder<'a> {
 impl ScanSource for Decoder<'_> {
     fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
         let Some(filter_bytes) =
-            usize::try_from(self.header.off_filter_index)
+            usize::try_from(self.header.off_spec_filter)
                 .ok()
                 .and_then(|off| {
-                    usize::try_from(self.header.len_filter_index)
+                    usize::try_from(self.header.len_spec_filter)
                         .ok()
                         .and_then(|len| {
                             off.checked_add(len)
@@ -707,19 +753,20 @@ impl ScanSource for Decoder<'_> {
             return;
         };
         for (index, chunk) in filter_bytes
-            .chunks_exact(FILTER_INDEX_RECORD_SIZE)
+            .chunks_exact(SPEC_FILTER_RECORD_SIZE)
             .enumerate()
         {
+            let rec = parse_spec_filter_record(chunk);
             cb(
                 index,
                 ScanSummary {
-                    rt: f64::from_le_bytes(chunk[0..8].try_into().unwrap()) / 60.0,
-                    base_peak_mz: f64::from_le_bytes(chunk[8..16].try_into().unwrap()),
-                    selected_ion_mz: f64::from_le_bytes(chunk[16..24].try_into().unwrap()),
-                    base_peak_int: f64::from_le_bytes(chunk[24..32].try_into().unwrap()),
-                    total_ion_current: f64::from_le_bytes(chunk[32..40].try_into().unwrap()),
-                    ms_level: chunk[40],
-                    polarity: chunk[41],
+                    rt: rec.rt_seconds / 60.0,
+                    base_peak_mz: rec.base_peak_mz,
+                    selected_ion_mz: rec.selected_ion_mz,
+                    base_peak_int: rec.base_peak_int,
+                    total_ion_current: rec.total_ion_current,
+                    ms_level: rec.ms_level,
+                    polarity: rec.polarity,
                 },
             );
         }
@@ -733,7 +780,7 @@ impl ScanSource for Decoder<'_> {
         if index >= count {
             return false;
         }
-        let Some(all_entries) = count.checked_mul(ENTRY_A_BYTES).and_then(|total| {
+        let Some(all_entries) = count.checked_mul(INDEX_ENTRY_BYTES).and_then(|total| {
             usize::try_from(self.header.off_spec_entries)
                 .ok()
                 .and_then(|off| {
@@ -747,8 +794,8 @@ impl ScanSource for Decoder<'_> {
             Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
             Err(_) => return false,
         };
-        let entry_start = index * ENTRY_A_BYTES;
-        let Some(entry) = all_entries.get(entry_start..entry_start + ENTRY_A_BYTES) else {
+        let entry_start = index * INDEX_ENTRY_BYTES;
+        let Some(entry) = all_entries.get(entry_start..entry_start + INDEX_ENTRY_BYTES) else {
             return false;
         };
         let Some((mz_ref, int_ref)) = parse_array_pair(entry, aref_bytes) else {
@@ -937,8 +984,8 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         ms_level: u8,
     ) -> Self {
         Self {
-            filter_chunks: filter_bytes.chunks_exact(FILTER_INDEX_RECORD_SIZE),
-            entry_chunks: entry_bytes.chunks_exact(ENTRY_A_BYTES),
+            filter_chunks: filter_bytes.chunks_exact(SPEC_FILTER_RECORD_SIZE),
+            entry_chunks: entry_bytes.chunks_exact(INDEX_ENTRY_BYTES),
             aref_bytes,
             container,
             mz_buf,
@@ -954,13 +1001,14 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         for (filter_bytes, entry_bytes) in
             self.filter_chunks.by_ref().zip(self.entry_chunks.by_ref())
         {
-            let rt_s = f64::from_le_bytes(filter_bytes[0..8].try_into().unwrap());
-            if !rt_s.is_finite() || rt_s < self.rt_min_s || rt_s > self.rt_max_s {
+            let rec = parse_spec_filter_record(filter_bytes);
+            if !rec.rt_seconds.is_finite()
+                || rec.rt_seconds < self.rt_min_s
+                || rec.rt_seconds > self.rt_max_s
+            {
                 continue;
             }
-
-            let ms_level = filter_bytes[40];
-            if self.ms_level != 0 && ms_level != self.ms_level {
+            if self.ms_level != 0 && rec.ms_level != self.ms_level {
                 continue;
             }
 
@@ -980,15 +1028,15 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
             }
 
             let meta = ScanMeta {
-                ms_level,
-                polarity: filter_bytes[41],
-                base_peak_mz: f64::from_le_bytes(filter_bytes[8..16].try_into().unwrap()),
-                selected_ion_mz: f64::from_le_bytes(filter_bytes[16..24].try_into().unwrap()),
-                base_peak_int: f64::from_le_bytes(filter_bytes[24..32].try_into().unwrap()),
-                total_ion_current: f64::from_le_bytes(filter_bytes[32..40].try_into().unwrap()),
+                ms_level: rec.ms_level,
+                polarity: rec.polarity,
+                base_peak_mz: rec.base_peak_mz,
+                selected_ion_mz: rec.selected_ion_mz,
+                base_peak_int: rec.base_peak_int,
+                total_ion_current: rec.total_ion_current,
             };
             callback(
-                rt_s / 60.0,
+                rec.rt_seconds / 60.0,
                 &meta,
                 &self.mz_buf[..len],
                 &self.int_buf[..len],
@@ -1064,8 +1112,19 @@ impl ArrayRefs {
 }
 
 #[inline]
-fn parse_filter_record(bytes: &[u8]) -> FilterRecord {
-    FilterRecord {
+fn slice_record(bytes: &[u8], off: u64, index: usize, size: usize, count: u64) -> Option<&[u8]> {
+    if index >= count as usize {
+        return None;
+    }
+    let base = usize::try_from(off)
+        .ok()
+        .and_then(|o| index.checked_mul(size).and_then(|d| o.checked_add(d)))?;
+    bytes.get(base..base.checked_add(size)?)
+}
+
+#[inline]
+fn parse_spec_filter_record(bytes: &[u8]) -> SpecFilterRecord {
+    SpecFilterRecord {
         rt_seconds: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
         base_peak_mz: f64::from_le_bytes(bytes[8..16].try_into().unwrap()),
         selected_ion_mz: f64::from_le_bytes(bytes[16..24].try_into().unwrap()),
@@ -1076,6 +1135,18 @@ fn parse_filter_record(bytes: &[u8]) -> FilterRecord {
     }
 }
 
+fn parse_chrom_filter_record(bytes: &[u8]) -> ChromFilterRecord {
+    ChromFilterRecord {
+        lowest_mz: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        highest_mz: f64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+        lowest_wavelength: f64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+        highest_wavelength: f64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        lowest_ion_mobility: f64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+        highest_ion_mobility: f64::from_le_bytes(bytes[40..48].try_into().unwrap()),
+        polarity: bytes[48],
+    }
+}
+
 #[inline]
 fn read_array_refs_at(
     bytes: &[u8],
@@ -1083,8 +1154,8 @@ fn read_array_refs_at(
     aref_base: usize,
     index: usize,
 ) -> Option<ArrayRefs> {
-    let entry_offset = index.checked_mul(ENTRY_A_BYTES)?.checked_add(entry_base)?;
-    let entry_end = entry_offset.checked_add(ENTRY_A_BYTES)?;
+    let entry_offset = index.checked_mul(INDEX_ENTRY_BYTES)?.checked_add(entry_base)?;
+    let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
     let entry = bytes.get(entry_offset..entry_end)?;
     let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
     let ref_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
@@ -1092,9 +1163,9 @@ fn read_array_refs_at(
     for offset in 0..ref_count {
         let pos = ref_start
             .checked_add(offset)?
-            .checked_mul(ENTRY_A1_BYTES)?
+            .checked_mul(ARRAY_REF_BYTES)?
             .checked_add(aref_base)?;
-        let end = pos.checked_add(ENTRY_A1_BYTES)?;
+        let end = pos.checked_add(ARRAY_REF_BYTES)?;
         refs.push(parse_array_ref(bytes.get(pos..end)?));
     }
     Some(refs)
@@ -1118,12 +1189,12 @@ fn parse_array_pair(entry_bytes: &[u8], aref_bytes: &[u8]) -> Option<(ArrayRef, 
         usize::try_from(u64::from_le_bytes(entry_bytes[0..8].try_into().unwrap())).ok()?;
     let ref_count =
         usize::try_from(u64::from_le_bytes(entry_bytes[8..16].try_into().unwrap())).ok()?;
-    let start = ref_start.checked_mul(ENTRY_A1_BYTES)?;
-    let span = ref_count.checked_mul(ENTRY_A1_BYTES)?;
+    let start = ref_start.checked_mul(ARRAY_REF_BYTES)?;
+    let span = ref_count.checked_mul(ARRAY_REF_BYTES)?;
     let end = start.checked_add(span)?;
     let mut mz_ref = None;
     let mut int_ref = None;
-    for bytes in aref_bytes.get(start..end)?.chunks_exact(ENTRY_A1_BYTES) {
+    for bytes in aref_bytes.get(start..end)?.chunks_exact(ARRAY_REF_BYTES) {
         let array_ref = parse_array_ref(bytes);
         match array_ref.array_type {
             ACC_MZ => mz_ref = Some(array_ref),
@@ -1523,13 +1594,13 @@ mod tests {
     #[test]
     fn filter_record_returns_none_out_of_bounds() {
         let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
-        assert!(d.filter_record(d.spectrum_count() as usize).is_none());
+        assert!(d.spec_filter_record(d.spectrum_count() as usize).is_none());
     }
 
     #[test]
     fn filter_record_has_valid_rt() {
         let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
-        let r = d.filter_record(0).unwrap();
+        let r = d.spec_filter_record(0).unwrap();
         assert!(r.rt_seconds.is_finite() && r.rt_seconds >= 0.0);
         assert!(r.ms_level >= 1);
     }
@@ -1576,7 +1647,7 @@ mod tests {
             count += 1;
         });
         let expected = (0..d.spectrum_count() as usize)
-            .filter(|&i| d.filter_record(i).map_or(false, |r| r.ms_level == 1))
+            .filter(|&i| d.spec_filter_record(i).map_or(false, |r| r.ms_level == 1))
             .count();
         assert_eq!(count, expected);
     }
@@ -1676,7 +1747,7 @@ mod tests {
     #[test]
     fn ion_filter_record_matches_decoder() {
         let ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
-        let r = ion.filter_record(0).unwrap();
+        let r = ion.spec_filter_record(0).unwrap();
         assert!(r.rt_seconds.is_finite());
         assert!(r.ms_level >= 1);
     }

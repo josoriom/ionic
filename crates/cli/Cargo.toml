@@ -11,6 +11,7 @@ ionic = { path = "../parser" }
 regex = { workspace = true }
 rayon = { workspace = true }
 mimalloc = { version = "0.1.48" }
+crc32fast = "1.5.0"
 
 [[bin]]
 name = "ionic"
