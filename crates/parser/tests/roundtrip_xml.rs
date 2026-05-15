@@ -4,6 +4,7 @@ mod common;
 use common::assertions::*;
 use common::test_files;
 use ionic::mzml::bin_to_mzml::bin_to_mzml;
+use ionic::mzml::parse_mzml::parse_mzml;
 
 roundtrip_xml!(tiny_10_semantic, test_files::tiny_pwiz_10);
 roundtrip_xml!(tiny_11_semantic, test_files::tiny_pwiz_11);
@@ -52,9 +53,9 @@ fn small_zlib_decodes_nonempty_compressed_arrays() {
 fn xml_roundtrip_idempotent() {
     let src = test_files::tiny_pwiz_11();
     let xml = bin_to_mzml(src).expect("bin_to_mzml should succeed");
-    let reparsed_once = common::parse_xml(&xml);
+    let reparsed_once = parse_mzml(&xml).expect("first reparse should succeed");
     let xml2 = bin_to_mzml(&reparsed_once).expect("second bin_to_mzml should succeed");
-    let reparsed_twice = common::parse_xml(&xml2);
+    let reparsed_twice = parse_mzml(&xml2).expect("second reparse should succeed");
     assert_mzml_semantic_eq(&reparsed_once, &reparsed_twice);
 }
 

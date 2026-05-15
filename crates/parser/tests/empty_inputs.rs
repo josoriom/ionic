@@ -71,7 +71,8 @@ fn bin_to_mzml_minimal_mzml_succeeds() {
         result.is_ok(),
         "minimal MzML with file_description should succeed"
     );
-    let xml_str = result.unwrap();
+    let xml_bytes = result.unwrap();
+    let xml_str = std::str::from_utf8(&xml_bytes).expect("output must be valid UTF-8");
     assert!(xml_str.contains("<mzML"), "output should contain <mzML tag");
     assert!(
         xml_str.contains("empty-run"),

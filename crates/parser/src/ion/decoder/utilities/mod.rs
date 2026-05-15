@@ -20,6 +20,8 @@ pub(crate) use parse_spectrum_list::parse_spectrum_list;
 pub(crate) mod parse_chromatogram_list;
 pub(crate) use parse_chromatogram_list::parse_chromatogram_list;
 pub(crate) mod assign_attributes;
+pub(crate) use assign_attributes::{assign_attributes_into, EmitAttributes};
+#[cfg(test)]
 pub(crate) use assign_attributes::assign_attributes;
 pub(crate) mod parse_file_description;
 pub(crate) use parse_file_description::parse_file_description;

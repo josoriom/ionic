@@ -142,7 +142,7 @@ fn all_test_files_full_roundtrip() {
             }
         };
 
-        let reparsed = match parse_mzml(xml_str.as_bytes()) {
+        let reparsed = match parse_mzml(&xml_str) {
             Ok(m) => m,
             Err(e) => {
                 failures.push(format!("{test_file_path}: reparse error: {e}"));

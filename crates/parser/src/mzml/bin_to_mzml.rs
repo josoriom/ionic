@@ -1,9 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use std::{
-    fmt::{Display, Formatter},
-    string::FromUtf8Error,
-};
+use std::fmt::{Display, Formatter};
 
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use quick_xml::Writer;
@@ -22,7 +19,6 @@ use crate::mzml::structs::*;
 pub enum BinToMzmlError {
     Io(std::io::Error),
     Xml(quick_xml::Error),
-    Utf8(std::string::FromUtf8Error),
     MissingElement(&'static str),
     InvalidData(&'static str),
 }
@@ -32,7 +28,6 @@ impl Display for BinToMzmlError {
         match self {
             Self::Io(e) => write!(f, "IO error: {e}"),
             Self::Xml(e) => write!(f, "XML write error: {e}"),
-            Self::Utf8(e) => write!(f, "UTF-8 error: {e}"),
             Self::MissingElement(s) => write!(f, "missing element: {s}"),
             Self::InvalidData(s) => write!(f, "invalid data: {s}"),
         }
@@ -50,12 +45,6 @@ impl From<std::io::Error> for BinToMzmlError {
 impl From<quick_xml::Error> for BinToMzmlError {
     fn from(e: quick_xml::Error) -> Self {
         Self::Xml(e)
-    }
-}
-
-impl From<FromUtf8Error> for BinToMzmlError {
-    fn from(e: FromUtf8Error) -> Self {
-        Self::Utf8(e)
     }
 }
 
@@ -117,12 +106,7 @@ fn write_start_capture_offset(
     Ok((before + rel) as u64)
 }
 
-pub fn bin_to_mzml(mzml: &MzML) -> Result<String, BinToMzmlError> {
-    let bytes = convert_bin_to_mzml_bytes(mzml)?;
-    String::from_utf8(bytes).map_err(BinToMzmlError::from)
-}
-
-pub fn convert_bin_to_mzml_bytes(mzml: &MzML) -> Result<Vec<u8>, BinToMzmlError> {
+pub fn bin_to_mzml(mzml: &MzML) -> Result<Vec<u8>, BinToMzmlError> {
     let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
 
     writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;

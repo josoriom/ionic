@@ -1,3 +1,5 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::{
     collections::HashMap,
     fs::File,
@@ -134,6 +136,7 @@ enum IonBacking {
     Map(Mmap),
 }
 
+// Field order is load-bearing: ion must drop before _backing (UB otherwise).
 pub struct OwnedIon {
     ion: Ion<'static>,
     _backing: IonBacking,
@@ -142,6 +145,7 @@ pub struct OwnedIon {
 impl OwnedIon {
     pub fn open_bytes(data: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
         let raw = data.as_ref();
+        // SAFETY: 'static is a lie. _backing owns the bytes; drops after ion.
         let bytes: &'static [u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr(), raw.len()) };
         let ion = Ion::open(bytes, config)?;
         Ok(Self {
@@ -152,8 +156,10 @@ impl OwnedIon {
 
     pub fn open(path: &Path, config: DecoderConfig) -> IonResult<Self> {
         let file = File::open(path).map_err(|err| IonError::from(err.to_string()))?;
+        // SAFETY: don't touch the file (modify/truncate) while OwnedIon is alive.
         let map = unsafe { Mmap::map(&file) }.map_err(|err| IonError::from(err.to_string()))?;
         let raw = map.as_ref();
+        // SAFETY: same as open_bytes, _backing holds the Mmap.
         let bytes: &'static [u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr(), raw.len()) };
         let ion = Ion::open(bytes, config)?;
         Ok(Self {
@@ -1618,6 +1624,28 @@ fn parse_run_source_file_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_ion_ion_field_declared_before_backing() {
+        let src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/ion/decoder/decode.rs"
+        ));
+        let struct_start = src
+            .find("pub struct OwnedIon {")
+            .expect("OwnedIon struct missing");
+        let body_start = struct_start + "pub struct OwnedIon {".len();
+        let body_len = src[body_start..]
+            .find('}')
+            .expect("OwnedIon struct unclosed");
+        let body = &src[body_start..body_start + body_len];
+        let ion_pos = body.find("ion:").expect("ion field missing");
+        let backing_pos = body.find("_backing:").expect("_backing field missing");
+        assert!(
+            ion_pos < backing_pos,
+            "ion must precede _backing in OwnedIon"
+        );
+    }
 
     const BYTES: &[u8] = include_bytes!("../../../data/ion/test.ion");
 

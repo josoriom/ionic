@@ -2,8 +2,9 @@ mod common;
 
 use common::assertions::*;
 use common::test_files;
-use common::{decode_ion, encode_to_ion, parse_xml, semantic_fingerprint};
+use common::{decode_ion, encode_to_ion, semantic_fingerprint};
 use ionic::mzml::bin_to_mzml::bin_to_mzml;
+use ionic::mzml::parse_mzml::parse_mzml;
 
 #[test]
 fn full_pipeline_tiny11() {
@@ -25,7 +26,7 @@ fn full_pipeline_tiny10() {
 fn mixed_pipeline_xml_then_ion() {
     let src = test_files::tiny_pwiz_11();
     let xml = bin_to_mzml(src).expect("bin_to_mzml should succeed");
-    let reparsed = parse_xml(&xml);
+    let reparsed = parse_mzml(&xml).expect("reparse should succeed");
 
     let bytes = encode_to_ion(&reparsed, 6, false);
     let decoded = decode_ion(&bytes).expect("decode should succeed");

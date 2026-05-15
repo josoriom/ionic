@@ -823,7 +823,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             };
             drop(mzml);
 
-            if let Err(e) = fs::write(&out_path, xml.as_bytes()) {
+            if let Err(e) = fs::write(&out_path, &xml) {
                 had_failed.store(true, Ordering::Relaxed);
                 failed.fetch_add(1, Ordering::Relaxed);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;

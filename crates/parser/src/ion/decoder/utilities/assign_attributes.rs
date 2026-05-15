@@ -1,213 +1,114 @@
 use crate::decoder::decode::{Metadatum, MetadatumValue};
-use crate::ion::attr_meta::{AccessionTail, CV_REF_ATTR, key_to_attr_tail};
-use crate::mzml::schema::{SchemaNode, TagId, schema};
-use hashbrown::HashMap;
-use serde::Serialize;
-use serde_json::Value;
-use std::sync::OnceLock;
+use crate::ion::attr_meta::{
+    ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
+    ACC_ATTR_DEFAULT_ARRAY_LENGTH, ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_ENCODED_LENGTH,
+    ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_ID, ACC_ATTR_INDEX,
+    ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_NATIVE_ID, ACC_ATTR_SOURCE_FILE_REF,
+    ACC_ATTR_SPECTRUM_REF, ACC_ATTR_SPOT_ID, AccessionTail, CV_REF_ATTR,
+};
+use crate::mzml::schema::TagId;
+use crate::mzml::structs::{
+    BinaryDataArray, Chromatogram, ChromatogramList, Precursor, Product, Scan, Spectrum,
+    SpectrumList,
+};
 
-static ALL_TAG_SPECS: OnceLock<HashMap<TagId, Vec<FieldSpec>>> = OnceLock::new();
-static XMLKEY_TO_TAIL: OnceLock<HashMap<String, AccessionTail>> = OnceLock::new();
-
-#[derive(Clone)]
-struct FieldSpec {
-    tail: AccessionTail,
-    field_key: String,
-    camel_key: String,
-    id_variant: Option<String>,
-    uri_variant: Option<String>,
+pub(crate) trait EmitAttributes {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>);
 }
 
-pub(crate) fn assign_attributes<T: Serialize>(
+pub(crate) struct AttributeSink<'a> {
+    out: &'a mut Vec<Metadatum>,
+    tag_id: TagId,
+    node_id: u32,
+    parent_id: u32,
+    next_item_index: u32,
+}
+
+impl<'a> AttributeSink<'a> {
+    #[inline]
+    pub fn push_required_str(&mut self, tail: AccessionTail, value: &str) {
+        self.out.push(Metadatum {
+            item_index: self.next_item_index,
+            id: self.node_id,
+            parent_id: self.parent_id,
+            tag_id: self.tag_id,
+            accession: Some(format_accession(tail)),
+            unit_accession: None,
+            value: MetadatumValue::Text(value.to_owned()),
+        });
+        self.next_item_index += 1;
+    }
+
+    #[inline]
+    pub fn push_str(&mut self, tail: AccessionTail, value: &str) {
+        if !value.is_empty() {
+            self.push_required_str(tail, value);
+        }
+    }
+
+    #[inline]
+    pub fn push_num(&mut self, tail: AccessionTail, value: f64) {
+        self.out.push(Metadatum {
+            item_index: self.next_item_index,
+            id: self.node_id,
+            parent_id: self.parent_id,
+            tag_id: self.tag_id,
+            accession: Some(format_accession(tail)),
+            unit_accession: None,
+            value: MetadatumValue::Number(value),
+        });
+        self.next_item_index += 1;
+    }
+
+    #[inline]
+    pub fn push_opt_str(&mut self, tail: AccessionTail, value: Option<&str>) {
+        if let Some(v) = value {
+            self.push_str(tail, v);
+        }
+    }
+
+    #[inline]
+    pub fn push_opt_usize(&mut self, tail: AccessionTail, value: Option<usize>) {
+        if let Some(v) = value {
+            self.push_num(tail, v as f64);
+        }
+    }
+
+    #[inline]
+    pub fn push_opt_u32(&mut self, tail: AccessionTail, value: Option<u32>) {
+        if let Some(v) = value {
+            self.push_num(tail, f64::from(v));
+        }
+    }
+}
+
+pub(crate) fn assign_attributes_into<T: EmitAttributes>(
+    value: &T,
+    tag_id: TagId,
+    node_id: u32,
+    parent_id: u32,
+    out: &mut Vec<Metadatum>,
+) {
+    let mut sink = AttributeSink {
+        out,
+        tag_id,
+        node_id,
+        parent_id,
+        next_item_index: 0,
+    };
+    value.emit_attributes(&mut sink);
+}
+
+#[cfg(test)]
+pub(crate) fn assign_attributes<T: EmitAttributes>(
     value: &T,
     tag_id: TagId,
     node_id: u32,
     parent_id: u32,
 ) -> Vec<Metadatum> {
-    let specs = tag_specs_for(tag_id);
-    if specs.is_empty() {
-        return Vec::new();
-    }
-
-    let json = serde_json::to_value(value).expect("assign_attributes: serialization failed");
-    let obj = json
-        .as_object()
-        .expect("assign_attributes: value must serialize to a JSON object");
-
-    let mut out = Vec::with_capacity(specs.len());
-    let mut item_index: u32 = 0;
-
-    for spec in specs {
-        let Some(json_value) = find_field_in_object(obj, spec) else {
-            continue;
-        };
-        let Some(metadatum_value) = json_value_to_metadatum_value(json_value) else {
-            continue;
-        };
-
-        let accession = format_accession(spec.tail);
-        out.push(Metadatum {
-            item_index,
-            id: node_id,
-            parent_id,
-            tag_id,
-            accession: Some(accession),
-            unit_accession: None,
-            value: metadatum_value,
-        });
-        item_index += 1;
-    }
-
+    let mut out = Vec::new();
+    assign_attributes_into(value, tag_id, node_id, parent_id, &mut out);
     out
-}
-
-fn tag_specs_for(tag_id: TagId) -> &'static [FieldSpec] {
-    ALL_TAG_SPECS
-        .get_or_init(build_all_tag_specs)
-        .get(&tag_id)
-        .map(|v| v.as_slice())
-        .unwrap_or(&[])
-}
-
-fn build_all_tag_specs() -> HashMap<TagId, Vec<FieldSpec>> {
-    let xmlkey_to_tail = XMLKEY_TO_TAIL.get_or_init(build_xmlkey_to_tail_map);
-    let schema_tree = schema();
-    let mut all_specs: HashMap<TagId, Vec<FieldSpec>> = HashMap::new();
-
-    for root in schema_tree.roots.values() {
-        collect_specs_from_node(root, xmlkey_to_tail, &mut all_specs);
-    }
-
-    all_specs
-}
-
-fn collect_specs_from_node(
-    node: &SchemaNode,
-    xmlkey_to_tail: &HashMap<String, AccessionTail>,
-    all_specs: &mut HashMap<TagId, Vec<FieldSpec>>,
-) {
-    for &tag_id in &node.self_tags {
-        let specs = all_specs.entry(tag_id).or_default();
-        for (field_key, xml_keys) in node.attributes.iter() {
-            let Some(tail) = xml_keys.iter().find_map(|k| xmlkey_to_tail.get(k)) else {
-                continue;
-            };
-            if specs.iter().any(|s| s.tail.raw() == tail.raw()) {
-                continue;
-            }
-            let (camel_key, id_variant, uri_variant) = snake_to_camel_variants(field_key);
-            specs.push(FieldSpec {
-                tail: *tail,
-                field_key: field_key.clone(),
-                camel_key,
-                id_variant,
-                uri_variant,
-            });
-        }
-        specs.sort_by_key(|s| s.tail.raw());
-    }
-
-    for child in node.children.values() {
-        collect_specs_from_node(child, xmlkey_to_tail, all_specs);
-    }
-}
-
-fn build_xmlkey_to_tail_map() -> HashMap<String, AccessionTail> {
-    let schema_tree = schema();
-    let mut xml_keys: Vec<String> = Vec::new();
-
-    for root in schema_tree.roots.values() {
-        collect_xml_keys_from_node(root, &mut xml_keys);
-    }
-
-    xml_keys.sort();
-    xml_keys.dedup();
-
-    xml_keys
-        .into_iter()
-        .filter_map(|key| {
-            let tail = key_to_attr_tail(&key)?;
-            Some((key, tail))
-        })
-        .collect()
-}
-
-fn collect_xml_keys_from_node(node: &SchemaNode, out: &mut Vec<String>) {
-    for xml_keys in node.attributes.values() {
-        out.extend(xml_keys.iter().cloned());
-    }
-    for child in node.children.values() {
-        collect_xml_keys_from_node(child, out);
-    }
-}
-
-fn find_field_in_object<'a>(
-    obj: &'a serde_json::Map<String, Value>,
-    spec: &FieldSpec,
-) -> Option<&'a Value> {
-    obj.get(&spec.field_key)
-        .or_else(|| obj.get(&spec.camel_key))
-        .or_else(|| spec.id_variant.as_ref().and_then(|k| obj.get(k)))
-        .or_else(|| spec.uri_variant.as_ref().and_then(|k| obj.get(k)))
-}
-
-fn json_value_to_metadatum_value(v: &Value) -> Option<MetadatumValue> {
-    match v {
-        Value::Null => None,
-        Value::String(s) => Some(MetadatumValue::Text(s.clone())),
-        Value::Bool(b) => Some(MetadatumValue::Text(b.to_string())),
-        Value::Number(n) => {
-            if let Some(u) = n.as_u64() {
-                assert!(
-                    u <= (1u64 << 53),
-                    "numeric attribute too large for lossless f64: {u}"
-                );
-                Some(MetadatumValue::Number(u as f64))
-            } else if let Some(i) = n.as_i64() {
-                assert!(
-                    (i.unsigned_abs()) <= (1u64 << 53),
-                    "numeric attribute too large for lossless f64: {i}"
-                );
-                Some(MetadatumValue::Number(i as f64))
-            } else {
-                n.as_f64().map(MetadatumValue::Number)
-            }
-        }
-        other => panic!("non-primitive attribute value not supported: {other:?}"),
-    }
-}
-
-fn snake_to_camel_variants(snake: &str) -> (String, Option<String>, Option<String>) {
-    let mut parts = snake.split('_').filter(|p| !p.is_empty());
-    let first = match parts.next() {
-        Some(f) => f,
-        None => return (String::new(), None, None),
-    };
-
-    let mut camel = String::from(first);
-    for part in parts {
-        let mut chars = part.chars();
-        if let Some(first_char) = chars.next() {
-            for upper in first_char.to_uppercase() {
-                camel.push(upper);
-            }
-            camel.push_str(chars.as_str());
-        }
-    }
-
-    let id_variant = camel.ends_with("Id").then(|| {
-        let mut v = camel[..camel.len() - 2].to_string();
-        v.push_str("ID");
-        v
-    });
-
-    let uri_variant = camel.ends_with("Uri").then(|| {
-        let mut v = camel[..camel.len() - 3].to_string();
-        v.push_str("URI");
-        v
-    });
-
-    (camel, id_variant, uri_variant)
 }
 
 fn format_accession(tail: AccessionTail) -> String {
@@ -219,116 +120,171 @@ fn format_accession(tail: AccessionTail) -> String {
     accession
 }
 
+impl EmitAttributes for SpectrumList {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_opt_usize(ACC_ATTR_COUNT, self.count);
+        sink.push_opt_str(
+            ACC_ATTR_DEFAULT_DATA_PROCESSING_REF,
+            self.default_data_processing_ref.as_deref(),
+        );
+    }
+}
+
+impl EmitAttributes for Spectrum {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_required_str(ACC_ATTR_ID, &self.id);
+        sink.push_opt_u32(ACC_ATTR_INDEX, self.index);
+        sink.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
+        sink.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
+        sink.push_opt_str(
+            ACC_ATTR_DATA_PROCESSING_REF,
+            self.data_processing_ref.as_deref(),
+        );
+        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        sink.push_opt_str(ACC_ATTR_SPOT_ID, self.spot_id.as_deref());
+    }
+}
+
+impl EmitAttributes for ChromatogramList {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_opt_usize(ACC_ATTR_COUNT, self.count);
+        sink.push_opt_str(
+            ACC_ATTR_DEFAULT_DATA_PROCESSING_REF,
+            self.default_data_processing_ref.as_deref(),
+        );
+    }
+}
+
+impl EmitAttributes for Chromatogram {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_required_str(ACC_ATTR_ID, &self.id);
+        sink.push_opt_u32(ACC_ATTR_INDEX, self.index);
+        sink.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
+        sink.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
+        sink.push_opt_str(
+            ACC_ATTR_DATA_PROCESSING_REF,
+            self.data_processing_ref.as_deref(),
+        );
+    }
+}
+
+impl EmitAttributes for BinaryDataArray {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_opt_usize(ACC_ATTR_ARRAY_LENGTH, self.array_length);
+        sink.push_opt_usize(ACC_ATTR_ENCODED_LENGTH, self.encoded_length);
+        sink.push_opt_str(
+            ACC_ATTR_DATA_PROCESSING_REF,
+            self.data_processing_ref.as_deref(),
+        );
+    }
+}
+
+impl EmitAttributes for Precursor {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
+        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        sink.push_opt_str(
+            ACC_ATTR_EXTERNAL_SPECTRUM_ID,
+            self.external_spectrum_id.as_deref(),
+        );
+    }
+}
+
+impl EmitAttributes for Product {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
+        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        sink.push_opt_str(
+            ACC_ATTR_EXTERNAL_SPECTRUM_ID,
+            self.external_spectrum_id.as_deref(),
+        );
+    }
+}
+
+impl EmitAttributes for Scan {
+    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
+        sink.push_opt_str(
+            ACC_ATTR_INSTRUMENT_CONFIGURATION_REF,
+            self.instrument_configuration_ref.as_deref(),
+        );
+        sink.push_opt_str(
+            ACC_ATTR_EXTERNAL_SPECTRUM_ID,
+            self.external_spectrum_id.as_deref(),
+        );
+        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        sink.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn snake_to_camel_produces_correct_camel_case() {
-        let (camel, id_variant, uri_variant) = snake_to_camel_variants("default_array_length");
-        assert_eq!(camel, "defaultArrayLength");
-        assert!(id_variant.is_none());
-        assert!(uri_variant.is_none());
-    }
-
-    #[test]
-    fn snake_to_camel_detects_id_suffix_variant() {
-        let (camel, id_variant, uri_variant) = snake_to_camel_variants("native_id");
-        assert_eq!(camel, "nativeId");
-        assert_eq!(id_variant.as_deref(), Some("nativeID"));
-        assert!(uri_variant.is_none());
-    }
-
-    #[test]
-    fn snake_to_camel_detects_uri_suffix_variant() {
-        let (camel, id_variant, uri_variant) = snake_to_camel_variants("cv_uri");
-        assert_eq!(camel, "cvUri");
-        assert!(id_variant.is_none());
-        assert_eq!(uri_variant.as_deref(), Some("cvURI"));
-    }
-
-    #[test]
-    fn snake_to_camel_handles_empty_input() {
-        let (camel, id_variant, uri_variant) = snake_to_camel_variants("");
-        assert!(camel.is_empty());
-        assert!(id_variant.is_none());
-        assert!(uri_variant.is_none());
-    }
-
-    #[test]
-    fn json_value_to_metadatum_value_handles_null_as_none() {
-        assert!(json_value_to_metadatum_value(&Value::Null).is_none());
-    }
-
-    #[test]
-    fn json_value_to_metadatum_value_handles_string() {
-        let result = json_value_to_metadatum_value(&Value::String("hello".to_string()));
-        assert!(matches!(result, Some(MetadatumValue::Text(s)) if s == "hello"));
-    }
-
-    #[test]
-    fn json_value_to_metadatum_value_handles_bool_as_text() {
-        let result = json_value_to_metadatum_value(&Value::Bool(true));
-        assert!(matches!(result, Some(MetadatumValue::Text(s)) if s == "true"));
-    }
-
-    #[test]
-    fn json_value_to_metadatum_value_handles_integer() {
-        let result = json_value_to_metadatum_value(&serde_json::json!(42u64));
-        assert!(
-            matches!(result, Some(MetadatumValue::Number(n)) if (n - 42.0).abs() < f64::EPSILON)
-        );
-    }
-
-    #[test]
-    fn find_field_in_object_prefers_snake_case_key() {
-        let obj: serde_json::Map<String, Value> =
-            serde_json::from_str(r#"{"my_field": "snake", "myField": "camel"}"#).unwrap();
-        let spec = FieldSpec {
-            tail: AccessionTail::from_raw(1),
-            field_key: "my_field".to_string(),
-            camel_key: "myField".to_string(),
-            id_variant: None,
-            uri_variant: None,
-        };
-        let found = find_field_in_object(&obj, &spec);
-        assert_eq!(found.and_then(|v| v.as_str()), Some("snake"));
-    }
-
-    #[test]
-    fn find_field_in_object_falls_back_to_camel_key() {
-        let obj: serde_json::Map<String, Value> =
-            serde_json::from_str(r#"{"myField": "camel"}"#).unwrap();
-        let spec = FieldSpec {
-            tail: AccessionTail::from_raw(1),
-            field_key: "my_field".to_string(),
-            camel_key: "myField".to_string(),
-            id_variant: None,
-            uri_variant: None,
-        };
-        let found = find_field_in_object(&obj, &spec);
-        assert_eq!(found.and_then(|v| v.as_str()), Some("camel"));
-    }
-
-    #[test]
-    fn find_field_in_object_returns_none_when_no_key_matches() {
-        let obj: serde_json::Map<String, Value> =
-            serde_json::from_str(r#"{"other": "value"}"#).unwrap();
-        let spec = FieldSpec {
-            tail: AccessionTail::from_raw(1),
-            field_key: "my_field".to_string(),
-            camel_key: "myField".to_string(),
-            id_variant: None,
-            uri_variant: None,
-        };
-        assert!(find_field_in_object(&obj, &spec).is_none());
-    }
+    use crate::ion::attr_meta::CV_REF_ATTR;
 
     #[test]
     fn format_accession_produces_correct_string() {
-        let tail = AccessionTail::from_raw(1000511);
+        use crate::ion::attr_meta::AccessionTail;
+        let tail = AccessionTail::from_raw(1_000_511);
         let accession = format_accession(tail);
         assert!(accession.ends_with(":1000511"));
         assert!(accession.starts_with(CV_REF_ATTR));
+    }
+
+    #[test]
+    fn emit_spectrum_list_emits_count_and_ddpr() {
+        use crate::mzml::structs::SpectrumList;
+        let sl = SpectrumList {
+            count: Some(3),
+            default_data_processing_ref: Some("dp1".to_string()),
+            spectra: vec![],
+        };
+        let out = assign_attributes(&sl, TagId::SpectrumList, 1, 0);
+        assert_eq!(out.len(), 2);
+        let tails: Vec<u32> = out
+            .iter()
+            .filter_map(|m| {
+                m.accession
+                    .as_deref()
+                    .and_then(|a| a.rsplit_once(':').and_then(|(_, t)| t.parse::<u32>().ok()))
+            })
+            .collect();
+        assert!(tails.contains(&ACC_ATTR_COUNT.raw()));
+        assert!(tails.contains(&ACC_ATTR_DEFAULT_DATA_PROCESSING_REF.raw()));
+    }
+
+    #[test]
+    fn emit_spectrum_skips_none_fields() {
+        use crate::mzml::structs::Spectrum;
+        let s = Spectrum {
+            id: "scan=1".to_string(),
+            index: Some(0),
+            ..Default::default()
+        };
+        let out = assign_attributes(&s, TagId::Spectrum, 1, 0);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn emit_attributes_all_emit_only_attr_prefix() {
+        use crate::mzml::structs::Spectrum;
+        let s = Spectrum {
+            id: "x".to_string(),
+            index: Some(0),
+            native_id: Some("n".to_string()),
+            default_array_length: Some(5),
+            data_processing_ref: Some("dp".to_string()),
+            source_file_ref: Some("sf".to_string()),
+            spot_id: Some("sp".to_string()),
+            ..Default::default()
+        };
+        let out = assign_attributes(&s, TagId::Spectrum, 1, 0);
+        for m in &out {
+            if let Some(acc) = &m.accession {
+                assert!(
+                    acc.starts_with(CV_REF_ATTR),
+                    "unexpected accession prefix: {acc}"
+                );
+            }
+        }
     }
 }

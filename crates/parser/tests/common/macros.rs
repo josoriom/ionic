@@ -17,7 +17,7 @@ macro_rules! roundtrip_xml {
             let original = $test_file_fn();
             let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(original)
                 .expect("bin_to_mzml should succeed");
-            let reparsed = ionic::mzml::parse_mzml::parse_mzml(xml.as_bytes())
+            let reparsed = ionic::mzml::parse_mzml::parse_mzml(&xml)
                 .expect("reparse should succeed");
             crate::common::assertions::assert_mzml_semantic_eq(original, &reparsed);
         }
@@ -28,7 +28,7 @@ macro_rules! roundtrip_xml {
             let original = $test_file_fn();
             let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(original)
                 .expect("bin_to_mzml should succeed");
-            let reparsed = ionic::mzml::parse_mzml::parse_mzml(xml.as_bytes())
+            let reparsed = ionic::mzml::parse_mzml::parse_mzml(&xml)
                 .expect("reparse should succeed");
             crate::common::assertions::assert_mzml_structural_eq(original, &reparsed);
         }

@@ -2150,7 +2150,8 @@ pub(crate) fn assert_all_refs_resolved(mzml: &MzML) {
 pub(crate) fn assert_semantic_roundtrip_via_xml(src: &MzML, context: &str) {
     let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(src)
         .unwrap_or_else(|e| panic!("bin_to_mzml failed for {context}: {e}"));
-    let reparsed = super::parse_xml(&xml);
+    let reparsed = ionic::mzml::parse_mzml::parse_mzml(&xml)
+        .unwrap_or_else(|e| panic!("reparse failed for {context}: {e}"));
     assert_mzml_semantic_eq(src, &reparsed);
 }
 
@@ -2171,7 +2172,8 @@ pub(crate) fn assert_semantic_roundtrip_full_pipeline(
         super::decode_ion(&bytes).unwrap_or_else(|e| panic!("decode failed for {context}: {e}"));
     let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(&decoded)
         .unwrap_or_else(|e| panic!("bin_to_mzml failed for {context}: {e}"));
-    let reparsed = super::parse_xml(&xml);
+    let reparsed = ionic::mzml::parse_mzml::parse_mzml(&xml)
+        .unwrap_or_else(|e| panic!("reparse failed for {context}: {e}"));
     assert_mzml_semantic_eq(src, &reparsed);
 }
 

@@ -73,7 +73,7 @@ fn xml_roundtrip_preserves_rare_numeric_types_without_array_length() {
         let src =
             synthetic_numeric_matrix_mzml(numeric_type, spectrum_binary, chromatogram_binary, None);
         let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(&src).expect("bin_to_mzml should succeed");
-        let reparsed = common::parse_xml(&xml);
+        let reparsed = ionic::mzml::parse_mzml::parse_mzml(&xml).expect("reparse should succeed");
         assert_mzml_semantic_eq(&src, &reparsed);
     }
 }

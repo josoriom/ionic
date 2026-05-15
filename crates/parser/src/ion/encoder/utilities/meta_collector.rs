@@ -1,4 +1,4 @@
-use serde::Serialize;
+use crate::ion::utilities::EmitAttributes;
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
             ACC_ATTR_VERSION, AccessionTail, CV_REF_ATTR, attr_cv_param, cv_ref_code_from_str,
             parse_accession_tail,
         },
-        utilities::assign_attributes,
+        utilities::assign_attributes_into,
     },
     mzml::{
         schema::TagId,
@@ -55,7 +55,7 @@ impl MetaCollector {
     ) -> PackedMeta
     where
         T: MzmlListItem,
-        L: Serialize,
+        L: EmitAttributes,
     {
         pack_item_list_meta(items, list_node_id, list_schema, &mut self.ctx, policy)
     }
@@ -389,14 +389,16 @@ impl<'b> MetaParamWriter<'b> {
             );
         }
     }
-    fn push_schema_attrs<T: Serialize>(
+    fn push_schema_attrs<T: EmitAttributes>(
         &mut self,
         tag: TagId,
         id: u32,
         parent_id: u32,
         schema_value: &T,
     ) {
-        for attr in assign_attributes(schema_value, tag, id, parent_id) {
+        let mut attrs = Vec::new();
+        assign_attributes_into(schema_value, tag, id, parent_id, &mut attrs);
+        for attr in attrs {
             let tail_raw = parse_accession_tail_raw(attr.accession.as_deref());
             if tail_raw == 0 {
                 continue;
@@ -725,7 +727,7 @@ fn append_meta_buffer(
     buffers.push(buffer);
 }
 
-pub(crate) trait MzmlListItem: Serialize {
+pub(crate) trait MzmlListItem: EmitAttributes {
     fn list_tag() -> TagId;
     fn item_tag() -> TagId;
     fn has_explicit_index(&self) -> bool;
@@ -810,7 +812,7 @@ fn pack_item_list_meta<T, L>(
 ) -> PackedMeta
 where
     T: MzmlListItem,
-    L: Serialize,
+    L: EmitAttributes,
 {
     pack_meta_for_each(items.len(), |writer, i| {
         let item = &items[i];
@@ -1561,6 +1563,7 @@ fn append_cv_list_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mzml::structs::SpectrumList;
 
     #[test]
     fn value_pool_empty_value_gives_kind_2() {
@@ -1759,7 +1762,7 @@ mod tests {
             y_array_accession: INTENSITY_ARRAY,
             force_f32: false,
         };
-        let meta = collector.collect_item_list_meta::<Spectrum, MzML>(spectra, 0, None, policy);
+        let meta = collector.collect_item_list_meta::<Spectrum, SpectrumList>(spectra, 0, None, policy);
         assert_eq!(meta.index_offsets, vec![0]);
         assert!(meta.ids.is_empty());
     }
