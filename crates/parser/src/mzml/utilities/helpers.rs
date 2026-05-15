@@ -1,5 +1,6 @@
 use std::{io::BufRead, str::from_utf8};
 
+use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::mzml::{
@@ -98,7 +99,7 @@ pub fn read_base64_binary<R: BufRead>(
 pub fn attr_any(element: &BytesStart, candidate_names: &[&[u8]]) -> Option<String> {
     for a in element.attributes().with_checks(false).flatten() {
         if candidate_names.iter().any(|n| *n == a.key.as_ref()) {
-            return a.unescape_value().ok().map(|v| v.to_string());
+            return Some(a.normalized_value(XmlVersion::Implicit1_0).ok()?.to_string());
         }
     }
     None
