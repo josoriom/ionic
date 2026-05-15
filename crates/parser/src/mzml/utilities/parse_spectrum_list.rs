@@ -1,14 +1,18 @@
 use quick_xml::events::BytesStart;
 use std::io::BufRead;
 
-use crate::mzml::{
-    schema::TagId,
-    structs::*,
-    utilities::{
-        ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda, parse_bda_list,
-        parse_precursor, parse_precursor_list::parse_precursor_list,
-        parse_product_list::parse_product_list, parse_scan, parse_scan_list,
-        parsing_workspace::ParsingWorkspace, read_cv_param, read_ref_group_ref, read_user_param,
+use crate::{
+    accessions::ACC_MS_LEVEL,
+    mzml::{
+        schema::TagId,
+        structs::*,
+        utilities::{
+            ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda, parse_bda_list,
+            parse_precursor, parse_precursor_list::parse_precursor_list,
+            parse_product_list::parse_product_list, parse_scan, parse_scan_list,
+            parsing_workspace::ParsingWorkspace, read_cv_param, read_ref_group_ref,
+            read_user_param,
+        },
     },
 };
 
@@ -16,9 +20,11 @@ pub(crate) fn parse_spectrum_list<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<SpectrumList, ParseError> {
+    let count = attr_usize(start, b"count");
     let mut list = SpectrumList {
-        count: attr_usize(start, b"count"),
+        count,
         default_data_processing_ref: attr(start, b"defaultDataProcessingRef"),
+        spectra: Vec::with_capacity(count.unwrap_or(0)),
         ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {
@@ -158,7 +164,7 @@ fn parse_spectrum_description<R: BufRead>(
         match tag {
             TagId::CvParam => {
                 let cv = read_cv_param(&element);
-                if result.ms_level_hint.is_none() && cv.accession.as_deref() == Some("MS:1000511") {
+                if result.ms_level_hint.is_none() && cv.accession.as_deref() == Some(ACC_MS_LEVEL) {
                     result.ms_level_hint = cv
                         .value
                         .as_deref()

@@ -1,19 +1,6 @@
+use crate::accessions as acc_const;
 use crate::ion::attr_meta::parse_accession_tail;
 use crate::mzml::structs::{BinaryData, CvParam, MzML, Spectrum};
-
-const ACC_SCAN_START_TIME: u32 = 1_000_016;
-const ACC_MS_LEVEL: u32 = 1_000_511;
-const ACC_MZ_ARRAY: u32 = 1_000_514;
-const ACC_INTENSITY_ARRAY: u32 = 1_000_515;
-const ACC_BASE_PEAK_MZ: u32 = 1_000_504;
-const ACC_BASE_PEAK_INT: u32 = 1_000_505;
-const ACC_TIC: u32 = 1_000_285;
-const ACC_SELECTED_ION_MZ: u32 = 1_000_744;
-const ACC_POSITIVE_SCAN: u32 = 1_000_130;
-const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
-const ACC_UNIT_MINUTE: u32 = 31;
-const ACC_UNIT_SECOND: u32 = 10;
-const ACC_UNIT_MS: u32 = 28;
 
 #[inline]
 fn acc(s: Option<&str>) -> u32 {
@@ -118,16 +105,16 @@ pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
 
     for param in &spectrum.cv_params {
         match acc(param.accession.as_deref()) {
-            ACC_MS_LEVEL => {
+            acc_const::MS_LEVEL => {
                 if let Some(value) = param.value.as_deref().and_then(|v| v.parse().ok()) {
                     ms_level = value;
                 }
             }
-            ACC_BASE_PEAK_MZ => base_peak_mz = parse_f64(param.value.as_deref()),
-            ACC_BASE_PEAK_INT => base_peak_int = parse_f64(param.value.as_deref()),
-            ACC_TIC => total_ion_current = parse_f64(param.value.as_deref()),
-            ACC_POSITIVE_SCAN => polarity = 1,
-            ACC_NEGATIVE_SCAN => polarity = 2,
+            acc_const::BASE_PEAK_MZ => base_peak_mz = parse_f64(param.value.as_deref()),
+            acc_const::BASE_PEAK_INT => base_peak_int = parse_f64(param.value.as_deref()),
+            acc_const::TOTAL_ION_CURRENT => total_ion_current = parse_f64(param.value.as_deref()),
+            acc_const::POSITIVE_SCAN => polarity = 1,
+            acc_const::NEGATIVE_SCAN => polarity = 2,
             _ => {}
         }
     }
@@ -164,7 +151,7 @@ pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
             selected_ion
                 .cv_params
                 .iter()
-                .find(|param| acc(param.accession.as_deref()) == ACC_SELECTED_ION_MZ)
+                .find(|param| acc(param.accession.as_deref()) == acc_const::SELECTED_ION_MZ)
                 .and_then(|param| param.value.as_deref()?.parse().ok())
                 .unwrap_or(f64::NAN)
         })
@@ -193,7 +180,7 @@ pub(crate) fn summary_from_spectra(
 #[inline]
 fn rt_from_params(params: &[CvParam]) -> Option<f64> {
     for param in params {
-        if acc(param.accession.as_deref()) == ACC_SCAN_START_TIME {
+        if acc(param.accession.as_deref()) == acc_const::SCAN_START_TIME {
             let value: f64 = param.value.as_deref()?.parse().ok()?;
             return minutes_from_value(
                 value,
@@ -214,9 +201,9 @@ fn minutes_from_value(
         return None;
     }
     match acc(unit_accession) {
-        ACC_UNIT_MINUTE => Some(value),
-        ACC_UNIT_SECOND => Some(value / 60.0),
-        ACC_UNIT_MS => Some(value / 60_000.0),
+        acc_const::UNIT_MINUTE => Some(value),
+        acc_const::UNIT_SECOND => Some(value / 60.0),
+        acc_const::UNIT_MS => Some(value / 60_000.0),
         _ => match unit_name {
             Some("minute" | "minutes") => Some(value),
             Some("second" | "seconds") => Some(value / 60.0),
@@ -243,8 +230,8 @@ pub(crate) fn binary_pair(spectrum: &Spectrum) -> Option<(&BinaryData, &BinaryDa
         let mut is_intensity = false;
         for param in &array.cv_params {
             match acc(param.accession.as_deref()) {
-                ACC_MZ_ARRAY => is_mz = true,
-                ACC_INTENSITY_ARRAY => is_intensity = true,
+                acc_const::MZ_ARRAY => is_mz = true,
+                acc_const::INTENSITY_ARRAY => is_intensity = true,
                 _ => {}
             }
             if is_mz && is_intensity {

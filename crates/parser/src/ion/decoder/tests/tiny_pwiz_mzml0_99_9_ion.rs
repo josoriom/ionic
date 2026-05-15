@@ -1,6 +1,5 @@
 use crate::{
-    BinaryData,
-    mzml::structs::MzML,
+    mzml::structs::{BinaryData, MzML},
     utilities::test::{
         CvRefMode, assert_cv, assert_software_param, chromatogram, chromatogram_list, parse_b,
         spectrum_by_index, spectrum_description, spectrum_precursor_list, spectrum_scan_list,

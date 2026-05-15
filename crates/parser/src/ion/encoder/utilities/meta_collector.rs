@@ -2,7 +2,9 @@ use serde::Serialize;
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
-    UserParam,
+    accessions::{
+        FLOAT_32BIT, FLOAT_64BIT, INTENSITY_ARRAY, MZ_ARRAY, TIME_ARRAY, format_accession,
+    },
     decoder::decode::MetadatumValue,
     encoder::utilities::le_writers::{write_f64_slice_le, write_u32_slice_le},
     ion::{
@@ -21,16 +23,10 @@ use crate::{
         schema::TagId,
         structs::{
             BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, Precursor, Product,
-            ReferenceableParamGroupRef, ScanList, Spectrum, SpectrumDescription,
+            ReferenceableParamGroupRef, ScanList, Spectrum, SpectrumDescription, UserParam,
         },
     },
 };
-
-pub(crate) const ACCESSION_MZ_ARRAY: u32 = 1_000_514;
-pub(crate) const ACCESSION_INTENSITY_ARRAY: u32 = 1_000_515;
-pub(crate) const ACCESSION_TIME_ARRAY: u32 = 1_000_595;
-pub(crate) const ACCESSION_32BIT_FLOAT: u32 = 1_000_521;
-pub(crate) const ACCESSION_64BIT_FLOAT: u32 = 1_000_523;
 
 const USER_PARAM_NAME_VALUE_SEPARATOR: char = '\0';
 
@@ -551,14 +547,14 @@ fn encode_user_param_as_cv(p: &UserParam) -> CvParam {
 }
 
 fn make_float_precision_cv_param(accession_tail: u32) -> CvParam {
-    let name = if accession_tail == ACCESSION_32BIT_FLOAT {
+    let name = if accession_tail == FLOAT_32BIT {
         "32-bit float"
     } else {
         "64-bit float"
     };
     CvParam {
         cv_ref: Some("MS".to_string()),
-        accession: Some(format!("MS:{accession_tail:07}")),
+        accession: Some(format_accession(accession_tail)),
         name: name.to_string(),
         value: None,
         unit_cv_ref: None,
@@ -579,10 +575,7 @@ fn cv_ref_prefix_from_accession(accession: Option<&str>) -> Option<&str> {
 pub(crate) fn array_type_accession_from_binary_data_array(bda: &BinaryDataArray) -> u32 {
     for cv in &bda.cv_params {
         let t = parse_accession_tail_raw(cv.accession.as_deref());
-        if matches!(
-            t,
-            ACCESSION_MZ_ARRAY | ACCESSION_INTENSITY_ARRAY | ACCESSION_TIME_ARRAY
-        ) {
+        if matches!(t, MZ_ARRAY | INTENSITY_ARRAY | TIME_ARRAY) {
             return t;
         }
     }
@@ -615,13 +608,13 @@ fn emit_binary_data_array_cv_params(
     let mut precision_written = false;
     for cv in &bda.cv_params {
         let tail = parse_accession_tail_raw(cv.accession.as_deref());
-        if tail == ACCESSION_32BIT_FLOAT || tail == ACCESSION_64BIT_FLOAT {
+        if tail == FLOAT_32BIT || tail == FLOAT_64BIT {
             if !precision_written {
                 writer.push_one(
                     TagId::CvParam,
                     bda_node_id,
                     bda_list_node_id,
-                    make_float_precision_cv_param(ACCESSION_32BIT_FLOAT),
+                    make_float_precision_cv_param(FLOAT_32BIT),
                 );
                 precision_written = true;
             }
@@ -634,7 +627,7 @@ fn emit_binary_data_array_cv_params(
             TagId::CvParam,
             bda_node_id,
             bda_list_node_id,
-            make_float_precision_cv_param(ACCESSION_32BIT_FLOAT),
+            make_float_precision_cv_param(FLOAT_32BIT),
         );
     }
 }
@@ -1729,10 +1722,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        assert_eq!(
-            array_type_accession_from_binary_data_array(&bda),
-            ACCESSION_MZ_ARRAY
-        );
+        assert_eq!(array_type_accession_from_binary_data_array(&bda), MZ_ARRAY);
     }
 
     #[test]
@@ -1765,8 +1755,8 @@ mod tests {
         let mut collector = MetaCollector::new();
         let spectra: &[Spectrum] = &[];
         let policy = ArrayPolicy {
-            x_array_accession: ACCESSION_MZ_ARRAY,
-            y_array_accession: ACCESSION_INTENSITY_ARRAY,
+            x_array_accession: MZ_ARRAY,
+            y_array_accession: INTENSITY_ARRAY,
             force_f32: false,
         };
         let meta = collector.collect_item_list_meta::<Spectrum, MzML>(spectra, 0, None, policy);
@@ -1804,23 +1794,23 @@ mod tests {
     #[test]
     fn array_policy_identifies_xy_arrays() {
         let policy = ArrayPolicy {
-            x_array_accession: ACCESSION_MZ_ARRAY,
-            y_array_accession: ACCESSION_INTENSITY_ARRAY,
+            x_array_accession: MZ_ARRAY,
+            y_array_accession: INTENSITY_ARRAY,
             force_f32: true,
         };
-        assert!(policy.is_xy_array(ACCESSION_MZ_ARRAY));
-        assert!(policy.is_xy_array(ACCESSION_INTENSITY_ARRAY));
-        assert!(!policy.is_xy_array(ACCESSION_TIME_ARRAY));
-        assert!(policy.should_force_f32(ACCESSION_MZ_ARRAY));
+        assert!(policy.is_xy_array(MZ_ARRAY));
+        assert!(policy.is_xy_array(INTENSITY_ARRAY));
+        assert!(!policy.is_xy_array(TIME_ARRAY));
+        assert!(policy.should_force_f32(MZ_ARRAY));
     }
 
     #[test]
     fn array_policy_no_force_when_disabled() {
         let policy = ArrayPolicy {
-            x_array_accession: ACCESSION_MZ_ARRAY,
-            y_array_accession: ACCESSION_INTENSITY_ARRAY,
+            x_array_accession: MZ_ARRAY,
+            y_array_accession: INTENSITY_ARRAY,
             force_f32: false,
         };
-        assert!(!policy.should_force_f32(ACCESSION_MZ_ARRAY));
+        assert!(!policy.should_force_f32(MZ_ARRAY));
     }
 }

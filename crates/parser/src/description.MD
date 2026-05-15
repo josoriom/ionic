@@ -13,15 +13,15 @@ The Header is the "Root" of the file. It is a fixed-size block that contains glo
 | 14     | 2    | `reserved`                        | u8[2]   | Reserved (0).                                                       |
 | 16     | 8    | `target_block_uncompressed_bytes` | u64     | Target uncompressed bytes per block.                                |
 |        |      | **Spectrum sections**             |         |
-| 24     | 8    | `off_spec_filter`                 | u64     | Byte offset to Section A0 (Spectrum Filter Index).                  |
-| 32     | 8    | `len_spec_filter`                 | u64     | Byte length of Section A0 (must equal `spectrum_count × 128`).      |
+| 24     | 8    | `off_spec_summary`                | u64     | Byte offset to Section A0 (Spectrum Summary).                       |
+| 32     | 8    | `len_spec_summary`                | u64     | Byte length of Section A0 (must equal `spectrum_count × 128`).      |
 | 40     | 8    | `off_spec_entries`                | u64     | Byte offset to Section A1 (Spectrum Entries).                       |
 | 48     | 8    | `len_spec_entries`                | u64     | **On-disk byte length** of Section A1.                              |
 | 56     | 8    | `off_spec_arrayrefs`              | u64     | Byte offset to Section A2 (Spectrum ArrayRef).                      |
 | 64     | 8    | `len_spec_arrayrefs`              | u64     | **On-disk byte length** of Section A2.                              |
 |        |      | **Chromatogram sections**         |         |
-| 72     | 8    | `off_chrom_filter`                | u64     | Byte offset to Section B0 (Chromatogram Filter Index).              |
-| 80     | 8    | `len_chrom_filter`                | u64     | Byte length of Section B0 (must equal `chrom_count × 128`).         |
+| 72     | 8    | `off_chrom_summary`               | u64     | Byte offset to Section B0 (Chromatogram Summary).                   |
+| 80     | 8    | `len_chrom_summary`               | u64     | Byte length of Section B0 (must equal `chrom_count × 128`).         |
 | 88     | 8    | `off_chrom_entries`               | u64     | Byte offset to Section B1 (Chromatogram Entries).                   |
 | 96     | 8    | `len_chrom_entries`               | u64     | **On-disk byte length** of Section B1.                              |
 | 104    | 8    | `off_chrom_arrayrefs`             | u64     | Byte offset to Section B2 (Chromatogram ArrayRef).                  |
@@ -62,9 +62,9 @@ The Header is the "Root" of the file. It is a fixed-size block that contains glo
 | 1016   | 4    | `global_meta_crc32`               | u32     | CRC-32 of compressed Section E.                                     |
 | 1020   | 4    | `header_crc32`                    | u32     | CRC-32 over header bytes 0–1019.                                    |
 
-# Section A0: Spectrum Filter Index (128 Bytes)
+# Section A0: Spectrum Summary (128 Bytes)
 
-Section A0 is a flat, uncompressed array of fixed-width 128-byte records, one per spectrum in index order. Enables fast filtering without decompressing any blocks. All unknown values are encoded as `f64::NaN` (floats) or `0` (integers).
+Section A0 is a flat, uncompressed array of fixed-width 128-byte summaries, one per spectrum in index order. Enables fast filtering without decompressing any blocks. All unknown values are encoded as `f64::NaN` (floats) or `0` (integers).
 
 | Offset | Size | Name                | Type   | Description                                                  |
 | :----- | :--- | :------------------ | :----- | :----------------------------------------------------------- |
@@ -77,8 +77,8 @@ Section A0 is a flat, uncompressed array of fixed-width 128-byte records, one pe
 | 41     | 1    | `polarity`          | u8     | 0=unknown, 1=positive (MS:1000130), 2=negative (MS:1000129). |
 | 42     | 86   | `reserved`          | u8[86] | Reserved (0). Future fields go here without resizing.        |
 
-- The array contains exactly `spectrum_count` records, in spectrum index order.
-- The section is stored **uncompressed**. `len_spec_filter` must equal `spectrum_count × 128`.
+- The array contains exactly `spectrum_count` summaries, in spectrum index order.
+- The section is stored **uncompressed**. `len_spec_summary` must equal `spectrum_count × 128`.
 
 # Section A1: Spectrum Entries (16 Bytes)
 
@@ -103,9 +103,9 @@ A contiguous array of 32-byte entries. Each entry represents one array belonging
 |     25 |    1 | `array_filter` | u8    | Per-array transform: `0=none`, `2=delta+shuffle` for `dtype=1` (`F64`) only; other dtypes must use `0` |
 |     26 |    6 | `reserved`     | u8[6] | Reserved (0)                                                                                           |
 
-# Section B0: Chromatogram Filter Index (128 Bytes)
+# Section B0: Chromatogram Summary (128 Bytes)
 
-Section B0 is a flat, uncompressed array of fixed-width 128-byte records, one per chromatogram in index order. Enables fast filtering without decompressing any blocks. All unknown values are encoded as `f64::NaN` (floats) or `0` (integers).
+Section B0 is a flat, uncompressed array of fixed-width 128-byte summaries, one per chromatogram in index order. Enables fast filtering without decompressing any blocks. All unknown values are encoded as `f64::NaN` (floats) or `0` (integers).
 
 | Offset | Size | Name                   | Type   | Description                                                  |
 | :----- | :--- | :--------------------- | :----- | :----------------------------------------------------------- |
@@ -118,8 +118,8 @@ Section B0 is a flat, uncompressed array of fixed-width 128-byte records, one pe
 | 48     | 1    | `polarity`             | u8     | 0=unknown, 1=positive (MS:1000130), 2=negative (MS:1000129). |
 | 49     | 79   | `reserved`             | u8[79] | Reserved (0). Future fields go here without resizing.        |
 
-- The array contains exactly `chrom_count` records, in chromatogram index order.
-- The section is stored **uncompressed**. `len_chrom_filter` must equal `chrom_count × 128`.
+- The array contains exactly `chrom_count` summaries, in chromatogram index order.
+- The section is stored **uncompressed**. `len_chrom_summary` must equal `chrom_count × 128`.
 
 # Section B1: Chromatogram Entries (16 Bytes)
 

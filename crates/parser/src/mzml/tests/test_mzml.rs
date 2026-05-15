@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    BinaryData, NumericType,
-    mzml::structs::MzML,
+    mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{CvRefMode, assert_cv, mzml, spectrum_precursor_list, spectrum_scan_list},
 };
 

@@ -1,5 +1,4 @@
 pub(crate) mod parse_header;
-pub use parse_header::Header;
 #[allow(unused_imports)]
 pub(crate) use parse_header::parse_header;
 pub(crate) mod common;

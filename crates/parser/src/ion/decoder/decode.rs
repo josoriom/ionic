@@ -1,48 +1,51 @@
-use memmap2::Mmap;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
-use std::collections::HashMap;
 use std::{
+    collections::HashMap,
     fs::File,
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
 };
 
-use crate::encoder::encode::{CHROM_FILTER_RECORD_SIZE, SPEC_FILTER_RECORD_SIZE};
-use crate::ion::attr_meta::ACC_ATTR_DEFAULT_SOURCE_FILE_REF;
-use crate::ion::encoder::encode::{
-    FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32, FILE_DTYPE_I64,
-};
-use crate::ion::encoder::utilities::container_builder::FilterType;
-use crate::ion::encoder::utilities::delta_filter;
-use crate::ion::utilities::{
-    container_view::{ContainerAccess, ContainerView, DefaultProcessor},
-    parse_header::{Header, parse_header},
-    spectrum_source::{
-        ScanSource, ScanSummary, f16_bits_to_f64, load_scan_from_spectra, summary_from_spectra,
-        summary_from_spectrum,
+use memmap2::Mmap;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+
+use crate::{
+    accessions::format_accession,
+    encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
+    ion::{
+        IonError, IonResult,
+        attr_meta::{
+            ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
+            ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
+            ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
+        },
+        encoder::{
+            encode::{
+                FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
+                FILE_DTYPE_I64,
+            },
+            utilities::{container_builder::FilterType, delta_filter},
+        },
+        filter_summary::{ChromatogramSummary, SpectrumSummary},
+        utilities::{
+            children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
+            common::get_attr_text,
+            container_view::{ContainerAccess, ContainerView, DefaultProcessor},
+            parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
+            parse_data_processing_list, parse_file_description,
+            parse_global_metadata::parse_global_metadata,
+            parse_header::{Header, parse_header},
+            parse_instrument_list, parse_metadata, parse_referenceable_param_group_list,
+            parse_sample_list, parse_scan_settings_list, parse_software_list, parse_spectrum_list,
+            spectrum_source::{
+                ScanSource, ScanSummary, f16_bits_to_f64, load_scan_from_spectra,
+                summary_from_spectra, summary_from_spectrum,
+            },
+        },
     },
+    mzml::{schema::TagId, structs::*},
 };
-use crate::ion::{IonError, IonResult};
-use crate::ion::{
-    attr_meta::{
-        ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_ID,
-        ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
-        ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
-    },
-    utilities::{
-        children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
-        common::get_attr_text,
-        parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
-        parse_data_processing_list, parse_file_description,
-        parse_global_metadata::parse_global_metadata,
-        parse_instrument_list, parse_metadata, parse_referenceable_param_group_list,
-        parse_sample_list, parse_scan_settings_list, parse_software_list, parse_spectrum_list,
-    },
-};
-use crate::mzml::structs::{ChromFilterRecord, SpecFilterRecord};
-use crate::mzml::{schema::TagId, structs::*};
 
 const ACC_MZ: u32 = 1_000_514;
 const ACC_INT: u32 = 1_000_515;
@@ -239,7 +242,7 @@ impl<'a> Decoder<'a> {
     }
 
     #[inline]
-    pub fn header(&self) -> &Header {
+    pub(crate) fn header(&self) -> &Header {
         &self.header
     }
 
@@ -253,77 +256,76 @@ impl<'a> Decoder<'a> {
         self.header.chrom_count
     }
 
-    pub fn spec_filter_record(&self, index: usize) -> Option<SpecFilterRecord> {
-        let b = slice_record(
+    pub fn spec_summary(&self, index: usize) -> Option<SpectrumSummary> {
+        let b = slice_summary(
             &self.bytes,
-            self.header.off_spec_filter,
+            self.header.off_spec_summary,
             index,
-            SPEC_FILTER_RECORD_SIZE,
+            SPEC_SUMMARY_SIZE,
             self.header.spectrum_count,
         )?;
-        Some(parse_spec_filter_record(b))
+        Some(parse_spec_summary(b))
     }
 
-    pub fn spec_filter_records(&self) -> IonResult<Vec<SpecFilterRecord>> {
-        let off = usize::try_from(self.header.off_spec_filter)
-            .map_err(|_| IonError::from("spec filter: out of bounds"))?;
-        let len = usize::try_from(self.header.len_spec_filter)
-            .map_err(|_| IonError::from("spec filter: out of bounds"))?;
+    pub fn spec_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
+        let off = usize::try_from(self.header.off_spec_summary)
+            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
+        let len = usize::try_from(self.header.len_spec_summary)
+            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
         let count = usize::try_from(self.header.spectrum_count)
-            .map_err(|_| IonError::from("spec filter: out of bounds"))?;
-        if len != count * SPEC_FILTER_RECORD_SIZE {
-            return Err(format!(
-                "spec filter: len={len} != count={count} × {SPEC_FILTER_RECORD_SIZE}"
-            )
-            .into());
+            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
+        if len != count * SPEC_SUMMARY_SIZE {
+            return Err(
+                format!("spec summary: len={len} != count={count} × {SPEC_SUMMARY_SIZE}").into(),
+            );
         }
         let end = off
             .checked_add(len)
-            .ok_or_else(|| IonError::from("spec filter: out of bounds"))?;
+            .ok_or_else(|| IonError::from("spec summary: out of bounds"))?;
         let section = self
             .bytes
             .get(off..end)
-            .ok_or_else(|| IonError::from("spec filter: out of bounds"))?;
+            .ok_or_else(|| IonError::from("spec summary: out of bounds"))?;
         Ok(section
-            .chunks_exact(SPEC_FILTER_RECORD_SIZE)
-            .map(parse_spec_filter_record)
+            .chunks_exact(SPEC_SUMMARY_SIZE)
+            .map(parse_spec_summary)
             .collect())
     }
 
-    pub fn chrom_filter_record(&self, index: usize) -> Option<ChromFilterRecord> {
-        let b = slice_record(
+    pub fn chrom_summary(&self, index: usize) -> Option<ChromatogramSummary> {
+        let b = slice_summary(
             &self.bytes,
-            self.header.off_chrom_filter,
+            self.header.off_chrom_summary,
             index,
-            CHROM_FILTER_RECORD_SIZE,
+            CHROM_SUMMARY_SIZE,
             self.header.chrom_count,
         )?;
-        Some(parse_chrom_filter_record(b))
+        Some(parse_chrom_summary(b))
     }
 
-    pub fn chrom_filter_records(&self) -> IonResult<Vec<ChromFilterRecord>> {
-        let off = usize::try_from(self.header.off_chrom_filter)
-            .map_err(|_| IonError::from("chrom filter: out of bounds"))?;
-        let len = usize::try_from(self.header.len_chrom_filter)
-            .map_err(|_| IonError::from("chrom filter: out of bounds"))?;
+    pub fn chrom_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
+        let off = usize::try_from(self.header.off_chrom_summary)
+            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
+        let len = usize::try_from(self.header.len_chrom_summary)
+            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
         let count = usize::try_from(self.header.chrom_count)
-            .map_err(|_| IonError::from("chrom filter: out of bounds"))?;
-        if len != count * CHROM_FILTER_RECORD_SIZE {
+            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
+        if len != count * CHROM_SUMMARY_SIZE {
             return Err(format!(
-                "chrom filter: len={len} != count={count} × {CHROM_FILTER_RECORD_SIZE}"
+                "chrom summary: len={len} != count={count} × {CHROM_SUMMARY_SIZE}"
             )
             .into());
         }
         let end = off
             .checked_add(len)
-            .ok_or_else(|| IonError::from("chrom filter: out of bounds"))?;
+            .ok_or_else(|| IonError::from("chrom summary: out of bounds"))?;
         let section = self
             .bytes
             .get(off..end)
-            .ok_or_else(|| IonError::from("chrom filter: out of bounds"))?;
+            .ok_or_else(|| IonError::from("chrom summary: out of bounds"))?;
         Ok(section
-            .chunks_exact(CHROM_FILTER_RECORD_SIZE)
-            .map(parse_chrom_filter_record)
+            .chunks_exact(CHROM_SUMMARY_SIZE)
+            .map(parse_chrom_summary)
             .collect())
     }
 
@@ -543,6 +545,23 @@ impl<'a> Ion<'a> {
         }
     }
 
+    fn clone_as_mzml_metadata_only(&self) -> MzML {
+        let mut run = self.run.clone();
+        run.spectrum_list = None;
+        run.chromatogram_list = None;
+        MzML {
+            cv_list: self.cv_list.clone(),
+            file_description: self.file_description.clone(),
+            referenceable_param_group_list: self.referenceable_param_group_list.clone(),
+            sample_list: self.sample_list.clone(),
+            instrument_list: self.instrument_list.clone(),
+            software_list: self.software_list.clone(),
+            data_processing_list: self.data_processing_list.clone(),
+            scan_settings_list: self.scan_settings_list.clone(),
+            run,
+        }
+    }
+
     pub fn load_metadata(&mut self) -> IonResult<()> {
         let mzml = match &mut self.backend {
             IonBackend::Decoder(decoder) => Some(decoder.to_mzml_metadata_only()?),
@@ -581,40 +600,40 @@ impl<'a> Ion<'a> {
     }
 
     #[inline]
-    pub fn header(&self) -> Option<&Header> {
+    pub(crate) fn header(&self) -> Option<&Header> {
         self.backend.as_decoder().map(|d| d.header())
     }
 
     #[inline]
-    pub fn spec_filter_record(&self, index: usize) -> Option<SpecFilterRecord> {
+    pub fn spec_summary(&self, index: usize) -> Option<SpectrumSummary> {
         self.backend
             .as_decoder()
-            .and_then(|d| d.spec_filter_record(index))
+            .and_then(|d| d.spec_summary(index))
     }
 
-    pub fn spec_filter_records(&self) -> IonResult<Vec<SpecFilterRecord>> {
+    pub fn spec_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
         self.backend
             .as_decoder()
             .ok_or_else(|| {
-                IonError::from("spec filter records are unavailable for mzML-backed Ion")
+                IonError::from("spec summary summaries are unavailable for mzML-backed Ion")
             })
-            .and_then(|d| d.spec_filter_records())
+            .and_then(|d| d.spec_summaries())
     }
 
     #[inline]
-    pub fn chrom_filter_record(&self, index: usize) -> Option<ChromFilterRecord> {
+    pub fn chrom_summary(&self, index: usize) -> Option<ChromatogramSummary> {
         self.backend
             .as_decoder()
-            .and_then(|d| d.chrom_filter_record(index))
+            .and_then(|d| d.chrom_summary(index))
     }
 
-    pub fn chrom_filter_records(&self) -> IonResult<Vec<ChromFilterRecord>> {
+    pub fn chrom_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
         self.backend
             .as_decoder()
             .ok_or_else(|| {
-                IonError::from("chrom filter records are unavailable for mzML-backed Ion")
+                IonError::from("chrom summary summaries are unavailable for mzML-backed Ion")
             })
-            .and_then(|d| d.chrom_filter_records())
+            .and_then(|d| d.chrom_summaries())
     }
 
     pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
@@ -658,17 +677,17 @@ impl<'a> Ion<'a> {
         self.backend
             .as_decoder()
             .map(|d| d.to_mzml_metadata_only())
-            .unwrap_or_else(|| Ok(self.clone_as_mzml()))
+            .unwrap_or_else(|| Ok(self.clone_as_mzml_metadata_only()))
     }
 }
 
 impl ScanSource for Decoder<'_> {
     fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
-        let Some(filter_bytes) =
-            usize::try_from(self.header.off_spec_filter)
+        let Some(summary_bytes) =
+            usize::try_from(self.header.off_spec_summary)
                 .ok()
                 .and_then(|off| {
-                    usize::try_from(self.header.len_spec_filter)
+                    usize::try_from(self.header.len_spec_summary)
                         .ok()
                         .and_then(|len| {
                             off.checked_add(len)
@@ -678,21 +697,18 @@ impl ScanSource for Decoder<'_> {
         else {
             return;
         };
-        for (index, chunk) in filter_bytes
-            .chunks_exact(SPEC_FILTER_RECORD_SIZE)
-            .enumerate()
-        {
-            let record = parse_spec_filter_record(chunk);
+        for (index, chunk) in summary_bytes.chunks_exact(SPEC_SUMMARY_SIZE).enumerate() {
+            let summary = parse_spec_summary(chunk);
             callback(
                 index,
                 ScanSummary {
-                    rt: record.rt_seconds / 60.0,
-                    base_peak_mz: record.base_peak_mz,
-                    selected_ion_mz: record.selected_ion_mz,
-                    base_peak_int: record.base_peak_int,
-                    total_ion_current: record.total_ion_current,
-                    ms_level: record.ms_level,
-                    polarity: record.polarity,
+                    rt: summary.rt_seconds / 60.0,
+                    base_peak_mz: summary.base_peak_mz,
+                    selected_ion_mz: summary.selected_ion_mz,
+                    base_peak_int: summary.base_peak_int,
+                    total_ion_current: summary.total_ion_current,
+                    ms_level: summary.ms_level,
+                    polarity: summary.polarity,
                 },
             );
         }
@@ -741,13 +757,13 @@ impl ScanSource for Decoder<'_> {
         Self: Sized,
         F: FnMut(&ScanSummary, &[f64], &[f64]),
     {
-        let Some(filter_bytes) =
+        let Some(summary_bytes) =
             self.header
-                .len_spec_filter
+                .len_spec_summary
                 .try_into()
                 .ok()
                 .and_then(|len: usize| {
-                    usize::try_from(self.header.off_spec_filter)
+                    usize::try_from(self.header.off_spec_summary)
                         .ok()
                         .and_then(|off| {
                             off.checked_add(len)
@@ -781,7 +797,7 @@ impl ScanSource for Decoder<'_> {
             &mut self.int_buf,
         );
         ScanIterator::new(
-            filter_bytes,
+            summary_bytes,
             entry_bytes,
             array_ref_bytes,
             container,
@@ -978,7 +994,7 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
 }
 
 struct ScanIterator<'a, 'd> {
-    filter_chunks: std::slice::ChunksExact<'a, u8>,
+    summary_chunks: std::slice::ChunksExact<'a, u8>,
     entry_chunks: std::slice::ChunksExact<'a, u8>,
     aref_bytes: &'a [u8],
     container: &'d mut dyn ContainerAccess,
@@ -992,7 +1008,7 @@ struct ScanIterator<'a, 'd> {
 impl<'a, 'd> ScanIterator<'a, 'd> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        filter_bytes: &'a [u8],
+        summary_bytes: &'a [u8],
         entry_bytes: &'a [u8],
         aref_bytes: &'a [u8],
         container: &'d mut dyn ContainerAccess,
@@ -1003,7 +1019,7 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         ms_level: u8,
     ) -> Self {
         Self {
-            filter_chunks: filter_bytes.chunks_exact(SPEC_FILTER_RECORD_SIZE),
+            summary_chunks: summary_bytes.chunks_exact(SPEC_SUMMARY_SIZE),
             entry_chunks: entry_bytes.chunks_exact(INDEX_ENTRY_BYTES),
             aref_bytes,
             container,
@@ -1019,17 +1035,17 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
     where
         F: FnMut(&ScanSummary, &[f64], &[f64]),
     {
-        for (filter_bytes, entry_bytes) in
-            self.filter_chunks.by_ref().zip(self.entry_chunks.by_ref())
+        for (summary_bytes, entry_bytes) in
+            self.summary_chunks.by_ref().zip(self.entry_chunks.by_ref())
         {
-            let record = parse_spec_filter_record(filter_bytes);
-            if !record.rt_seconds.is_finite()
-                || record.rt_seconds < self.rt_min_s
-                || record.rt_seconds > self.rt_max_s
+            let summary = parse_spec_summary(summary_bytes);
+            if !summary.rt_seconds.is_finite()
+                || summary.rt_seconds < self.rt_min_s
+                || summary.rt_seconds > self.rt_max_s
             {
                 continue;
             }
-            if self.ms_level != 0 && record.ms_level != self.ms_level {
+            if self.ms_level != 0 && summary.ms_level != self.ms_level {
                 continue;
             }
             let Some((mz_ref, int_ref)) = parse_array_pair(entry_bytes, self.aref_bytes) else {
@@ -1046,13 +1062,13 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
                 continue;
             }
             let summary = ScanSummary {
-                rt: record.rt_seconds / 60.0,
-                ms_level: record.ms_level,
-                polarity: record.polarity,
-                base_peak_mz: record.base_peak_mz,
-                selected_ion_mz: record.selected_ion_mz,
-                base_peak_int: record.base_peak_int,
-                total_ion_current: record.total_ion_current,
+                rt: summary.rt_seconds / 60.0,
+                ms_level: summary.ms_level,
+                polarity: summary.polarity,
+                base_peak_mz: summary.base_peak_mz,
+                selected_ion_mz: summary.selected_ion_mz,
+                base_peak_int: summary.base_peak_int,
+                total_ion_current: summary.total_ion_current,
             };
             callback(&summary, &self.mz_buf[..len], &self.int_buf[..len]);
         }
@@ -1126,7 +1142,7 @@ impl ArrayRefs {
 }
 
 #[inline]
-fn slice_record(bytes: &[u8], off: u64, index: usize, size: usize, count: u64) -> Option<&[u8]> {
+fn slice_summary(bytes: &[u8], off: u64, index: usize, size: usize, count: u64) -> Option<&[u8]> {
     if index >= count as usize {
         return None;
     }
@@ -1137,8 +1153,8 @@ fn slice_record(bytes: &[u8], off: u64, index: usize, size: usize, count: u64) -
 }
 
 #[inline]
-fn parse_spec_filter_record(bytes: &[u8]) -> SpecFilterRecord {
-    SpecFilterRecord {
+fn parse_spec_summary(bytes: &[u8]) -> SpectrumSummary {
+    SpectrumSummary {
         rt_seconds: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
         base_peak_mz: f64::from_le_bytes(bytes[8..16].try_into().unwrap()),
         selected_ion_mz: f64::from_le_bytes(bytes[16..24].try_into().unwrap()),
@@ -1149,8 +1165,8 @@ fn parse_spec_filter_record(bytes: &[u8]) -> SpecFilterRecord {
     }
 }
 
-fn parse_chrom_filter_record(bytes: &[u8]) -> ChromFilterRecord {
-    ChromFilterRecord {
+fn parse_chrom_summary(bytes: &[u8]) -> ChromatogramSummary {
+    ChromatogramSummary {
         lowest_mz: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
         highest_mz: f64::from_le_bytes(bytes[8..16].try_into().unwrap()),
         lowest_wavelength: f64::from_le_bytes(bytes[16..24].try_into().unwrap()),
@@ -1507,7 +1523,7 @@ fn make_binary_array_stub(array_type: u32) -> BinaryDataArray {
     BinaryDataArray {
         cv_params: vec![CvParam {
             cv_ref: Some("MS".to_string()),
-            accession: Some(format!("MS:{array_type:07}")),
+            accession: Some(format_accession(array_type)),
             name: String::new(),
             ..Default::default()
         }],
@@ -1530,7 +1546,7 @@ fn sync_numeric_meta(binary_array: &mut BinaryDataArray, numeric_type: NumericTy
         .retain(|param| !is_numeric_acc(parse_accession_tail(param.accession.as_deref())));
     binary_array.cv_params.push(CvParam {
         cv_ref: Some("MS".into()),
-        accession: Some(format!("MS:{target:07}")),
+        accession: Some(format_accession(target)),
         name: match target {
             1_000_521 => "32-bit float",
             1_000_523 => "64-bit float",
@@ -1612,15 +1628,15 @@ mod tests {
     }
 
     #[test]
-    fn filter_record_returns_none_out_of_bounds() {
+    fn summary_returns_none_out_of_bounds() {
         let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
-        assert!(d.spec_filter_record(d.spectrum_count() as usize).is_none());
+        assert!(d.spec_summary(d.spectrum_count() as usize).is_none());
     }
 
     #[test]
-    fn filter_record_has_valid_rt() {
+    fn summary_has_valid_rt() {
         let d = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
-        let r = d.spec_filter_record(0).unwrap();
+        let r = d.spec_summary(0).unwrap();
         assert!(r.rt_seconds.is_finite() && r.rt_seconds >= 0.0);
         assert!(r.ms_level >= 1);
     }
@@ -1667,7 +1683,7 @@ mod tests {
             count += 1;
         });
         let expected = (0..d.spectrum_count() as usize)
-            .filter(|&i| d.spec_filter_record(i).map_or(false, |r| r.ms_level == 1))
+            .filter(|&i| d.spec_summary(i).map_or(false, |r| r.ms_level == 1))
             .count();
         assert_eq!(count, expected);
     }
@@ -1765,9 +1781,9 @@ mod tests {
     }
 
     #[test]
-    fn ion_filter_record_matches_decoder() {
+    fn ion_summary_matches_decoder() {
         let ion = Ion::open(BYTES, DecoderConfig::default()).unwrap();
-        let r = ion.spec_filter_record(0).unwrap();
+        let r = ion.spec_summary(0).unwrap();
         assert!(r.rt_seconds.is_finite());
         assert!(r.ms_level >= 1);
     }

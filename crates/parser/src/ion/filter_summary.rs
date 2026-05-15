@@ -1,0 +1,23 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Copy)]
+pub struct SpectrumSummary {
+    pub rt_seconds: f64,
+    pub base_peak_mz: f64,
+    pub selected_ion_mz: f64,
+    pub base_peak_int: f64,
+    pub total_ion_current: f64,
+    pub ms_level: u8,
+    pub polarity: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Copy)]
+pub struct ChromatogramSummary {
+    pub lowest_mz: f64,
+    pub highest_mz: f64,
+    pub lowest_wavelength: f64,
+    pub highest_wavelength: f64,
+    pub lowest_ion_mobility: f64,
+    pub highest_ion_mobility: f64,
+    pub polarity: u8,
+}

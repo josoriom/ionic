@@ -160,11 +160,11 @@ fn missing_file_description_returns_error() {
         result.is_err(),
         "missing file_description should return error"
     );
-    let err = result.unwrap_err();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.to_lowercase().contains("filedescription")
-            || err.to_lowercase().contains("file_description")
-            || err.to_lowercase().contains("file description"),
+        err.contains("filedescription")
+            || err.contains("file_description")
+            || err.contains("file description"),
         "error should mention file description, got: {err}"
     );
 }

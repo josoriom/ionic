@@ -39,10 +39,10 @@ fn check_header() {
     assert!(header.global_meta_uncompressed_bytes > 0);
 
     for &off in &[
-        header.off_spec_filter,
+        header.off_spec_summary,
         header.off_spec_entries,
         header.off_spec_arrayrefs,
-        header.off_chrom_filter,
+        header.off_chrom_summary,
         header.off_chrom_entries,
         header.off_chrom_arrayrefs,
         header.off_spec_meta,
@@ -57,8 +57,8 @@ fn check_header() {
 
     assert!(
         header
-            .off_spec_filter
-            .saturating_add(header.len_spec_filter)
+            .off_spec_summary
+            .saturating_add(header.len_spec_summary)
             <= header.off_spec_entries
     );
     assert!(
@@ -71,12 +71,12 @@ fn check_header() {
         header
             .off_spec_arrayrefs
             .saturating_add(header.len_spec_arrayrefs)
-            <= header.off_chrom_filter
+            <= header.off_chrom_summary
     );
     assert!(
         header
-            .off_chrom_filter
-            .saturating_add(header.len_chrom_filter)
+            .off_chrom_summary
+            .saturating_add(header.len_chrom_summary)
             <= header.off_chrom_entries
     );
     assert!(
@@ -97,7 +97,7 @@ fn check_header() {
         header
             .off_chrom_container
             .saturating_add(header.len_chrom_container)
-            <= header.off_spec_filter
+            <= header.off_spec_summary
     );
     assert!(
         header
@@ -113,10 +113,10 @@ fn check_header() {
 
     let len = bytes.len() as u64;
     for &off in &[
-        header.off_spec_filter,
+        header.off_spec_summary,
         header.off_spec_entries,
         header.off_spec_arrayrefs,
-        header.off_chrom_filter,
+        header.off_chrom_summary,
         header.off_chrom_entries,
         header.off_chrom_arrayrefs,
         header.off_spec_meta,

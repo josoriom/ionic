@@ -2,8 +2,8 @@ use std::{fs, path::PathBuf};
 
 use crate::ion::utilities::children_lookup::{ChildrenLookup, OwnerRows};
 use crate::mzml::schema::TagId;
+use crate::mzml::structs::CvParam;
 use crate::{
-    CvParam,
     ion::decoder::decode::Metadatum,
     ion::utilities::{parse_header, parse_metadata, parse_scan_list},
 };

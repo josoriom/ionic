@@ -1,5 +1,8 @@
 use crate::{
-    BinaryDataArray, BinaryDataArrayList, CvParam, NumericType,
+    accessions::{
+        ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR, ACC_FLOAT_64BIT_STR, ACC_INT_16BIT_STR,
+        ACC_INT_32BIT_STR, ACC_INT_64BIT_STR,
+    },
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -12,15 +15,13 @@ use crate::{
             parse_cv_and_user_params,
         },
     },
-    mzml::{schema::TagId, structs::ReferenceableParamGroupRef},
+    mzml::{
+        schema::TagId,
+        structs::{
+            BinaryDataArray, BinaryDataArrayList, CvParam, NumericType, ReferenceableParamGroupRef,
+        },
+    },
 };
-
-const ACC_NUMERIC_INT32: &str = "MS:1000519";
-const ACC_NUMERIC_FLOAT32: &str = "MS:1000521";
-const ACC_NUMERIC_INT64: &str = "MS:1000522";
-const ACC_NUMERIC_FLOAT64: &str = "MS:1000523";
-const ACC_NUMERIC_FLOAT16: &str = "MS:1000520";
-const ACC_NUMERIC_INT16: &str = "MS:1000518";
 
 #[inline]
 pub(crate) fn parse_binary_data_array_list(
@@ -97,12 +98,12 @@ fn parse_binary_data_array<'a, P: MetadataPolicy>(
 #[inline]
 fn numeric_type_from_cv_params(cv_params: &[CvParam]) -> Option<NumericType> {
     cv_params.iter().find_map(|p| match p.accession.as_deref() {
-        Some(ACC_NUMERIC_FLOAT16) => Some(NumericType::Float16),
-        Some(ACC_NUMERIC_INT16) => Some(NumericType::Int16),
-        Some(ACC_NUMERIC_INT32) => Some(NumericType::Int32),
-        Some(ACC_NUMERIC_FLOAT32) => Some(NumericType::Float32),
-        Some(ACC_NUMERIC_INT64) => Some(NumericType::Int64),
-        Some(ACC_NUMERIC_FLOAT64) => Some(NumericType::Float64),
+        Some(ACC_FLOAT_16BIT_STR) => Some(NumericType::Float16),
+        Some(ACC_INT_16BIT_STR) => Some(NumericType::Int16),
+        Some(ACC_INT_32BIT_STR) => Some(NumericType::Int32),
+        Some(ACC_FLOAT_32BIT_STR) => Some(NumericType::Float32),
+        Some(ACC_INT_64BIT_STR) => Some(NumericType::Int64),
+        Some(ACC_FLOAT_64BIT_STR) => Some(NumericType::Float64),
         _ => None,
     })
 }

@@ -12,11 +12,12 @@ quick-xml = { workspace = true }
 serde_json = { workspace = true }
 zstd = { workspace = true }
 rayon = { workspace = true }
-hashbrown = "0.16.1"
+hashbrown = "0.17.1"
+itoa = { workspace = true }
 crc32fast = "1.5.0"
-sha1 = "0.10"
+sha1 = "0.11"
 memmap2 = "0.9"
 
 [dev-dependencies]
 proptest = "1"
-sha1 = "0.10"
+sha1 = "0.11"

@@ -1,5 +1,4 @@
 use crate::{
-    CvParam, UserParam,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_ID, ACC_ATTR_ORDER, ACC_ATTR_REF, ACC_ATTR_SCAN_SETTINGS_REF},
@@ -12,8 +11,8 @@ use crate::{
     mzml::{
         schema::TagId,
         structs::{
-            Analyzer, ComponentList, Detector, Instrument, InstrumentList, InstrumentSoftwareRef,
-            ReferenceableParamGroupRef, ScanSettingsRef, Source,
+            Analyzer, ComponentList, CvParam, Detector, Instrument, InstrumentList,
+            InstrumentSoftwareRef, ReferenceableParamGroupRef, ScanSettingsRef, Source, UserParam,
         },
     },
 };

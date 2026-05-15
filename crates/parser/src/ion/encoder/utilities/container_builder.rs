@@ -2,8 +2,8 @@
 use rayon::prelude::*;
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
-use crate::encoder::utilities::byte_shuffle::shuffle_bytes_by_stride;
 use crate::encoder::utilities::encoder_output::EncoderOutput;
+use crate::ion::byte_transpose::shuffle_with_tail;
 use crate::ion::{IonError, IonResult};
 
 pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
@@ -113,7 +113,7 @@ impl BlockCompressor for DefaultCompressor {
     }
 
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
-        shuffle_bytes_by_stride(input, output, element_stride);
+        shuffle_with_tail(input, output, element_stride);
     }
 }
 
@@ -798,7 +798,7 @@ mod tests {
             Ok(Self)
         }
         fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
-            shuffle_bytes_by_stride(input, output, element_stride);
+            shuffle_with_tail(input, output, element_stride);
         }
     }
 

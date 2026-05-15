@@ -1,5 +1,4 @@
 use crate::{
-    Chromatogram, ChromatogramList,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -18,8 +17,8 @@ use crate::{
     mzml::{
         schema::TagId,
         structs::{
-            Activation, IsolationWindow, Precursor, Product, ReferenceableParamGroupRef,
-            SelectedIon, SelectedIonList,
+            Activation, Chromatogram, ChromatogramList, IsolationWindow, Precursor, Product,
+            ReferenceableParamGroupRef, SelectedIon, SelectedIonList,
         },
     },
 };

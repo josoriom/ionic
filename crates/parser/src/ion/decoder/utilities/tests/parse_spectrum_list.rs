@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use crate::ion::decoder::decode::Metadatum;
 use crate::ion::utilities::children_lookup::{ChildrenLookup, DefaultMetadataPolicy};
 use crate::ion::utilities::{parse_header, parse_metadata, parse_spectrum_list};
-use crate::{CvParam, SpectrumList};
+use crate::mzml::structs::{CvParam, SpectrumList};
 
 const PATH: &str = "data/ion/test.ion";
 

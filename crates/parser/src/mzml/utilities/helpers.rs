@@ -2,12 +2,12 @@ use std::{io::BufRead, str::from_utf8};
 
 use quick_xml::events::{BytesStart, Event};
 
-use crate::{
-    CvEntry, CvParam, ReferenceableParamGroupRef, SoftwareParam, SourceFileRef, UserParam,
-    mzml::{
-        schema::TagId,
-        utilities::{ParseError, ParsingWorkspace, normalize_tag},
+use crate::mzml::{
+    schema::TagId,
+    structs::{
+        CvEntry, CvParam, ReferenceableParamGroupRef, SoftwareParam, SourceFileRef, UserParam,
     },
+    utilities::{ParseError, ParsingWorkspace, normalize_tag},
 };
 
 #[inline]

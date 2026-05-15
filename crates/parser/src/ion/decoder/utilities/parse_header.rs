@@ -185,17 +185,17 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         .unwrap(),
     );
 
-    let off_spec_filter = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFF_SPEC_FILTER..HEADER_OFF_SPEC_FILTER + 8]).unwrap(),
+    let off_spec_summary = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_OFF_SPEC_SUMMARY..HEADER_OFF_SPEC_SUMMARY + 8]).unwrap(),
     );
-    let len_spec_filter = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_SPEC_FILTER..HEADER_LEN_SPEC_FILTER + 8]).unwrap(),
+    let len_spec_summary = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_LEN_SPEC_SUMMARY..HEADER_LEN_SPEC_SUMMARY + 8]).unwrap(),
     );
-    let off_chrom_filter = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFF_CHROM_FILTER..HEADER_OFF_CHROM_FILTER + 8]).unwrap(),
+    let off_chrom_summary = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_OFF_CHROM_SUMMARY..HEADER_OFF_CHROM_SUMMARY + 8]).unwrap(),
     );
-    let len_chrom_filter = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_CHROM_FILTER..HEADER_LEN_CHROM_FILTER + 8]).unwrap(),
+    let len_chrom_summary = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_LEN_CHROM_SUMMARY..HEADER_LEN_CHROM_SUMMARY + 8]).unwrap(),
     );
     let total_file_size = u64::from_le_bytes(
         <[u8; 8]>::try_from(&h[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8]).unwrap(),
@@ -262,10 +262,10 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         spec_meta_uncompressed_bytes,
         chrom_meta_uncompressed_bytes,
         global_meta_uncompressed_bytes,
-        off_spec_filter,
-        len_spec_filter,
-        off_chrom_filter,
-        len_chrom_filter,
+        off_spec_summary,
+        len_spec_summary,
+        off_chrom_summary,
+        len_chrom_summary,
         total_file_size,
         reserved_ext,
         spec_meta_crc32,
@@ -288,60 +288,60 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Header {
-    pub file_signature: [u8; 8],
-    pub endianness_flag: u8,
-    pub format_version: u16,
-    pub compression_codec: u8,
-    pub compression_level: u8,
-    pub default_array_filter: u8,
-    pub target_block_uncompressed_bytes: u64,
-    pub off_spec_filter: u64,
-    pub len_spec_filter: u64,
-    pub off_chrom_filter: u64,
-    pub len_chrom_filter: u64,
-    pub off_spec_entries: u64,
-    pub len_spec_entries: u64,
-    pub off_spec_arrayrefs: u64,
-    pub len_spec_arrayrefs: u64,
-    pub off_chrom_entries: u64,
-    pub len_chrom_entries: u64,
-    pub off_chrom_arrayrefs: u64,
-    pub len_chrom_arrayrefs: u64,
-    pub off_spec_meta: u64,
-    pub len_spec_meta: u64,
-    pub off_chrom_meta: u64,
-    pub len_chrom_meta: u64,
-    pub off_global_meta: u64,
-    pub len_global_meta: u64,
-    pub off_spec_container: u64,
-    pub len_spec_container: u64,
-    pub off_chrom_container: u64,
-    pub len_chrom_container: u64,
-    pub spec_block_count: u64,
-    pub chrom_block_count: u64,
-    pub spectrum_count: u64,
-    pub chrom_count: u64,
-    pub spec_meta_count: u64,
-    pub spec_meta_numeric_count: u64,
-    pub spec_meta_string_count: u64,
-    pub chrom_meta_count: u64,
-    pub chrom_meta_numeric_count: u64,
-    pub chrom_meta_string_count: u64,
-    pub global_meta_count: u64,
-    pub global_meta_numeric_count: u64,
-    pub global_meta_string_count: u64,
-    pub spec_array_type_count: u64,
-    pub chrom_array_type_count: u64,
-    pub spec_meta_uncompressed_bytes: u64,
-    pub chrom_meta_uncompressed_bytes: u64,
-    pub global_meta_uncompressed_bytes: u64,
-    pub total_file_size: u64,
-    pub reserved_ext: [u8; RESERVED_EXT_SIZE],
-    pub spec_meta_crc32: u32,
-    pub chrom_meta_crc32: u32,
-    pub global_meta_crc32: u32,
-    pub header_crc32: u32,
+pub(crate) struct Header {
+    pub(crate) file_signature: [u8; 8],
+    pub(crate) endianness_flag: u8,
+    pub(crate) format_version: u16,
+    pub(crate) compression_codec: u8,
+    pub(crate) compression_level: u8,
+    pub(crate) default_array_filter: u8,
+    pub(crate) target_block_uncompressed_bytes: u64,
+    pub(crate) off_spec_summary: u64,
+    pub(crate) len_spec_summary: u64,
+    pub(crate) off_chrom_summary: u64,
+    pub(crate) len_chrom_summary: u64,
+    pub(crate) off_spec_entries: u64,
+    pub(crate) len_spec_entries: u64,
+    pub(crate) off_spec_arrayrefs: u64,
+    pub(crate) len_spec_arrayrefs: u64,
+    pub(crate) off_chrom_entries: u64,
+    pub(crate) len_chrom_entries: u64,
+    pub(crate) off_chrom_arrayrefs: u64,
+    pub(crate) len_chrom_arrayrefs: u64,
+    pub(crate) off_spec_meta: u64,
+    pub(crate) len_spec_meta: u64,
+    pub(crate) off_chrom_meta: u64,
+    pub(crate) len_chrom_meta: u64,
+    pub(crate) off_global_meta: u64,
+    pub(crate) len_global_meta: u64,
+    pub(crate) off_spec_container: u64,
+    pub(crate) len_spec_container: u64,
+    pub(crate) off_chrom_container: u64,
+    pub(crate) len_chrom_container: u64,
+    pub(crate) spec_block_count: u64,
+    pub(crate) chrom_block_count: u64,
+    pub(crate) spectrum_count: u64,
+    pub(crate) chrom_count: u64,
+    pub(crate) spec_meta_count: u64,
+    pub(crate) spec_meta_numeric_count: u64,
+    pub(crate) spec_meta_string_count: u64,
+    pub(crate) chrom_meta_count: u64,
+    pub(crate) chrom_meta_numeric_count: u64,
+    pub(crate) chrom_meta_string_count: u64,
+    pub(crate) global_meta_count: u64,
+    pub(crate) global_meta_numeric_count: u64,
+    pub(crate) global_meta_string_count: u64,
+    pub(crate) spec_array_type_count: u64,
+    pub(crate) chrom_array_type_count: u64,
+    pub(crate) spec_meta_uncompressed_bytes: u64,
+    pub(crate) chrom_meta_uncompressed_bytes: u64,
+    pub(crate) global_meta_uncompressed_bytes: u64,
+    pub(crate) total_file_size: u64,
+    pub(crate) reserved_ext: [u8; RESERVED_EXT_SIZE],
+    pub(crate) spec_meta_crc32: u32,
+    pub(crate) chrom_meta_crc32: u32,
+    pub(crate) global_meta_crc32: u32,
+    pub(crate) header_crc32: u32,
 }
 
 pub(crate) const HEADER_FORMAT_VERSION: usize = 9;
@@ -349,14 +349,14 @@ pub(crate) const HEADER_CODEC_ID: usize = 11;
 pub(crate) const HEADER_COMPRESSION_LEVEL: usize = 12;
 pub(crate) const HEADER_ARRAY_FILTER_ID: usize = 13;
 pub(crate) const HEADER_TARGET_BLOCK_SIZE: usize = 16;
-pub(crate) const HEADER_OFF_SPEC_FILTER: usize = 24;
-pub(crate) const HEADER_LEN_SPEC_FILTER: usize = 32;
+pub(crate) const HEADER_OFF_SPEC_SUMMARY: usize = 24;
+pub(crate) const HEADER_LEN_SPEC_SUMMARY: usize = 32;
 pub(crate) const HEADER_OFFSET_SPEC_ENTRIES: usize = 40;
 pub(crate) const HEADER_LEN_SPEC_ENTRIES: usize = 48;
 pub(crate) const HEADER_OFFSET_SPEC_ARRAYREFS: usize = 56;
 pub(crate) const HEADER_LEN_SPEC_ARRAYREFS: usize = 64;
-pub(crate) const HEADER_OFF_CHROM_FILTER: usize = 72;
-pub(crate) const HEADER_LEN_CHROM_FILTER: usize = 80;
+pub(crate) const HEADER_OFF_CHROM_SUMMARY: usize = 72;
+pub(crate) const HEADER_LEN_CHROM_SUMMARY: usize = 80;
 pub(crate) const HEADER_OFFSET_CHROM_ENTRIES: usize = 88;
 pub(crate) const HEADER_LEN_CHROM_ENTRIES: usize = 96;
 pub(crate) const HEADER_OFFSET_CHROM_ARRAYREFS: usize = 104;
@@ -464,8 +464,8 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
             h.off_chrom_container,
             h.len_chrom_container,
         ),
-        ("spec_filter", h.off_spec_filter, h.len_spec_filter),
-        ("chrom_filter", h.off_chrom_filter, h.len_chrom_filter),
+        ("spec_summary", h.off_spec_summary, h.len_spec_summary),
+        ("chrom_summary", h.off_chrom_summary, h.len_chrom_summary),
     ];
 
     for &(name, off, len) in sections {

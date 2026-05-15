@@ -3,13 +3,13 @@ use std::mem::MaybeUninit;
 use zstd::zstd_safe;
 
 use crate::{
-    BinaryData, BinaryDataArray, BinaryDataArrayList,
     decoder::decode::{Metadatum, MetadatumValue},
     ion::{
         IonError, IonResult,
         attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
     },
     mzml::schema::{SchemaNode, SchemaTree as Schema, TagId},
+    mzml::structs::{BinaryData, BinaryDataArray, BinaryDataArrayList},
 };
 
 #[allow(dead_code)]

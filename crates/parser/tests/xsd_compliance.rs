@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 mod common;
 
 use common::helpers::{
@@ -313,7 +315,11 @@ fn file_checksum_is_valid_sha1() {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(&bytes[..hash_input_end]);
-    let computed = format!("{:x}", hasher.finalize());
+    let computed = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
 
     assert_eq!(
         claimed, computed,

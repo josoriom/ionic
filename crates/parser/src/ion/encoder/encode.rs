@@ -1,32 +1,40 @@
 use crate::{
-    BinaryData, ChromFilterRecord, NumericType, SpecFilterRecord,
-    encoder::utilities::{FileHeader, encoder_output::EncoderOutput},
-    ion::IonResult,
-    ion::encoder::utilities::{
-        CompressionMode, ContainerBuilder, DefaultCompressor, FilterType, delta_filter,
+    accessions::{
+        FLOAT_32BIT, FLOAT_64BIT, HIGHEST_ION_MOBILITY, HIGHEST_OBSERVED_MZ,
+        HIGHEST_OBSERVED_WAVELENGTH, INTENSITY_ARRAY, LOWEST_ION_MOBILITY, LOWEST_OBSERVED_MZ,
+        LOWEST_OBSERVED_WAVELENGTH, MZ_ARRAY, NEGATIVE_SCAN, POSITIVE_SCAN, TIME_ARRAY,
     },
-    ion::utilities::spectrum_source::summary_from_spectrum,
-    mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
-};
-
-use crate::encoder::utilities::{
-    le_writers::{
-        write_f32_le, write_f32_slice_le, write_f64_le, write_f64_slice_le, write_i16_slice_le,
-        write_i32_slice_le, write_i64_slice_le, write_u16_slice_le, write_u32_le, write_u64_le,
+    encoder::utilities::{
+        FileHeader,
+        encoder_output::EncoderOutput,
+        le_writers::{
+            write_f32_le, write_f32_slice_le, write_f64_le, write_f64_slice_le, write_i16_slice_le,
+            write_i32_slice_le, write_i64_slice_le, write_u16_slice_le, write_u32_le, write_u64_le,
+        },
+        meta_collector::{
+            ArrayPolicy, CompressedMetaSections, MetaCollector, PackedMeta,
+            array_type_accession_from_binary_data_array, parse_accession_tail_raw,
+        },
     },
-    meta_collector::{
-        ACCESSION_32BIT_FLOAT, ACCESSION_64BIT_FLOAT, ACCESSION_INTENSITY_ARRAY,
-        ACCESSION_MZ_ARRAY, ACCESSION_TIME_ARRAY, ArrayPolicy, CompressedMetaSections,
-        MetaCollector, PackedMeta, array_type_accession_from_binary_data_array,
-        parse_accession_tail_raw,
+    ion::{
+        IonResult,
+        encoder::utilities::{
+            CompressionMode, ContainerBuilder, DefaultCompressor, FilterType, delta_filter,
+        },
+        filter_summary::{ChromatogramSummary, SpectrumSummary},
+        utilities::spectrum_source::summary_from_spectrum,
+    },
+    mzml::structs::{
+        BinaryData, BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, NumericType,
+        Spectrum,
     },
 };
 
 pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 32 * 1024 * 1024;
-pub(crate) const SPEC_FILTER_RECORD_SIZE: usize = 128;
-pub(crate) const CHROM_FILTER_RECORD_SIZE: usize = 128;
+pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
+pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
 const ARRAY_FILTER_NONE: u8 = 0;
 const ARRAY_FILTER_BYTE_SHUFFLE: u8 = 1;
@@ -38,15 +46,6 @@ pub(crate) const FILE_DTYPE_I16: u8 = 4;
 pub(crate) const FILE_DTYPE_I32: u8 = 5;
 pub(crate) const FILE_DTYPE_I64: u8 = 6;
 
-const ACC_HIGHEST_OBSERVED_MZ: u32 = 1_000_527;
-const ACC_LOWEST_OBSERVED_MZ: u32 = 1_000_528;
-const ACC_HIGHEST_OBSERVED_WAVELENGTH: u32 = 1_000_618;
-const ACC_LOWEST_OBSERVED_WAVELENGTH: u32 = 1_000_619;
-const ACC_LOWEST_ION_MOBILITY: u32 = 1_003_437;
-const ACC_HIGHEST_ION_MOBILITY: u32 = 1_003_438;
-const ACC_POSITIVE_SCAN: u32 = 1_000_130;
-const ACC_NEGATIVE_SCAN: u32 = 1_000_129;
-
 const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
 const POLARITY_NEGATIVE: u8 = 2;
@@ -57,7 +56,7 @@ pub enum WritingMode {
     Streaming,
 }
 
-impl SpecFilterRecord {
+impl SpectrumSummary {
     #[cfg(test)]
     fn unknown() -> Self {
         Self {
@@ -83,7 +82,7 @@ impl SpecFilterRecord {
     }
 }
 
-impl ChromFilterRecord {
+impl ChromatogramSummary {
     fn unknown() -> Self {
         Self {
             lowest_mz: f64::NAN,
@@ -108,9 +107,9 @@ impl ChromFilterRecord {
     }
 }
 
-fn spec_filter_record_from_spectrum(spectrum: &Spectrum) -> SpecFilterRecord {
+fn spec_summary_from_spectrum(spectrum: &Spectrum) -> SpectrumSummary {
     let summary = summary_from_spectrum(spectrum);
-    SpecFilterRecord {
+    SpectrumSummary {
         rt_seconds: summary.rt * 60.0,
         base_peak_mz: summary.base_peak_mz,
         selected_ion_mz: summary.selected_ion_mz,
@@ -121,62 +120,65 @@ fn spec_filter_record_from_spectrum(spectrum: &Spectrum) -> SpecFilterRecord {
     }
 }
 
-fn build_spec_filter_index(spectra: &[Spectrum]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(spectra.len() * SPEC_FILTER_RECORD_SIZE);
+fn build_spec_summary(spectra: &[Spectrum]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(spectra.len() * SPEC_SUMMARY_SIZE);
     for spectrum in spectra {
-        spec_filter_record_from_spectrum(spectrum).write_into(&mut buf);
+        spec_summary_from_spectrum(spectrum).write_into(&mut buf);
     }
     buf
 }
 
-fn extract_chrom_filter_record(chrom: &Chromatogram) -> ChromFilterRecord {
-    let mut record = ChromFilterRecord::unknown();
+#[inline]
+fn cv_f64(cv: &CvParam) -> Option<f64> {
+    cv.value.as_deref().and_then(|s| s.parse::<f64>().ok())
+}
+
+fn extract_chrom_summary(chrom: &Chromatogram) -> ChromatogramSummary {
+    let mut summary = ChromatogramSummary::unknown();
     for cv in &chrom.cv_params {
-        let tail = parse_accession_tail_raw(cv.accession.as_deref());
-        let val = cv.value.as_deref().and_then(|v| v.parse::<f64>().ok());
-        match tail {
-            ACC_LOWEST_OBSERVED_MZ => {
-                if let Some(v) = val {
-                    record.lowest_mz = v;
+        match parse_accession_tail_raw(cv.accession.as_deref()) {
+            LOWEST_OBSERVED_MZ => {
+                if let Some(v) = cv_f64(cv) {
+                    summary.lowest_mz = v;
                 }
             }
-            ACC_HIGHEST_OBSERVED_MZ => {
-                if let Some(v) = val {
-                    record.highest_mz = v;
+            HIGHEST_OBSERVED_MZ => {
+                if let Some(v) = cv_f64(cv) {
+                    summary.highest_mz = v;
                 }
             }
-            ACC_LOWEST_OBSERVED_WAVELENGTH => {
-                if let Some(v) = val {
-                    record.lowest_wavelength = v;
+            LOWEST_OBSERVED_WAVELENGTH => {
+                if let Some(v) = cv_f64(cv) {
+                    summary.lowest_wavelength = v;
                 }
             }
-            ACC_HIGHEST_OBSERVED_WAVELENGTH => {
-                if let Some(v) = val {
-                    record.highest_wavelength = v;
+            HIGHEST_OBSERVED_WAVELENGTH => {
+                if let Some(v) = cv_f64(cv) {
+                    summary.highest_wavelength = v;
                 }
             }
-            ACC_LOWEST_ION_MOBILITY => {
-                if let Some(v) = val {
-                    record.lowest_ion_mobility = v;
+            LOWEST_ION_MOBILITY => {
+                if let Some(v) = cv_f64(cv) {
+                    summary.lowest_ion_mobility = v;
                 }
             }
-            ACC_HIGHEST_ION_MOBILITY => {
-                if let Some(v) = val {
-                    record.highest_ion_mobility = v;
+            HIGHEST_ION_MOBILITY => {
+                if let Some(v) = cv_f64(cv) {
+                    summary.highest_ion_mobility = v;
                 }
             }
-            ACC_POSITIVE_SCAN => record.polarity = POLARITY_POSITIVE,
-            ACC_NEGATIVE_SCAN => record.polarity = POLARITY_NEGATIVE,
+            POSITIVE_SCAN => summary.polarity = POLARITY_POSITIVE,
+            NEGATIVE_SCAN => summary.polarity = POLARITY_NEGATIVE,
             _ => {}
         }
     }
-    record
+    summary
 }
 
-fn build_chrom_filter_index(chroms: &[Chromatogram]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(chroms.len() * CHROM_FILTER_RECORD_SIZE);
+fn build_chrom_summary(chroms: &[Chromatogram]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(chroms.len() * CHROM_SUMMARY_SIZE);
     for chrom in chroms {
-        extract_chrom_filter_record(chrom).write_into(&mut buf);
+        extract_chrom_summary(chrom).write_into(&mut buf);
     }
     buf
 }
@@ -207,8 +209,8 @@ impl<'o> Encoder<'o> {
             0
         };
 
-        let spec_policy = self.config.array_policy(ACCESSION_MZ_ARRAY);
-        let chrom_policy = self.config.array_policy(ACCESSION_TIME_ARRAY);
+        let spec_policy = self.config.array_policy(MZ_ARRAY);
+        let chrom_policy = self.config.array_policy(TIME_ARRAY);
 
         let spectrum_meta = collector.collect_item_list_meta(
             spectra,
@@ -236,8 +238,8 @@ impl<'o> Encoder<'o> {
         let chrom_meta_crc32 = crc32fast::hash(&compressed.chromatogram_bytes);
         let global_meta_crc32 = crc32fast::hash(&compressed.global_bytes);
 
-        let spec_filter_bytes = build_spec_filter_index(spectra);
-        let chrom_filter_bytes = build_chrom_filter_index(chroms);
+        let spec_summary = build_spec_summary(spectra);
+        let chrom_summary_bytes = build_chrom_summary(chroms);
 
         self.output.write_bytes(&[0u8; HEADER_SIZE])?;
 
@@ -253,9 +255,9 @@ impl<'o> Encoder<'o> {
         };
 
         let offsets = self.write_all_sections(
-            &spec_filter_bytes,
+            &spec_summary,
             &spec_arrays,
-            &chrom_filter_bytes,
+            &chrom_summary_bytes,
             &chrom_arrays,
             &compressed,
         )?;
@@ -279,10 +281,10 @@ impl<'o> Encoder<'o> {
                 spec_meta_crc32,
                 chrom_meta_crc32,
                 global_meta_crc32,
-                off_spec_filter: offsets.offset_spec_filter,
-                len_spec_filter: spec_filter_bytes.len() as u64,
-                off_chrom_filter: offsets.offset_chrom_filter,
-                len_chrom_filter: chrom_filter_bytes.len() as u64,
+                off_spec_summary: offsets.offset_spec_summary,
+                len_spec_summary: spec_summary.len() as u64,
+                off_chrom_summary: offsets.offset_chrom_summary,
+                len_chrom_summary: chrom_summary_bytes.len() as u64,
             },
         );
 
@@ -311,17 +313,17 @@ impl<'o> Encoder<'o> {
 
     fn write_all_sections(
         &mut self,
-        spec_filter: &[u8],
+        spec_summary: &[u8],
         s: &PackedArraySection,
-        chrom_filter: &[u8],
+        chrom_summary: &[u8],
         c: &PackedArraySection,
         m: &CompressedMetaSections,
     ) -> IonResult<SectionOffsets> {
         Ok(SectionOffsets {
-            offset_spec_filter: write_aligned_section(self.output, spec_filter)?,
+            offset_spec_summary: write_aligned_section(self.output, spec_summary)?,
             offset_spec_entries: write_aligned_section(self.output, &s.index_entries_bytes)?,
             offset_spec_arrayrefs: write_aligned_section(self.output, &s.array_refs_bytes)?,
-            offset_chrom_filter: write_aligned_section(self.output, chrom_filter)?,
+            offset_chrom_summary: write_aligned_section(self.output, chrom_summary)?,
             offset_chrom_entries: write_aligned_section(self.output, &c.index_entries_bytes)?,
             offset_chrom_arrayrefs: write_aligned_section(self.output, &c.array_refs_bytes)?,
             offset_spec_meta: write_aligned_section(self.output, &m.spectrum_bytes)?,
@@ -389,10 +391,10 @@ impl<'o> Encoder<'o> {
             chrom_meta_uncompressed_size: compressed.chromatogram_uncompressed_size,
             global_meta_uncompressed_size: compressed.global_uncompressed_size,
 
-            off_spec_filter: info.off_spec_filter,
-            len_spec_filter: info.len_spec_filter,
-            off_chrom_filter: info.off_chrom_filter,
-            len_chrom_filter: info.len_chrom_filter,
+            off_spec_summary: info.off_spec_summary,
+            len_spec_summary: info.len_spec_summary,
+            off_chrom_summary: info.off_chrom_summary,
+            len_chrom_summary: info.len_chrom_summary,
 
             total_file_size: info.total_file_size,
 
@@ -471,17 +473,17 @@ impl EncodingConfig {
     fn array_policy(self, x_array_accession: u32) -> ArrayPolicy {
         ArrayPolicy {
             x_array_accession,
-            y_array_accession: ACCESSION_INTENSITY_ARRAY,
+            y_array_accession: INTENSITY_ARRAY,
             force_f32: self.force_f32,
         }
     }
 }
 
 struct SectionOffsets {
-    offset_spec_filter: u64,
+    offset_spec_summary: u64,
     offset_spec_entries: u64,
     offset_spec_arrayrefs: u64,
-    offset_chrom_filter: u64,
+    offset_chrom_summary: u64,
     offset_chrom_entries: u64,
     offset_chrom_arrayrefs: u64,
     offset_spec_meta: u64,
@@ -498,10 +500,10 @@ struct HeaderInfo {
     spec_meta_crc32: u32,
     chrom_meta_crc32: u32,
     global_meta_crc32: u32,
-    off_spec_filter: u64,
-    len_spec_filter: u64,
-    off_chrom_filter: u64,
-    len_chrom_filter: u64,
+    off_spec_summary: u64,
+    len_spec_summary: u64,
+    off_chrom_summary: u64,
+    len_chrom_summary: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -589,8 +591,8 @@ fn declared_float_precision_is_64bit(bda: &BinaryDataArray) -> Option<bool> {
     let (mut saw32, mut saw64) = (false, false);
     for cv in &bda.cv_params {
         match parse_accession_tail_raw(cv.accession.as_deref()) {
-            ACCESSION_32BIT_FLOAT => saw32 = true,
-            ACCESSION_64BIT_FLOAT => saw64 = true,
+            FLOAT_32BIT => saw32 = true,
+            FLOAT_64BIT => saw64 = true,
             _ => {}
         }
         if saw32 && saw64 {
@@ -660,6 +662,10 @@ fn write_aligned_section(output: &mut dyn EncoderOutput, bytes: &[u8]) -> IonRes
     output.write_bytes(bytes)?;
     Ok(aligned)
 }
+
+const INDEX_ENTRY_BYTES: usize = 16;
+const ARRAYREF_ENTRY_BYTES: usize = 32;
+const AVG_ARRAYS_PER_ITEM: usize = 2;
 
 fn write_arrayref_entry(
     buf: &mut Vec<u8>,
@@ -732,7 +738,7 @@ fn fill_container<T: HasBinaryDataArrayList>(
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
                 validate_array_dtype(data, dtype)?;
                 let elem_bytes = element_byte_size_for_dtype(dtype);
-                let use_delta = acc == ACCESSION_MZ_ARRAY
+                let use_delta = acc == MZ_ARRAY
                     && dtype == FILE_DTYPE_F64
                     && matches!(data, ArrayData::F64(_))
                     && config.compression_is_enabled();
@@ -780,9 +786,10 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
     output: &mut dyn EncoderOutput,
 ) -> IonResult<PackedArraySection> {
     let mut container_bytes = Vec::new();
-    let mut index_bytes = Vec::new();
-    let mut aref_bytes = Vec::new();
-    let mut seen_types = Vec::new();
+    let mut index_bytes = Vec::with_capacity(items.len() * INDEX_ENTRY_BYTES);
+    let mut aref_bytes =
+        Vec::with_capacity(items.len() * ARRAYREF_ENTRY_BYTES * AVG_ARRAYS_PER_ITEM);
+    let mut seen_types = Vec::with_capacity(8);
     let builder = ContainerBuilder::new(
         &mut container_bytes,
         config.uncompressed_block_size,
@@ -821,9 +828,10 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
     policy: ArrayPolicy,
     output: &mut dyn EncoderOutput,
 ) -> IonResult<PackedArraySection> {
-    let mut index_bytes = Vec::new();
-    let mut aref_bytes = Vec::new();
-    let mut seen_types = Vec::new();
+    let mut index_bytes = Vec::with_capacity(items.len() * INDEX_ENTRY_BYTES);
+    let mut aref_bytes =
+        Vec::with_capacity(items.len() * ARRAYREF_ENTRY_BYTES * AVG_ARRAYS_PER_ITEM);
+    let mut seen_types = Vec::with_capacity(8);
     let container_offset = write_aligned_section(output, &[])?;
     let builder = ContainerBuilder::new(
         output,
@@ -969,16 +977,16 @@ mod tests {
     }
 
     #[test]
-    fn spec_filter_record_size_is_correct() {
+    fn spec_summary_size_is_correct() {
         let mut buf = Vec::new();
-        SpecFilterRecord::unknown().write_into(&mut buf);
-        assert_eq!(buf.len(), SPEC_FILTER_RECORD_SIZE);
+        SpectrumSummary::unknown().write_into(&mut buf);
+        assert_eq!(buf.len(), SPEC_SUMMARY_SIZE);
     }
 
     #[test]
-    fn spec_filter_unknown_record_is_all_nan_and_zero() {
+    fn spec_summary_unknown_summary_is_all_nan_and_zero() {
         let mut buf = Vec::new();
-        SpecFilterRecord::unknown().write_into(&mut buf);
+        SpectrumSummary::unknown().write_into(&mut buf);
         for i in (0..40).step_by(8) {
             let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
             assert!(v.is_nan());
@@ -988,24 +996,24 @@ mod tests {
     }
 
     #[test]
-    fn spec_filter_index_len_matches_spectrum_count() {
+    fn spec_summary_index_len_matches_spectrum_count() {
         let mzml = MzML::default();
         let spectra = Encoder::spectra(&mzml);
-        let index = build_spec_filter_index(spectra);
-        assert_eq!(index.len(), spectra.len() * SPEC_FILTER_RECORD_SIZE);
+        let index = build_spec_summary(spectra);
+        assert_eq!(index.len(), spectra.len() * SPEC_SUMMARY_SIZE);
     }
 
     #[test]
-    fn chrom_filter_record_size_is_correct() {
+    fn chrom_summary_size_is_correct() {
         let mut buf = Vec::new();
-        ChromFilterRecord::unknown().write_into(&mut buf);
-        assert_eq!(buf.len(), CHROM_FILTER_RECORD_SIZE);
+        ChromatogramSummary::unknown().write_into(&mut buf);
+        assert_eq!(buf.len(), CHROM_SUMMARY_SIZE);
     }
 
     #[test]
-    fn chrom_filter_unknown_record_is_all_nan_and_zero() {
+    fn chrom_summary_unknown_summary_is_all_nan_and_zero() {
         let mut buf = Vec::new();
-        ChromFilterRecord::unknown().write_into(&mut buf);
+        ChromatogramSummary::unknown().write_into(&mut buf);
         for i in (0..48).step_by(8) {
             let v = f64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
             assert!(v.is_nan());
@@ -1014,15 +1022,15 @@ mod tests {
     }
 
     #[test]
-    fn chrom_filter_index_len_matches_chrom_count() {
+    fn chrom_summary_index_len_matches_chrom_count() {
         let mzml = MzML::default();
         let chroms = Encoder::chromatograms(&mzml);
-        let index = build_chrom_filter_index(chroms);
-        assert_eq!(index.len(), chroms.len() * CHROM_FILTER_RECORD_SIZE);
+        let index = build_chrom_summary(chroms);
+        assert_eq!(index.len(), chroms.len() * CHROM_SUMMARY_SIZE);
     }
 
     #[test]
-    fn chrom_filter_record_extracts_cv_values() {
+    fn chrom_summary_extracts_cv_values() {
         use crate::mzml::structs::{Chromatogram, CvParam};
 
         fn cv(accession: &str, value: &str) -> CvParam {
@@ -1049,14 +1057,14 @@ mod tests {
             ..Default::default()
         };
 
-        let rec = extract_chrom_filter_record(&chrom);
-        assert_eq!(rec.lowest_mz, 100.5);
-        assert_eq!(rec.highest_mz, 999.9);
-        assert_eq!(rec.lowest_wavelength, 200.0);
-        assert_eq!(rec.highest_wavelength, 800.0);
-        assert_eq!(rec.lowest_ion_mobility, 0.5);
-        assert_eq!(rec.highest_ion_mobility, 2.5);
-        assert_eq!(rec.polarity, 1);
+        let summary = extract_chrom_summary(&chrom);
+        assert_eq!(summary.lowest_mz, 100.5);
+        assert_eq!(summary.highest_mz, 999.9);
+        assert_eq!(summary.lowest_wavelength, 200.0);
+        assert_eq!(summary.highest_wavelength, 800.0);
+        assert_eq!(summary.lowest_ion_mobility, 0.5);
+        assert_eq!(summary.highest_ion_mobility, 2.5);
+        assert_eq!(summary.polarity, 1);
     }
 
     #[test]
@@ -1068,14 +1076,14 @@ mod tests {
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
         };
-        let sp = config.array_policy(ACCESSION_MZ_ARRAY);
-        assert_eq!(sp.x_array_accession, ACCESSION_MZ_ARRAY);
-        assert_eq!(sp.y_array_accession, ACCESSION_INTENSITY_ARRAY);
+        let sp = config.array_policy(MZ_ARRAY);
+        assert_eq!(sp.x_array_accession, MZ_ARRAY);
+        assert_eq!(sp.y_array_accession, INTENSITY_ARRAY);
         assert!(sp.force_f32);
 
-        let cp = config.array_policy(ACCESSION_TIME_ARRAY);
-        assert_eq!(cp.x_array_accession, ACCESSION_TIME_ARRAY);
-        assert_eq!(cp.y_array_accession, ACCESSION_INTENSITY_ARRAY);
+        let cp = config.array_policy(TIME_ARRAY);
+        assert_eq!(cp.x_array_accession, TIME_ARRAY);
+        assert_eq!(cp.y_array_accession, INTENSITY_ARRAY);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::{
-    Spectrum, SpectrumDescription, SpectrumList,
+    accessions::ACC_MS_LEVEL,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -14,10 +14,11 @@ use crate::{
             parse_product_list, parse_scan_list,
         },
     },
-    mzml::{schema::TagId, structs::ReferenceableParamGroupRef},
+    mzml::{
+        schema::TagId,
+        structs::{ReferenceableParamGroupRef, Spectrum, SpectrumDescription, SpectrumList},
+    },
 };
-
-const ACC_MS_LEVEL: &str = "MS:1000511";
 
 #[inline]
 pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(

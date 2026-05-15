@@ -4,8 +4,8 @@ use std::{
     path::PathBuf,
 };
 
+use crate::mzml::structs::CvParam;
 use crate::{
-    CvParam,
     ion::{
         decoder::decode::Metadatum,
         utilities::{

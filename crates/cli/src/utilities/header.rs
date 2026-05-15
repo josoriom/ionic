@@ -134,10 +134,10 @@ impl<'a> HeaderView<'a> {
 
 fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
     let mut sections = vec![
-        Section::new("spec_filter", u64_at(header, 24), u64_at(header, 32)),
+        Section::new("spec_summary", u64_at(header, 24), u64_at(header, 32)),
         Section::new("spec_entries", u64_at(header, 40), u64_at(header, 48)),
         Section::new("spec_arrayrefs", u64_at(header, 56), u64_at(header, 64)),
-        Section::new("chrom_filter", u64_at(header, 72), u64_at(header, 80)),
+        Section::new("chrom_summary", u64_at(header, 72), u64_at(header, 80)),
         Section::new("chrom_entries", u64_at(header, 88), u64_at(header, 96)),
         Section::new("chrom_arrayrefs", u64_at(header, 104), u64_at(header, 112)),
         Section::new("spec_meta", u64_at(header, 120), u64_at(header, 128)),
