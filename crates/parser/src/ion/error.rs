@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 pub enum IonError {
     Msg(String),
     BadDtype { dtype: u8, kind: &'static str },
+    UnsupportedPacking(u8),
 }
 
 pub type IonResult<T> = Result<T, IonError>;
@@ -22,6 +23,7 @@ impl Display for IonError {
             Self::BadDtype { dtype, kind } => {
                 write!(f, "unsupported dtype {dtype} for {kind}")
             }
+            Self::UnsupportedPacking(b) => write!(f, "unsupported packing id: {b}"),
         }
     }
 }

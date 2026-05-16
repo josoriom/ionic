@@ -4,32 +4,10 @@ use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
 use crate::encoder::utilities::encoder_output::EncoderOutput;
 use crate::ion::byte_transpose::shuffle_with_tail;
+use crate::ion::packing::PackingId;
 use crate::ion::{IonError, IonResult};
 
 pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FilterType {
-    None = 0,
-    Shuffle = 1,
-    DeltaShuffle = 2,
-}
-
-impl TryFrom<u8> for FilterType {
-    type Error = IonError;
-
-    fn try_from(raw_byte: u8) -> Result<Self, Self::Error> {
-        match raw_byte {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Shuffle),
-            2 => Ok(Self::DeltaShuffle),
-            unknown => Err(IonError::from(format!(
-                "unknown filter type byte: {unknown}"
-            ))),
-        }
-    }
-}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,12 +224,10 @@ impl BlockStore {
         }
     }
 
-    fn append_to_block<W: FnOnce(&mut Vec<u8>)>(
-        &mut self,
-        stride: Stride,
-        item_byte_size: usize,
-        write_action: W,
-    ) -> (u32, u64) {
+    fn append_to_block<W>(&mut self, stride: Stride, item_byte_size: usize, write_action: W) -> IonResult<(u32, u64)>
+    where
+        W: FnOnce(&mut Vec<u8>) -> IonResult<()>,
+    {
         let active = self
             .slots
             .get_mut(stride)
@@ -260,8 +236,8 @@ impl BlockStore {
         let block_id = active.block_id;
         let element_offset = (active.accumulated_data.len() / stride.as_usize()) as u64;
         active.accumulated_data.reserve(item_byte_size);
-        write_action(&mut active.accumulated_data);
-        (block_id, element_offset)
+        write_action(&mut active.accumulated_data)?;
+        Ok((block_id, element_offset))
     }
 
     fn open_dedicated_block(&mut self, stride: Stride, capacity: usize) -> u32 {
@@ -308,7 +284,7 @@ struct ReadyBlock {
 
 pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
     output: &'output mut dyn EncoderOutput,
-    filter_type: FilterType,
+    block_packing_id: PackingId,
     store: BlockStore,
     pending: Vec<PendingBlock>,
     compressor: CompressionMode<C>,
@@ -320,11 +296,11 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         output: &'output mut dyn EncoderOutput,
         max_block_uncompressed_size: usize,
         compressor: CompressionMode<C>,
-        filter_type: FilterType,
+        block_packing_id: PackingId,
     ) -> Self {
         Self {
             output,
-            filter_type,
+            block_packing_id,
             store: BlockStore::new(max_block_uncompressed_size),
             pending: Vec::new(),
             compressor,
@@ -344,7 +320,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
-        WriteAction: FnOnce(&mut Vec<u8>),
+        WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
         let stride = Stride::from_size(element_size.max(1));
         if item_byte_size > self.store.max_block_size {
@@ -361,7 +337,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
-        WriteAction: FnOnce(&mut Vec<u8>),
+        WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
         self.seal_open_block_for_stride(stride)?;
 
@@ -374,7 +350,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
                 .get_mut(stride)
                 .expect("dedicated block was just inserted")
                 .accumulated_data,
-        );
+        )?;
 
         self.seal_open_block_for_stride(stride)?;
         Ok((block_id, 0))
@@ -387,7 +363,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
-        WriteAction: FnOnce(&mut Vec<u8>),
+        WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
         if self.store.would_overflow(stride, item_byte_size) {
             self.seal_open_block_for_stride(stride)?;
@@ -396,7 +372,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         self.store.ensure_open_block(stride, item_byte_size);
         let (block_id, element_offset) =
             self.store
-                .append_to_block(stride, item_byte_size, write_action);
+                .append_to_block(stride, item_byte_size, write_action)?;
 
         Ok((block_id, element_offset))
     }
@@ -417,7 +393,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
     }
 
     fn make_block(
-        filter_type: FilterType,
+        block_packing_id: PackingId,
         block: PendingBlock,
         mode: &mut CompressionMode<C>,
     ) -> IonResult<ReadyBlock> {
@@ -430,18 +406,19 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
                 bytes: block.data,
             }),
             CompressionMode::Compressed(compressor) => {
-                let data = if filter_type == FilterType::Shuffle && block.stride != Stride::OneByte
-                {
-                    let mut shuffled = vec![0u8; block.data.len()];
-                    compressor.shuffle_bytes_into(
-                        &block.data,
-                        &mut shuffled,
-                        block.stride.as_usize(),
-                    );
-                    shuffled
-                } else {
-                    block.data
-                };
+                let data =
+                    if block_packing_id == PackingId::ByteShuffle && block.stride != Stride::OneByte
+                    {
+                        let mut shuffled = vec![0u8; block.data.len()];
+                        compressor.shuffle_bytes_into(
+                            &block.data,
+                            &mut shuffled,
+                            block.stride.as_usize(),
+                        );
+                        shuffled
+                    } else {
+                        block.data
+                    };
                 let mut bytes = Vec::new();
                 compressor.compress(&data, &mut bytes)?;
                 Ok(ReadyBlock {
@@ -458,7 +435,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         let mut out = Vec::with_capacity(blocks.len());
         for block in blocks {
             out.push(Self::make_block(
-                self.filter_type,
+                self.block_packing_id,
                 block,
                 &mut self.compressor,
             )?);
@@ -488,13 +465,13 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
                 for _ in 0..blocks.len() {
                     forks.push(compressor.fork()?);
                 }
-                let filter_type = self.filter_type;
+                let block_packing_id = self.block_packing_id;
                 blocks
                     .into_par_iter()
                     .zip(forks.into_par_iter())
                     .map(|(block, compressor)| {
                         let mut mode = CompressionMode::Compressed(compressor);
-                        Self::make_block(filter_type, block, &mut mode)
+                        Self::make_block(block_packing_id, block, &mut mode)
                     })
                     .collect()
             }
@@ -669,14 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn filter_type_roundtrip() {
-        assert_eq!(FilterType::try_from(0), Ok(FilterType::None));
-        assert_eq!(FilterType::try_from(1), Ok(FilterType::Shuffle));
-        assert_eq!(FilterType::try_from(2), Ok(FilterType::DeltaShuffle));
-        assert!(FilterType::try_from(3).is_err());
-    }
-
-    #[test]
     fn block_store_ensure_open_block_creates_new() {
         let mut store = BlockStore::new(1024);
         assert_eq!(store.block_count(), 0);
@@ -703,9 +672,12 @@ mod tests {
     fn block_store_would_overflow_detects_threshold() {
         let mut store = BlockStore::new(16);
         store.ensure_open_block(Stride::FourBytes, 12);
-        store.append_to_block(Stride::FourBytes, 12, |buf| {
-            buf.extend_from_slice(&[0u8; 12])
-        });
+        store
+            .append_to_block(Stride::FourBytes, 12, |buf| {
+                buf.extend_from_slice(&[0u8; 12]);
+                Ok(())
+            })
+            .unwrap();
         assert!(store.would_overflow(Stride::FourBytes, 8));
         assert!(!store.would_overflow(Stride::FourBytes, 4));
     }
@@ -714,12 +686,24 @@ mod tests {
     fn block_store_append_returns_correct_element_offsets() {
         let mut store = BlockStore::new(1024);
         store.ensure_open_block(Stride::EightBytes, 24);
-        let (_, off0) =
-            store.append_to_block(Stride::EightBytes, 8, |b| b.extend_from_slice(&[0u8; 8]));
-        let (_, off1) =
-            store.append_to_block(Stride::EightBytes, 8, |b| b.extend_from_slice(&[0u8; 8]));
-        let (_, off2) =
-            store.append_to_block(Stride::EightBytes, 8, |b| b.extend_from_slice(&[0u8; 8]));
+        let (_, off0) = store
+            .append_to_block(Stride::EightBytes, 8, |b| {
+                b.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        let (_, off1) = store
+            .append_to_block(Stride::EightBytes, 8, |b| {
+                b.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        let (_, off2) = store
+            .append_to_block(Stride::EightBytes, 8, |b| {
+                b.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(off0, 0);
         assert_eq!(off1, 1);
         assert_eq!(off2, 2);
@@ -809,11 +793,14 @@ mod tests {
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
-            FilterType::None,
+            PackingId::Raw,
         );
         let item_data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
         let (block_id, element_offset) = builder
-            .add_item_to_box(item_data.len(), 8, |buf| buf.extend_from_slice(&item_data))
+            .add_item_to_box(item_data.len(), 8, |buf| {
+                buf.extend_from_slice(&item_data);
+                Ok(())
+            })
             .unwrap();
         assert_eq!(block_id, 0);
         assert_eq!(element_offset, 0);
@@ -830,16 +817,25 @@ mod tests {
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
-            FilterType::None,
+            PackingId::Raw,
         );
         let (_, first_offset) = builder
-            .add_item_to_box(8, 8, |buf| buf.extend_from_slice(&[0u8; 8]))
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
             .unwrap();
         let (_, second_offset) = builder
-            .add_item_to_box(8, 8, |buf| buf.extend_from_slice(&[0u8; 8]))
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
             .unwrap();
         let (_, third_offset) = builder
-            .add_item_to_box(8, 8, |buf| buf.extend_from_slice(&[0u8; 8]))
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
             .unwrap();
         assert_eq!(first_offset, 0);
         assert_eq!(second_offset, 1);
@@ -853,13 +849,19 @@ mod tests {
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
-            FilterType::None,
+            PackingId::Raw,
         );
         let (four_byte_block_id, _) = builder
-            .add_item_to_box(4, 4, |buf| buf.extend_from_slice(&[0u8; 4]))
+            .add_item_to_box(4, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 4]);
+                Ok(())
+            })
             .unwrap();
         let (eight_byte_block_id, _) = builder
-            .add_item_to_box(8, 8, |buf| buf.extend_from_slice(&[0u8; 8]))
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
             .unwrap();
         assert_ne!(four_byte_block_id, eight_byte_block_id);
     }
@@ -872,13 +874,19 @@ mod tests {
             &mut output,
             max_block_size,
             CompressionMode::<PassthroughCompressor>::Raw,
-            FilterType::None,
+            PackingId::Raw,
         );
         let (first_block_id, _) = builder
-            .add_item_to_box(12, 4, |buf| buf.extend_from_slice(&[0u8; 12]))
+            .add_item_to_box(12, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 12]);
+                Ok(())
+            })
             .unwrap();
         let (second_block_id, _) = builder
-            .add_item_to_box(12, 4, |buf| buf.extend_from_slice(&[0u8; 12]))
+            .add_item_to_box(12, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 12]);
+                Ok(())
+            })
             .unwrap();
         assert_ne!(
             first_block_id, second_block_id,
@@ -895,10 +903,13 @@ mod tests {
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
-            FilterType::None,
+            PackingId::Raw,
         );
         builder
-            .add_item_to_box(8, 8, |buf| buf.extend_from_slice(&[0xAAu8; 8]))
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0xAAu8; 8]);
+                Ok(())
+            })
             .unwrap();
         let (block_count, total_bytes) = builder.finish().unwrap();
         assert_eq!(block_count, 1);
@@ -913,7 +924,7 @@ mod tests {
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
-            FilterType::None,
+            PackingId::Raw,
         );
         let (block_count, total_bytes) = builder.finish().unwrap();
         assert_eq!(block_count, 0);
@@ -928,7 +939,7 @@ mod tests {
             &mut seq_out,
             8,
             CompressionMode::Compressed(PassthroughCompressor),
-            FilterType::Shuffle,
+            PackingId::ByteShuffle,
         );
         seq.set_par_min_blocks(usize::MAX);
 
@@ -937,27 +948,33 @@ mod tests {
             &mut par_out,
             8,
             CompressionMode::Compressed(PassthroughCompressor),
-            FilterType::Shuffle,
+            PackingId::ByteShuffle,
         );
         par.set_par_min_blocks(0);
 
         for builder in [&mut seq, &mut par] {
             builder
-                .add_item_to_box(8, 4, |buf| buf.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))
-                .unwrap();
-            builder
                 .add_item_to_box(8, 4, |buf| {
-                    buf.extend_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16])
+                    buf.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+                    Ok(())
                 })
                 .unwrap();
             builder
                 .add_item_to_box(8, 4, |buf| {
-                    buf.extend_from_slice(&[17, 18, 19, 20, 21, 22, 23, 24])
+                    buf.extend_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+                    Ok(())
                 })
                 .unwrap();
             builder
                 .add_item_to_box(8, 4, |buf| {
-                    buf.extend_from_slice(&[25, 26, 27, 28, 29, 30, 31, 32])
+                    buf.extend_from_slice(&[17, 18, 19, 20, 21, 22, 23, 24]);
+                    Ok(())
+                })
+                .unwrap();
+            builder
+                .add_item_to_box(8, 4, |buf| {
+                    buf.extend_from_slice(&[25, 26, 27, 28, 29, 30, 31, 32]);
+                    Ok(())
                 })
                 .unwrap();
         }

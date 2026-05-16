@@ -1,6 +1,7 @@
 use crate::ion::encoder::utilities::container_builder::{
-    BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, FilterType, Stride,
+    BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride,
 };
+use crate::ion::packing::PackingId;
 use crate::ion::{
     IonError, IonResult,
     utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
@@ -12,7 +13,7 @@ const LRU_NONE: usize = usize::MAX;
 pub(crate) trait BlockProcessor {
     fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>>;
     fn unshuffle(&self, source: &[u8], target: &mut [u8], stride: usize);
-    fn requires_unshuffle(&self, filter: FilterType) -> bool;
+    fn requires_unshuffle(&self, block_packing_id: PackingId) -> bool;
 }
 
 pub(crate) trait ContainerAccess {
@@ -41,8 +42,8 @@ impl BlockProcessor for DefaultProcessor {
     }
 
     #[inline]
-    fn requires_unshuffle(&self, filter: FilterType) -> bool {
-        filter == FilterType::Shuffle
+    fn requires_unshuffle(&self, block_packing_id: PackingId) -> bool {
+        block_packing_id == PackingId::ByteShuffle
     }
 }
 
@@ -84,7 +85,7 @@ pub(crate) struct ContainerView<'a, P: BlockProcessor> {
     max_cached_bytes: usize,
     stride_history: Box<[Option<Stride>]>,
     compression_level: u8,
-    filter: FilterType,
+    block_packing_id: PackingId,
     verify_checksums: bool,
     processor: P,
 }
@@ -95,7 +96,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         raw_data: &'a [u8],
         block_count: u64,
         compression_level: u8,
-        filter: FilterType,
+        block_packing_id: PackingId,
         verify_checksums: bool,
         ctx: &'static str,
         processor: P,
@@ -105,7 +106,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             raw_data,
             block_count,
             compression_level,
-            filter,
+            block_packing_id,
             verify_checksums,
             ctx,
             processor,
@@ -117,7 +118,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         raw_data: &'a [u8],
         block_count: u64,
         compression_level: u8,
-        filter: FilterType,
+        block_packing_id: PackingId,
         verify_checksums: bool,
         ctx: &'static str,
         processor: P,
@@ -164,7 +165,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             max_cached_bytes,
             stride_history: vec![None; block_count].into_boxed_slice(),
             compression_level,
-            filter,
+            block_packing_id,
             verify_checksums,
             processor,
         })
@@ -222,7 +223,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         stride: Stride,
     ) -> IonResult<Vec<u8>> {
         let needs_unshuffle =
-            self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
+            self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
         let mut data = if self.compression_level == 0 {
             if payload.len() != uncompressed_len {
@@ -258,7 +259,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         let (entry, payload) = self.block_payload(block_index, ctx)?;
 
         if self.compression_level == 0
-            && (!self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte)
+            && (!self.processor.requires_unshuffle(self.block_packing_id) || stride == Stride::OneByte)
         {
             if payload.len() != entry.uncompressed_len_bytes as usize {
                 return Err(format!(
@@ -378,7 +379,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         stride: Stride,
         ctx: &'static str,
     ) -> IonResult<()> {
-        if !self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte {
+        if !self.processor.requires_unshuffle(self.block_packing_id) || stride == Stride::OneByte {
             return Ok(());
         }
         match self.stride_history[block_index] {
@@ -401,7 +402,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         stride: Stride,
     ) -> IonResult<BlockData<'a>> {
         let needs_unshuffle =
-            self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
+            self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
         if self.compression_level == 0 && !needs_unshuffle {
             if payload.len() != uncompressed_len {
@@ -504,7 +505,7 @@ mod tests {
             &tiny,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -521,7 +522,7 @@ mod tests {
                 &empty,
                 0,
                 0,
-                FilterType::None,
+                PackingId::Raw,
                 true,
                 "test",
                 DefaultProcessor,
@@ -543,7 +544,7 @@ mod tests {
             &raw,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -568,7 +569,7 @@ mod tests {
             &raw,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -585,7 +586,7 @@ mod tests {
             &empty,
             0,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -604,7 +605,7 @@ mod tests {
             &raw,
             3,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -632,7 +633,7 @@ mod tests {
             &raw,
             3,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -659,7 +660,7 @@ mod tests {
             &raw,
             4,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -686,7 +687,7 @@ mod tests {
             &raw,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,

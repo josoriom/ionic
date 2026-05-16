@@ -22,13 +22,11 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
-        encoder::{
-            encode::{
-                FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
-                FILE_DTYPE_I64,
-            },
-            utilities::{container_builder::FilterType, delta_filter},
+        encoder::encode::{
+            FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
+            FILE_DTYPE_I64,
         },
+        packing::PackingId,
         filter_summary::{ChromatogramSummary, SpectrumSummary},
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
@@ -186,7 +184,7 @@ impl DerefMut for OwnedIon {
 impl<'a> Decoder<'a> {
     pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
-        let filter = FilterType::try_from(header.default_array_filter).unwrap_or(FilterType::None);
+        let block_packing_id = PackingId::from_byte(header.default_array_filter).unwrap_or(PackingId::Raw);
 
         let spec_container = {
             let off = usize::try_from(header.off_spec_container)
@@ -203,7 +201,7 @@ impl<'a> Decoder<'a> {
                 cb,
                 header.spec_block_count,
                 header.compression_level,
-                filter,
+                block_packing_id,
                 config.verify_checksums,
                 "spec",
                 DefaultProcessor,
@@ -226,7 +224,7 @@ impl<'a> Decoder<'a> {
                 container_bytes,
                 header.chrom_block_count,
                 header.compression_level,
-                filter,
+                block_packing_id,
                 config.verify_checksums,
                 "chrom",
                 DefaultProcessor,
@@ -1282,8 +1280,12 @@ fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) {
     match dtype {
         FILE_DTYPE_F64 => {
             buf.reserve(raw.len() / 8);
-            if array_filter == FilterType::DeltaShuffle as u8 {
-                delta_filter::decode_f64(raw, buf);
+            if array_filter == PackingId::DeltaShuffle as u8 {
+                let mut prev: u64 = 0;
+                for chunk in raw.chunks_exact(8) {
+                    prev = prev.wrapping_add(u64::from_le_bytes(chunk.try_into().unwrap()));
+                    buf.push(f64::from_bits(prev));
+                }
             } else {
                 buf.extend(
                     raw.chunks_exact(8)
@@ -1479,9 +1481,13 @@ fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> Ion
 fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<BinaryData> {
     match dtype {
         FILE_DTYPE_F64 => {
-            if array_filter == FilterType::DeltaShuffle as u8 {
+            if array_filter == PackingId::DeltaShuffle as u8 {
                 let mut out = Vec::with_capacity(raw.len() / 8);
-                delta_filter::decode_f64(raw, &mut out);
+                let mut prev: u64 = 0;
+                for chunk in raw.chunks_exact(8) {
+                    prev = prev.wrapping_add(u64::from_le_bytes(chunk.try_into().unwrap()));
+                    out.push(f64::from_bits(prev));
+                }
                 Ok(BinaryData::F64(out))
             } else {
                 Ok(BinaryData::F64(raw_to_vec(raw, 8, |c| {
