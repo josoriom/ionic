@@ -1,7 +1,0 @@
-/work/target-linux-amd64/release/deps/equivalent-cf429cfb36963a1a.d: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/equivalent-1.0.2/src/lib.rs
-
-/work/target-linux-amd64/release/deps/libequivalent-cf429cfb36963a1a.rlib: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/equivalent-1.0.2/src/lib.rs
-
-/work/target-linux-amd64/release/deps/libequivalent-cf429cfb36963a1a.rmeta: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/equivalent-1.0.2/src/lib.rs
-
-/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/equivalent-1.0.2/src/lib.rs:
