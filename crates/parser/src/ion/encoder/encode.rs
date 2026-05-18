@@ -17,7 +17,7 @@ use crate::{
         },
     },
     ion::{
-        IonResult,
+        IonError, IonResult,
         encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor},
         filter_summary::{ChromatogramSummary, SpectrumSummary},
         packing::{Dtype, Packing, PackingId, PackingInput, packing_for},
@@ -342,6 +342,7 @@ impl<'o> Encoder<'o> {
         info: &HeaderInfo,
     ) -> FileHeader {
         FileHeader {
+            format_version: 1,
             compression_codec: config.codec_id(),
             compression_level: config.compression_level,
             array_filter_id: config.array_filter_id(),
@@ -671,6 +672,7 @@ fn write_arrayref_entry(
     array_accession: u32,
     dtype: u8,
     array_filter: u8,
+    encoded_len: u32,
 ) {
     write_u64_le(buf, element_offset);
     write_u64_le(buf, element_count);
@@ -678,7 +680,8 @@ fn write_arrayref_entry(
     write_u32_le(buf, array_accession);
     buf.push(dtype);
     buf.push(array_filter);
-    buf.extend_from_slice(&[0u8; 6]);
+    write_u32_le(buf, encoded_len);
+    buf.extend_from_slice(&[0u8; 2]);
 }
 
 struct PackedArraySection {
@@ -741,20 +744,56 @@ fn fill_container<T: HasBinaryDataArrayList>(
                     &crate::ion::packing::raw::RAW
                 };
                 let array_filter = array_packing.id() as u8;
-                let (block_id, elem_offset) = container.add_item_to_box(
-                    data.element_count() * elem_bytes,
-                    elem_bytes,
-                    |buf| {
-                        if array_packing.id() == PackingId::DeltaShuffle {
-                            if let ArrayData::F64(slice) = data {
-                                array_packing.encode(PackingInput::F64(slice), buf)?;
+                let (block_id, elem_offset, encoded_len) =
+                    if array_packing.is_variable_length() {
+                        let mut encoded = Vec::new();
+                        let packing_input = match (data, dtype_enum) {
+                            (ArrayData::F64(s), Dtype::F64) => {
+                                array_packing.encode(PackingInput::F64(s), &mut encoded)?;
+                                None
                             }
-                        } else {
-                            write_array_data(buf, data, dtype);
+                            (ArrayData::F32(s), Dtype::F32) => {
+                                array_packing.encode(PackingInput::F32(s), &mut encoded)?;
+                                None
+                            }
+                            _ => Some(data),
+                        };
+                        if let Some(d) = packing_input {
+                            write_array_data(&mut encoded, d, dtype);
                         }
-                        Ok(())
-                    },
-                )?;
+                        let enc_len = u32::try_from(encoded.len())
+                            .map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
+                        let (bid, eoff) = container.add_item_to_box(
+                            encoded.len(),
+                            1,
+                            |buf| {
+                                buf.extend_from_slice(&encoded);
+                                Ok(())
+                            },
+                        )?;
+                        (bid, eoff, enc_len)
+                    } else {
+                        let (bid, eoff) = container.add_item_to_box(
+                            data.element_count() * elem_bytes,
+                            elem_bytes,
+                            |buf| match array_packing.id() {
+                                PackingId::DeltaShuffle => match data {
+                                    ArrayData::F64(slice) => {
+                                        array_packing.encode(PackingInput::F64(slice), buf)
+                                    }
+                                    _ => {
+                                        write_array_data(buf, data, dtype);
+                                        Ok(())
+                                    }
+                                },
+                                _ => {
+                                    write_array_data(buf, data, dtype);
+                                    Ok(())
+                                }
+                            },
+                        )?;
+                        (bid, eoff, 0u32)
+                    };
                 write_arrayref_entry(
                     aref_bytes,
                     elem_offset,
@@ -763,6 +802,7 @@ fn fill_container<T: HasBinaryDataArrayList>(
                     acc,
                     dtype,
                     array_filter,
+                    encoded_len,
                 );
                 aref_cursor += 1;
                 aref_count += 1;

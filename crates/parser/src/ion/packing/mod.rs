@@ -1,6 +1,9 @@
 use crate::ion::{IonError, IonResult};
 
+pub(crate) mod alp;
 pub(crate) mod byte_shuffle;
+pub(crate) mod chimp;
+pub(crate) mod delta2_vbyte;
 pub(crate) mod delta_shuffle;
 pub(crate) mod raw;
 
@@ -74,19 +77,17 @@ pub(crate) enum PackingInput<'a> {
     Bytes(&'a [u8]),
 }
 
-// This trait centralizes all data transformation strategies.
 pub(crate) trait Packing: Send + Sync {
     fn id(&self) -> PackingId;
 
     fn min_input_len(&self) -> usize {
         1
     }
-    /// Generic packings are universally applicable. False if specialized for certain dtypes or requires pairing with other transforms.
-    fn is_generic(&self) -> bool {
+
+    fn is_variable_length(&self) -> bool {
         false
     }
 
-    /// Returns true if this packing supports the given dtype.
     fn supports(&self, dtype: Dtype) -> bool;
 
     fn encode(&self, input: PackingInput<'_>, out: &mut Vec<u8>) -> IonResult<()>;
@@ -96,27 +97,37 @@ pub(crate) trait Packing: Send + Sync {
 
 pub(crate) fn packing_for(
     array_type: u32,
-    dtype: Dtype,
-    element_count: usize,
+    _dtype: Dtype,
+    _element_count: usize,
 ) -> &'static dyn Packing {
-    use crate::accessions::MZ_ARRAY;
-    use delta_shuffle::DELTA_SHUFFLE;
-    use raw::RAW;
-
-    let candidate: &'static dyn Packing = match (array_type, dtype) {
-        (MZ_ARRAY, Dtype::F64) => &DELTA_SHUFFLE,
-        _ => &RAW,
+    use crate::accessions::{INTENSITY_ARRAY, MZ_ARRAY, TIME_ARRAY};
+    let env_key = match array_type {
+        MZ_ARRAY => Some("IONIC_MZ_CODEC"),
+        INTENSITY_ARRAY => Some("IONIC_INTENSITY_CODEC"),
+        TIME_ARRAY => Some("IONIC_RT_CODEC"),
+        _ => None,
     };
-
-    if element_count < candidate.min_input_len() {
-        return &RAW;
+    if let Some(key) = env_key {
+        if let Ok(v) = std::env::var(key) {
+            return match v.as_str() {
+                "raw"           => &raw::RAW,
+                "byte_shuffle"  => &byte_shuffle::BYTE_SHUFFLE,
+                "delta_shuffle" => &delta_shuffle::DELTA_SHUFFLE,
+                "delta2_vbyte"  => &delta2_vbyte::DELTA2_VBYTE,
+                "alp"           => &alp::ALP,
+                "chimp"         => &chimp::CHIMP,
+                _               => &delta_shuffle::DELTA_SHUFFLE,
+            };
+        }
     }
-
-    candidate
+    &delta_shuffle::DELTA_SHUFFLE
 }
 
 pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
+    use alp::ALP;
     use byte_shuffle::BYTE_SHUFFLE;
+    use chimp::CHIMP;
+    use delta2_vbyte::DELTA2_VBYTE;
     use delta_shuffle::DELTA_SHUFFLE;
     use raw::RAW;
 
@@ -124,9 +135,9 @@ pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
         PackingId::Raw => &RAW,
         PackingId::ByteShuffle => &BYTE_SHUFFLE,
         PackingId::DeltaShuffle => &DELTA_SHUFFLE,
-        PackingId::DeltaSquaredVByte => &RAW,
-        PackingId::Alp => &RAW,
-        PackingId::Chimp => &RAW,
+        PackingId::DeltaSquaredVByte => &DELTA2_VBYTE,
+        PackingId::Alp => &ALP,
+        PackingId::Chimp => &CHIMP,
     }
 }
 
@@ -165,21 +176,9 @@ mod tests {
     }
 
     #[test]
-    fn packing_for_mz_f64_returns_delta_shuffle() {
-        let p = packing_for(MZ_ARRAY, Dtype::F64, 100);
-        assert_eq!(p.id(), PackingId::DeltaShuffle);
-    }
-
-    #[test]
-    fn packing_for_non_mz_returns_raw() {
-        let p = packing_for(0, Dtype::F64, 100);
-        assert_eq!(p.id(), PackingId::Raw);
-    }
-
-    #[test]
-    fn packing_for_mz_non_f64_returns_raw() {
-        let p = packing_for(MZ_ARRAY, Dtype::F32, 100);
-        assert_eq!(p.id(), PackingId::Raw);
+    fn packing_for_always_returns_delta_shuffle() {
+        assert_eq!(packing_for(MZ_ARRAY, Dtype::F64, 100).id(), PackingId::DeltaShuffle);
+        assert_eq!(packing_for(0, Dtype::F32, 1).id(), PackingId::DeltaShuffle);
     }
 
     #[test]

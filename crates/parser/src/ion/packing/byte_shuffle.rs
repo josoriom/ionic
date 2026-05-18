@@ -87,8 +87,4 @@ mod tests {
         assert_eq!(enc.len(), input.len() * 8);
     }
 
-    #[test]
-    fn is_not_standalone() {
-        assert!(!BYTE_SHUFFLE.is_generic());
-    }
 }

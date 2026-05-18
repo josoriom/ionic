@@ -8,10 +8,6 @@ impl Packing for Raw {
         PackingId::Raw
     }
 
-    fn is_generic(&self) -> bool {
-        true
-    }
-
     fn supports(&self, _dtype: Dtype) -> bool {
         true
     }
@@ -73,8 +69,4 @@ mod tests {
         assert_eq!(dec.as_slice(), input.as_ref());
     }
 
-    #[test]
-    fn is_generic() {
-        assert!(RAW.is_generic());
-    }
 }

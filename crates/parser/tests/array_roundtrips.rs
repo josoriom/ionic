@@ -229,7 +229,7 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
 }
 
 #[test]
-fn delta_does_not_affect_intensity_array() {
+fn delta_shuffle_applied_to_mz_and_intensity() {
     use ionic::ion::Decoder as IonDecoder;
     let mz: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
     let intensity: Vec<f64> = (0..100).map(|i| (i * 10) as f64).collect();
@@ -242,8 +242,8 @@ fn delta_does_not_affect_intensity_array() {
     let refs = decoder.spectrum_array_refs(0).unwrap();
     let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
     let int_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
-    assert_eq!(mz_ref.array_filter, 2, "m/z must have delta filter");
-    assert_eq!(int_ref.array_filter, 0, "intensity must have no filter");
+    assert_eq!(mz_ref.array_filter, 2, "m/z must use DeltaShuffle filter");
+    assert_eq!(int_ref.array_filter, 2, "intensity must use DeltaShuffle filter");
     let mut got_mz = Vec::new();
     decoder.read_spectrum_array(mz_ref, &mut got_mz).unwrap();
     let mut got_int = Vec::new();
@@ -252,6 +252,23 @@ fn delta_does_not_affect_intensity_array() {
         assert_eq!(a.to_bits(), b.to_bits());
     }
     for (a, b) in got_int.iter().zip(intensity.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn format_version_is_always_1() {
+    let values = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+    let len = values.len();
+    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
+    for level in [0u8, 3, 22] {
+        let buf = encode_to_ion(&mzml, level, false);
+        let format_version = u16::from_le_bytes(buf[9..11].try_into().unwrap());
+        assert_eq!(format_version, 1, "format_version must be 1 at compression level {level}");
+    }
+    let out = roundtrip(&mzml);
+    let bin = first_spectrum_binary(&out).expect("binary data");
+    for (a, b) in bin.to_f64_vec().iter().zip(values.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
 }
@@ -269,6 +286,25 @@ fn delta_not_applied_without_compression() {
     let mut got = Vec::new();
     decoder.read_spectrum_array(mz_ref, &mut got).unwrap();
     for (a, b) in got.iter().zip(mz.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn delta_shuffle_applied_to_time_array() {
+    use common::helpers::make_chromatogram_f64;
+    use ionic::ion::Decoder as IonDecoder;
+    let time: Vec<f64> = (0..100).map(|i| i as f64 * 0.1).collect();
+    let intensity: Vec<f64> = vec![1.0; time.len()];
+    let mzml = build_mzml(vec![], vec![make_chromatogram_f64("tic", time.clone(), intensity)]);
+    let buf = encode_to_ion(&mzml, 3, false);
+    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
+    let refs = decoder.chromatogram_array_refs(0).unwrap();
+    let time_ref = refs.iter().find(|r| r.array_type == 1_000_595).unwrap();
+    assert_eq!(time_ref.array_filter, 2, "time must use DeltaShuffle filter");
+    let mut got = Vec::new();
+    decoder.read_chromatogram_array(time_ref, &mut got).unwrap();
+    for (a, b) in got.iter().zip(time.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
 }
@@ -291,6 +327,54 @@ proptest! {
         let got = bin.to_f64_vec();
         prop_assert_eq!(got.len(), values.len());
         for (i, (g, e)) in got.iter().zip(values.iter()).enumerate() {
+            if e.is_nan() {
+                prop_assert!(g.is_nan(), "index {}: expected NaN", i);
+            } else {
+                prop_assert_eq!(g.to_bits(), e.to_bits(), "index {}: bit mismatch", i);
+            }
+        }
+    }
+
+    #[test]
+    fn proptest_delta2vbyte_mz_roundtrip(
+        mz in prop::collection::vec(prop::num::f64::ANY, 3..256)
+    ) {
+        let intensity = vec![1.0f64; mz.len()];
+        let mzml = build_mzml(
+            vec![make_spectrum_f64("scan=1", mz.clone(), intensity)],
+            vec![],
+        );
+        let buf = encode_to_ion(&mzml, 3, false);
+        let got = decode_ion(&buf).unwrap();
+        let bin = first_spectrum_binary(&got).expect("should have binary data");
+        let decoded = bin.to_f64_vec();
+        prop_assert_eq!(decoded.len(), mz.len());
+        for (i, (g, e)) in decoded.iter().zip(mz.iter()).enumerate() {
+            if e.is_nan() {
+                prop_assert!(g.is_nan(), "index {}: expected NaN", i);
+            } else {
+                prop_assert_eq!(g.to_bits(), e.to_bits(), "index {}: bit mismatch", i);
+            }
+        }
+    }
+
+    #[test]
+    fn proptest_chimp_time_roundtrip(
+        time in prop::collection::vec(prop::num::f64::ANY, 2..256)
+    ) {
+        use common::helpers::make_chromatogram_f64;
+        use common::first_chrom_array_values_by_accession;
+        let intensity = vec![1.0f64; time.len()];
+        let mzml = build_mzml(
+            vec![],
+            vec![make_chromatogram_f64("tic", time.clone(), intensity)],
+        );
+        let buf = encode_to_ion(&mzml, 3, false);
+        let got = decode_ion(&buf).unwrap();
+        let chrom_list = got.run.chromatogram_list.unwrap();
+        let decoded = first_chrom_array_values_by_accession(&chrom_list.chromatograms[0], "MS:1000595");
+        prop_assert_eq!(decoded.len(), time.len());
+        for (i, (g, e)) in decoded.iter().zip(time.iter()).enumerate() {
             if e.is_nan() {
                 prop_assert!(g.is_nan(), "index {}: expected NaN", i);
             } else {

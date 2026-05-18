@@ -20,11 +20,7 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         <[u8; 2]>::try_from(&h[HEADER_FORMAT_VERSION..HEADER_FORMAT_VERSION + 2]).unwrap(),
     );
     if format_version > 1 {
-        return Err(format!(
-            "header: unsupported format_version={} (expected 0 or 1)",
-            format_version
-        )
-        .into());
+        return Err(crate::ion::IonError::UnsupportedFormatVersion(format_version));
     }
     let compression_codec = h[HEADER_CODEC_ID];
     let compression_level = h[HEADER_COMPRESSION_LEVEL];
