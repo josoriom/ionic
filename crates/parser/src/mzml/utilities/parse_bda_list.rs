@@ -92,20 +92,29 @@ pub(crate) fn parse_bda<R: BufRead>(
     bda.numeric_type = Some(encoding.numeric_type);
 
     if !base64_bytes.is_empty() {
-        let mut decoded = Vec::with_capacity(base64_bytes.len() * 3 / 4 + 8);
-        STANDARD.decode_vec(&base64_bytes, &mut decoded)?;
-        if encoding.is_zlib_compressed {
-            decoded = decompress_to_vec_zlib(&decoded)
-                .map_err(|e| ParseError::Decompress(format!("{e:?}")))?;
-        }
-        bda.binary = Some(decode_binary_data(
-            encoding.numeric_type,
-            &decoded,
-            bda.array_length,
-        ));
+        bda.pending_zlib = encoding.is_zlib_compressed;
+        bda.pending_base64 = Some(base64_bytes);
     }
 
     Ok(bda)
+}
+
+pub(crate) fn finalize_bda(bda: &mut BinaryDataArray) -> Result<(), ParseError> {
+    let Some(base64_bytes) = bda.pending_base64.take() else {
+        return Ok(());
+    };
+    let mut decoded = Vec::with_capacity(base64_bytes.len() * 3 / 4 + 8);
+    STANDARD.decode_vec(&base64_bytes, &mut decoded)?;
+    if bda.pending_zlib {
+        decoded = decompress_to_vec_zlib(&decoded)
+            .map_err(|e| ParseError::Decompress(format!("{e:?}")))?;
+    }
+    bda.binary = Some(decode_binary_data(
+        bda.numeric_type.unwrap_or(NumericType::Float64),
+        &decoded,
+        bda.array_length,
+    ));
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]

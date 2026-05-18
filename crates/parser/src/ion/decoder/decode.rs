@@ -26,8 +26,8 @@ use crate::{
             FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
             FILE_DTYPE_I64,
         },
-        packing::PackingId,
         filter_summary::{ChromatogramSummary, SpectrumSummary},
+        packing::PackingId,
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
@@ -135,7 +135,6 @@ enum IonBacking {
     Map(Mmap),
 }
 
-// Field order is load-bearing: ion must drop before _backing (UB otherwise).
 pub struct OwnedIon {
     ion: Ion<'static>,
     _backing: IonBacking,
@@ -185,7 +184,8 @@ impl DerefMut for OwnedIon {
 impl<'a> Decoder<'a> {
     pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
-        let block_packing_id = PackingId::from_byte(header.default_array_filter).unwrap_or(PackingId::Raw);
+        let block_packing_id =
+            PackingId::from_byte(header.default_array_filter).unwrap_or(PackingId::Raw);
 
         let spec_container = {
             let off = usize::try_from(header.off_spec_container)
@@ -1226,7 +1226,11 @@ fn aref_read_params(aref: &ArrayRef) -> (u64, u64, usize) {
     if aref.encoded_len > 0 {
         (aref.element_offset, aref.encoded_len as u64, 1)
     } else {
-        (aref.element_offset, aref.element_count, dtype_stride(aref.dtype))
+        (
+            aref.element_offset,
+            aref.element_count,
+            dtype_stride(aref.dtype),
+        )
     }
 }
 
@@ -1278,7 +1282,11 @@ fn dtype_stride(dtype: u8) -> usize {
     }
 }
 
-fn unfilter_array_bytes(raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<std::borrow::Cow<'_, [u8]>> {
+fn unfilter_array_bytes(
+    raw: &[u8],
+    dtype: u8,
+    array_filter: u8,
+) -> IonResult<std::borrow::Cow<'_, [u8]>> {
     use crate::ion::packing::{Dtype as PkDtype, packing_by_id};
     let pk_id = PackingId::from_byte(array_filter)?;
     match pk_id {
@@ -1320,42 +1328,48 @@ fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) -> I
         FILE_DTYPE_F64 => {
             buf.reserve(bytes.len() / 8);
             buf.extend(
-                bytes.chunks_exact(8)
+                bytes
+                    .chunks_exact(8)
                     .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
             );
         }
         FILE_DTYPE_F32 => {
             buf.reserve(bytes.len() / 4);
             buf.extend(
-                bytes.chunks_exact(4)
+                bytes
+                    .chunks_exact(4)
                     .map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_F16 => {
             buf.reserve(bytes.len() / 2);
             buf.extend(
-                bytes.chunks_exact(2)
+                bytes
+                    .chunks_exact(2)
                     .map(|c| f16_bits_to_f64(u16::from_le_bytes(c.try_into().unwrap()))),
             );
         }
         FILE_DTYPE_I16 => {
             buf.reserve(bytes.len() / 2);
             buf.extend(
-                bytes.chunks_exact(2)
+                bytes
+                    .chunks_exact(2)
                     .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_I32 => {
             buf.reserve(bytes.len() / 4);
             buf.extend(
-                bytes.chunks_exact(4)
+                bytes
+                    .chunks_exact(4)
                     .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_I64 => {
             buf.reserve(bytes.len() / 8);
             buf.extend(
-                bytes.chunks_exact(8)
+                bytes
+                    .chunks_exact(8)
                     .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
@@ -1384,7 +1398,11 @@ fn attach_binaries<E: BinaryArrayOwner>(
             continue;
         }
         for aref in item_refs.as_slice() {
-            let stride = if aref.encoded_len > 0 { 1 } else { dtype_stride(aref.dtype) };
+            let stride = if aref.encoded_len > 0 {
+                1
+            } else {
+                dtype_stride(aref.dtype)
+            };
             if let Some(old) = blocks.insert(aref.block_id, stride)
                 && old != stride
             {

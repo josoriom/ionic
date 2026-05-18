@@ -159,6 +159,9 @@ struct ConvertWhich {
 
     #[arg(long = "ion-to-mzml")]
     ion_to_mzml: bool,
+
+    #[arg(long = "benchmark-decode")]
+    benchmark_decode: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -427,8 +430,12 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     let t_all = Instant::now();
 
-    let default_mzml_to_ion =
-        !cmd.which.mzml_to_ion && !cmd.which.mzml_to_b32 && !cmd.which.ion_to_mzml;
+    let benchmark_decode = cmd.which.benchmark_decode;
+
+    let default_mzml_to_ion = !cmd.which.mzml_to_ion
+        && !cmd.which.mzml_to_b32
+        && !cmd.which.ion_to_mzml
+        && !benchmark_decode;
 
     let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let mzml_to_b32 = cmd.which.mzml_to_b32;
@@ -874,6 +881,70 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             h, m, s
         );
 
+        if had_failed.load(Ordering::Relaxed) {
+            return Err("some files failed".to_string());
+        }
+        return Ok(());
+    }
+
+    if benchmark_decode {
+        let files = collect_files_with_exts(&input_root, &["ion"], filter.as_deref())?;
+        if files.is_empty() {
+            return Err(format!(
+                "no matching .ion files found under {}",
+                input_root.display()
+            ));
+        }
+        let total = files.len();
+        let benchmark_one = |in_path: &PathBuf| {
+            let name = basename(in_path);
+            let t0 = Instant::now();
+            match Ion::open_file(
+                in_path,
+                DecoderConfig {
+                    parallel: matches!(encoding, Encoding::Parallel),
+                    ..DecoderConfig::default()
+                },
+            ) {
+                Ok(mut ion) => {
+                    let count = ion.spectrum_count() as usize;
+                    let mut buf = Vec::new();
+                    for i in 0..count {
+                        if let Some(refs) = ion.spectrum_array_refs(i) {
+                            for aref in refs {
+                                let _ = ion.read_spectrum_array(&aref, &mut buf);
+                            }
+                        }
+                    }
+                    let elapsed_s = t0.elapsed().as_secs_f64();
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let in_mb = fs::metadata(in_path)
+                        .map(|m| m.len() as f64 / MB)
+                        .unwrap_or(0.0);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    println!(
+                        "{ANSI_GREEN}[ok]{ANSI_RESET} [{}/{}] {}  {:.2} MB  {:.3}s",
+                        n, total, name, in_mb, elapsed_s
+                    );
+                    let _ = stdout().flush();
+                }
+                Err(e) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: {e}",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                }
+            }
+        };
+        pool.install(|| match encoding {
+            Encoding::Sequential => files.par_iter().for_each(benchmark_one),
+            Encoding::Parallel => files.iter().for_each(benchmark_one),
+        });
         if had_failed.load(Ordering::Relaxed) {
             return Err("some files failed".to_string());
         }

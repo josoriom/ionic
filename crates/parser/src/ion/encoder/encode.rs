@@ -644,7 +644,6 @@ fn write_array_data(buf: &mut Vec<u8>, data: ArrayData<'_>, dtype: u8) {
         (FILE_DTYPE_I32, ArrayData::I32(e)) => write_i32_slice_le(buf, e),
         (FILE_DTYPE_I64, ArrayData::I64(e)) => write_i64_slice_le(buf, e),
         // SAFETY: `validate_array_dtype` is always called before this function.
-        // This branch is unreachable when the caller validates first.
         _ => unreachable!("write_array_data called with unvalidated dtype/data combination"),
     }
 }
@@ -744,56 +743,51 @@ fn fill_container<T: HasBinaryDataArrayList>(
                     &crate::ion::packing::raw::RAW
                 };
                 let array_filter = array_packing.id() as u8;
-                let (block_id, elem_offset, encoded_len) =
-                    if array_packing.is_variable_length() {
-                        let mut encoded = Vec::new();
-                        let packing_input = match (data, dtype_enum) {
-                            (ArrayData::F64(s), Dtype::F64) => {
-                                array_packing.encode(PackingInput::F64(s), &mut encoded)?;
-                                None
-                            }
-                            (ArrayData::F32(s), Dtype::F32) => {
-                                array_packing.encode(PackingInput::F32(s), &mut encoded)?;
-                                None
-                            }
-                            _ => Some(data),
-                        };
-                        if let Some(d) = packing_input {
-                            write_array_data(&mut encoded, d, dtype);
+                let (block_id, elem_offset, encoded_len) = if array_packing.is_variable_length() {
+                    let mut encoded = Vec::new();
+                    let packing_input = match (data, dtype_enum) {
+                        (ArrayData::F64(s), Dtype::F64) => {
+                            array_packing.encode(PackingInput::F64(s), &mut encoded)?;
+                            None
                         }
-                        let enc_len = u32::try_from(encoded.len())
-                            .map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
-                        let (bid, eoff) = container.add_item_to_box(
-                            encoded.len(),
-                            1,
-                            |buf| {
-                                buf.extend_from_slice(&encoded);
-                                Ok(())
-                            },
-                        )?;
-                        (bid, eoff, enc_len)
-                    } else {
-                        let (bid, eoff) = container.add_item_to_box(
-                            data.element_count() * elem_bytes,
-                            elem_bytes,
-                            |buf| match array_packing.id() {
-                                PackingId::DeltaShuffle => match data {
-                                    ArrayData::F64(slice) => {
-                                        array_packing.encode(PackingInput::F64(slice), buf)
-                                    }
-                                    _ => {
-                                        write_array_data(buf, data, dtype);
-                                        Ok(())
-                                    }
-                                },
+                        (ArrayData::F32(s), Dtype::F32) => {
+                            array_packing.encode(PackingInput::F32(s), &mut encoded)?;
+                            None
+                        }
+                        _ => Some(data),
+                    };
+                    if let Some(d) = packing_input {
+                        write_array_data(&mut encoded, d, dtype);
+                    }
+                    let enc_len = u32::try_from(encoded.len())
+                        .map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
+                    let (bid, eoff) = container.add_item_to_box(encoded.len(), 1, |buf| {
+                        buf.extend_from_slice(&encoded);
+                        Ok(())
+                    })?;
+                    (bid, eoff, enc_len)
+                } else {
+                    let (bid, eoff) = container.add_item_to_box(
+                        data.element_count() * elem_bytes,
+                        elem_bytes,
+                        |buf| match array_packing.id() {
+                            PackingId::DeltaShuffle => match data {
+                                ArrayData::F64(slice) => {
+                                    array_packing.encode(PackingInput::F64(slice), buf)
+                                }
                                 _ => {
                                     write_array_data(buf, data, dtype);
                                     Ok(())
                                 }
                             },
-                        )?;
-                        (bid, eoff, 0u32)
-                    };
+                            _ => {
+                                write_array_data(buf, data, dtype);
+                                Ok(())
+                            }
+                        },
+                    )?;
+                    (bid, eoff, 0u32)
+                };
                 write_arrayref_entry(
                     aref_bytes,
                     elem_offset,

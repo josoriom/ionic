@@ -97,38 +97,48 @@ pub(crate) trait Packing: Send + Sync {
 
 pub(crate) fn packing_for(
     array_type: u32,
-    _dtype: Dtype,
+    dtype: Dtype,
     _element_count: usize,
 ) -> &'static dyn Packing {
-    use crate::accessions::{INTENSITY_ARRAY, MZ_ARRAY, TIME_ARRAY};
+    use crate::accessions::{
+        INTENSITY_ARRAY, ION_MOBILITY_ARRAY, MEAN_ION_MOBILITY_ARRAY, MZ_ARRAY,
+        RAW_ION_MOBILITY_ARRAY, RAW_ION_MOBILITY_DRIFT_TIME_ARRAY, TIME_ARRAY,
+    };
     let env_key = match array_type {
         MZ_ARRAY => Some("IONIC_MZ_CODEC"),
         INTENSITY_ARRAY => Some("IONIC_INTENSITY_CODEC"),
         TIME_ARRAY => Some("IONIC_RT_CODEC"),
+        ION_MOBILITY_ARRAY
+        | MEAN_ION_MOBILITY_ARRAY
+        | RAW_ION_MOBILITY_ARRAY
+        | RAW_ION_MOBILITY_DRIFT_TIME_ARRAY => Some("IONIC_ION_MOBILITY_CODEC"),
         _ => None,
     };
     if let Some(key) = env_key {
         if let Ok(v) = std::env::var(key) {
             return match v.as_str() {
-                "raw"           => &raw::RAW,
-                "byte_shuffle"  => &byte_shuffle::BYTE_SHUFFLE,
+                "raw" => &raw::RAW,
+                "byte_shuffle" => &byte_shuffle::BYTE_SHUFFLE,
                 "delta_shuffle" => &delta_shuffle::DELTA_SHUFFLE,
-                "delta2_vbyte"  => &delta2_vbyte::DELTA2_VBYTE,
-                "alp"           => &alp::ALP,
-                "chimp"         => &chimp::CHIMP,
-                _               => &delta_shuffle::DELTA_SHUFFLE,
+                "delta2_vbyte" => &delta2_vbyte::DELTA2_VBYTE,
+                "alp" => &alp::ALP,
+                "chimp" => &chimp::CHIMP,
+                _ => &delta_shuffle::DELTA_SHUFFLE,
             };
         }
     }
-    &delta_shuffle::DELTA_SHUFFLE
+    match dtype {
+        Dtype::F64 => &delta_shuffle::DELTA_SHUFFLE,
+        _ => &raw::RAW,
+    }
 }
 
 pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
     use alp::ALP;
     use byte_shuffle::BYTE_SHUFFLE;
     use chimp::CHIMP;
-    use delta2_vbyte::DELTA2_VBYTE;
     use delta_shuffle::DELTA_SHUFFLE;
+    use delta2_vbyte::DELTA2_VBYTE;
     use raw::RAW;
 
     match id {
@@ -176,9 +186,13 @@ mod tests {
     }
 
     #[test]
-    fn packing_for_always_returns_delta_shuffle() {
-        assert_eq!(packing_for(MZ_ARRAY, Dtype::F64, 100).id(), PackingId::DeltaShuffle);
-        assert_eq!(packing_for(0, Dtype::F32, 1).id(), PackingId::DeltaShuffle);
+    fn packing_for_dtype_dispatch() {
+        assert_eq!(
+            packing_for(MZ_ARRAY, Dtype::F64, 100).id(),
+            PackingId::DeltaShuffle
+        );
+        assert_eq!(packing_for(0, Dtype::F32, 1).id(), PackingId::Raw);
+        assert_eq!(packing_for(0, Dtype::I32, 1).id(), PackingId::Raw);
     }
 
     #[test]
