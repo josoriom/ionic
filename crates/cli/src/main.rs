@@ -110,7 +110,7 @@ struct ConvertArgs {
 
     #[arg(
         long = "level",
-        default_value_t = 12,
+        default_value_t = 18,
         value_parser = clap::value_parser!(u8).range(0..=22)
     )]
     compression_level: u8,

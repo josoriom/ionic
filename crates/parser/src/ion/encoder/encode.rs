@@ -31,7 +31,7 @@ use crate::{
 
 pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
-pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 32 * 1024 * 1024;
+pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1 * 1024 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 

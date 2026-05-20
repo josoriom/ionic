@@ -1,6 +1,110 @@
 use crate::ion::{IonError, IonResult};
 
+pub(crate) trait DeltaWord: Copy + Default {
+    const BYTES: usize;
+    fn wrapping_sub(self, rhs: Self) -> Self;
+    fn wrapping_add(self, rhs: Self) -> Self;
+    fn bitxor(self, rhs: Self) -> Self;
+    fn leading_zeros(self) -> u32;
+    fn trailing_zeros(self) -> u32;
+    fn shr_bytes(self, bytes: usize) -> Self;
+    fn shl_bytes(self, bytes: usize) -> Self;
+    fn to_le_bytes_into(self, out: &mut Vec<u8>);
+    fn from_le_chunk(chunk: &[u8]) -> Self;
+    fn to_u64(self) -> u64;
+    fn to_signed_i64(self) -> i64;
+    fn from_u64(v: u64) -> Self;
+    fn byte_at(self, i: usize) -> u8;
+}
+
+impl DeltaWord for u32 {
+    const BYTES: usize = 4;
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        self.wrapping_sub(rhs)
+    }
+    fn wrapping_add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
+    }
+    fn bitxor(self, rhs: Self) -> Self {
+        self ^ rhs
+    }
+    fn leading_zeros(self) -> u32 {
+        self.leading_zeros()
+    }
+    fn trailing_zeros(self) -> u32 {
+        self.trailing_zeros()
+    }
+    fn shr_bytes(self, bytes: usize) -> Self {
+        self >> (bytes * 8)
+    }
+    fn shl_bytes(self, bytes: usize) -> Self {
+        self << (bytes * 8)
+    }
+    fn to_le_bytes_into(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
+    fn from_le_chunk(chunk: &[u8]) -> Self {
+        u32::from_le_bytes(chunk.try_into().unwrap())
+    }
+    fn to_u64(self) -> u64 {
+        self as u64
+    }
+    fn to_signed_i64(self) -> i64 {
+        self as i32 as i64
+    }
+    fn from_u64(v: u64) -> Self {
+        v as u32
+    }
+    fn byte_at(self, i: usize) -> u8 {
+        ((self >> (i * 8)) & 0xFF) as u8
+    }
+}
+
+impl DeltaWord for u64 {
+    const BYTES: usize = 8;
+    fn wrapping_sub(self, rhs: Self) -> Self {
+        self.wrapping_sub(rhs)
+    }
+    fn wrapping_add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
+    }
+    fn bitxor(self, rhs: Self) -> Self {
+        self ^ rhs
+    }
+    fn leading_zeros(self) -> u32 {
+        self.leading_zeros()
+    }
+    fn trailing_zeros(self) -> u32 {
+        self.trailing_zeros()
+    }
+    fn shr_bytes(self, bytes: usize) -> Self {
+        self >> (bytes * 8)
+    }
+    fn shl_bytes(self, bytes: usize) -> Self {
+        self << (bytes * 8)
+    }
+    fn to_le_bytes_into(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
+    fn from_le_chunk(chunk: &[u8]) -> Self {
+        u64::from_le_bytes(chunk.try_into().unwrap())
+    }
+    fn to_u64(self) -> u64 {
+        self
+    }
+    fn to_signed_i64(self) -> i64 {
+        self as i64
+    }
+    fn from_u64(v: u64) -> Self {
+        v
+    }
+    fn byte_at(self, i: usize) -> u8 {
+        ((self >> (i * 8)) & 0xFF) as u8
+    }
+}
+
 pub(crate) mod alp;
+pub(crate) mod alp2;
 pub(crate) mod byte_shuffle;
 pub(crate) mod chimp;
 pub(crate) mod delta2_vbyte;
@@ -52,6 +156,7 @@ pub(crate) enum PackingId {
     DeltaSquaredVByte = 3,
     Alp = 4,
     Chimp = 5,
+    Alp2 = 6,
 }
 
 impl PackingId {
@@ -63,6 +168,7 @@ impl PackingId {
             3 => Ok(Self::DeltaSquaredVByte),
             4 => Ok(Self::Alp),
             5 => Ok(Self::Chimp),
+            6 => Ok(Self::Alp2),
             _ => Err(IonError::UnsupportedPacking(b)),
         }
     }
@@ -123,18 +229,20 @@ pub(crate) fn packing_for(
                 "delta2_vbyte" => &delta2_vbyte::DELTA2_VBYTE,
                 "alp" => &alp::ALP,
                 "chimp" => &chimp::CHIMP,
+                "alp2" => &alp2::ALP2,
                 _ => &delta_shuffle::DELTA_SHUFFLE,
             };
         }
     }
     match dtype {
-        Dtype::F64 => &delta_shuffle::DELTA_SHUFFLE,
+        Dtype::F64 | Dtype::F32 => &delta_shuffle::DELTA_SHUFFLE,
         _ => &raw::RAW,
     }
 }
 
 pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
     use alp::ALP;
+    use alp2::ALP2;
     use byte_shuffle::BYTE_SHUFFLE;
     use chimp::CHIMP;
     use delta_shuffle::DELTA_SHUFFLE;
@@ -148,6 +256,7 @@ pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
         PackingId::DeltaSquaredVByte => &DELTA2_VBYTE,
         PackingId::Alp => &ALP,
         PackingId::Chimp => &CHIMP,
+        PackingId::Alp2 => &ALP2,
     }
 }
 
@@ -158,11 +267,11 @@ mod tests {
 
     #[test]
     fn packing_id_from_byte_roundtrip() {
-        for b in 0u8..=5 {
+        for b in 0u8..=6 {
             let id = PackingId::from_byte(b).unwrap();
             assert_eq!(id as u8, b);
         }
-        assert!(PackingId::from_byte(6).is_err());
+        assert!(PackingId::from_byte(7).is_err());
     }
 
     #[test]
@@ -191,13 +300,13 @@ mod tests {
             packing_for(MZ_ARRAY, Dtype::F64, 100).id(),
             PackingId::DeltaShuffle
         );
-        assert_eq!(packing_for(0, Dtype::F32, 1).id(), PackingId::Raw);
+        assert_eq!(packing_for(0, Dtype::F32, 1).id(), PackingId::DeltaShuffle);
         assert_eq!(packing_for(0, Dtype::I32, 1).id(), PackingId::Raw);
     }
 
     #[test]
     fn packing_by_id_covers_all_variants() {
-        for b in 0u8..=5 {
+        for b in 0u8..=6 {
             let id = PackingId::from_byte(b).unwrap();
             let _ = packing_by_id(id);
         }

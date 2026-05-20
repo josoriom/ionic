@@ -1304,7 +1304,7 @@ fn unfilter_array_bytes(
                 Ok(std::borrow::Cow::Borrowed(raw))
             }
         }
-        PackingId::Alp | PackingId::DeltaSquaredVByte | PackingId::Chimp => {
+        PackingId::Alp | PackingId::Alp2 | PackingId::DeltaSquaredVByte | PackingId::Chimp => {
             let pk_dtype = match dtype {
                 FILE_DTYPE_F64 => PkDtype::F64,
                 FILE_DTYPE_F32 => PkDtype::F32,
