@@ -178,8 +178,22 @@ struct CatArgs {
     #[arg(long = "full", short = 'f', action = ArgAction::SetTrue, default_value_t = false)]
     full: bool,
 
-    #[arg(long = "check", action = ArgAction::SetTrue, default_value_t = false, conflicts_with = "full")]
+    #[arg(
+        long = "check",
+        action = ArgAction::SetTrue,
+        default_value_t = false,
+        conflicts_with_all = ["full", "scan"]
+    )]
     check: bool,
+
+    #[arg(
+        long = "scan",
+        value_name = "N",
+        help = "Print a single spectrum (1-based position in the spectrum list) as JSON",
+        value_parser = clap::value_parser!(u32).range(1..),
+        conflicts_with = "full"
+    )]
+    scan: Option<u32>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -216,11 +230,42 @@ fn cat(cmd: CatArgs) -> Result<(), String> {
     if cmd.check {
         return check_ion_file(&file_path);
     }
+    if let Some(n) = cmd.scan {
+        return cat_scan(&file_path, n);
+    }
     let mut mzml = read_mzml_or_ion(&file_path)?;
     if !cmd.full {
         trim_mzml_for_cat(&mut mzml);
     }
     print_json_full(&mzml)
+}
+
+fn cat_scan(file_path: &Path, scan_1based: u32) -> Result<(), String> {
+    let index = (scan_1based - 1) as usize;
+    let spectrum = load_spectrum_at(file_path, index)?
+        .ok_or_else(|| format!("scan {scan_1based} is out of range"))?;
+    print_json_full(&spectrum)
+}
+
+fn load_spectrum_at(file_path: &Path, index: usize) -> Result<Option<Spectrum>, String> {
+    match file_ext_lower(file_path).as_str() {
+        "ion" => {
+            let mut ion = Ion::open_file(file_path, DecoderConfig::default())
+                .map_err(|e| format!("Ion::open_file failed: {e}"))?;
+            ion.spectrum_at(index)
+                .map_err(|e| format!("spectrum_at failed: {e}"))
+        }
+        "mzml" => {
+            let bytes = fs::read(file_path).map_err(|e| format!("read failed: {e}"))?;
+            let mut mzml = parse_mzml(&bytes).map_err(|e| format!("parse_mzml failed: {e}"))?;
+            Ok(mzml
+                .run
+                .spectrum_list
+                .as_mut()
+                .and_then(|l| (index < l.spectra.len()).then(|| std::mem::take(&mut l.spectra[index]))))
+        }
+        other => Err(format!("unsupported file extension: {other:?}")),
+    }
 }
 
 fn file_ext_lower(path: &Path) -> String {

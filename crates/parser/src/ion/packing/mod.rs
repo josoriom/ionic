@@ -103,11 +103,7 @@ impl DeltaWord for u64 {
     }
 }
 
-pub(crate) mod alp;
-pub(crate) mod alp2;
 pub(crate) mod byte_shuffle;
-pub(crate) mod chimp;
-pub(crate) mod delta2_vbyte;
 pub(crate) mod delta_shuffle;
 pub(crate) mod raw;
 
@@ -153,10 +149,6 @@ pub(crate) enum PackingId {
     Raw = 0,
     ByteShuffle = 1,
     DeltaShuffle = 2,
-    DeltaSquaredVByte = 3,
-    Alp = 4,
-    Chimp = 5,
-    Alp2 = 6,
 }
 
 impl PackingId {
@@ -165,10 +157,6 @@ impl PackingId {
             0 => Ok(Self::Raw),
             1 => Ok(Self::ByteShuffle),
             2 => Ok(Self::DeltaShuffle),
-            3 => Ok(Self::DeltaSquaredVByte),
-            4 => Ok(Self::Alp),
-            5 => Ok(Self::Chimp),
-            6 => Ok(Self::Alp2),
             _ => Err(IonError::UnsupportedPacking(b)),
         }
     }
@@ -226,10 +214,6 @@ pub(crate) fn packing_for(
                 "raw" => &raw::RAW,
                 "byte_shuffle" => &byte_shuffle::BYTE_SHUFFLE,
                 "delta_shuffle" => &delta_shuffle::DELTA_SHUFFLE,
-                "delta2_vbyte" => &delta2_vbyte::DELTA2_VBYTE,
-                "alp" => &alp::ALP,
-                "chimp" => &chimp::CHIMP,
-                "alp2" => &alp2::ALP2,
                 _ => &delta_shuffle::DELTA_SHUFFLE,
             };
         }
@@ -241,22 +225,14 @@ pub(crate) fn packing_for(
 }
 
 pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
-    use alp::ALP;
-    use alp2::ALP2;
     use byte_shuffle::BYTE_SHUFFLE;
-    use chimp::CHIMP;
     use delta_shuffle::DELTA_SHUFFLE;
-    use delta2_vbyte::DELTA2_VBYTE;
     use raw::RAW;
 
     match id {
         PackingId::Raw => &RAW,
         PackingId::ByteShuffle => &BYTE_SHUFFLE,
         PackingId::DeltaShuffle => &DELTA_SHUFFLE,
-        PackingId::DeltaSquaredVByte => &DELTA2_VBYTE,
-        PackingId::Alp => &ALP,
-        PackingId::Chimp => &CHIMP,
-        PackingId::Alp2 => &ALP2,
     }
 }
 
@@ -267,11 +243,11 @@ mod tests {
 
     #[test]
     fn packing_id_from_byte_roundtrip() {
-        for b in 0u8..=6 {
+        for b in 0u8..=2 {
             let id = PackingId::from_byte(b).unwrap();
             assert_eq!(id as u8, b);
         }
-        assert!(PackingId::from_byte(7).is_err());
+        assert!(PackingId::from_byte(3).is_err());
     }
 
     #[test]
@@ -306,7 +282,7 @@ mod tests {
 
     #[test]
     fn packing_by_id_covers_all_variants() {
-        for b in 0u8..=6 {
+        for b in 0u8..=2 {
             let id = PackingId::from_byte(b).unwrap();
             let _ = packing_by_id(id);
         }

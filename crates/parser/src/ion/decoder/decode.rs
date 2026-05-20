@@ -450,6 +450,44 @@ impl<'a> Decoder<'a> {
     pub fn to_mzml(&mut self) -> IonResult<MzML> {
         MzmlConverter::new(self).full()
     }
+
+    pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+        if index >= self.header.spectrum_count as usize {
+            return Ok(None);
+        }
+        let mut mzml = MzmlConverter::metadata_only(self)?;
+        let Some(list) = mzml.run.spectrum_list.as_mut() else {
+            return Ok(None);
+        };
+        if index >= list.spectra.len() {
+            return Ok(None);
+        }
+        let mut spectrum = std::mem::take(&mut list.spectra[index]);
+
+        if let Some(arefs) = read_array_refs_at(
+            self.bytes,
+            self.header.off_spec_entries as usize,
+            self.header.off_spec_arrayrefs as usize,
+            index,
+        ) {
+            let bd_list = spectrum
+                .binary_data_array_list
+                .get_or_insert_with(BinaryDataArrayList::default);
+            for aref in arefs.as_slice() {
+                let (eo, count, stride) = aref_read_params(aref);
+                let raw = self.spec_container.get_item_from_block(
+                    aref.block_id,
+                    eo,
+                    count,
+                    stride,
+                    "spectrum_at",
+                )?;
+                attach_array(bd_list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
+            }
+            bd_list.count = Some(bd_list.binary_data_arrays.len());
+        }
+        Ok(Some(spectrum))
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -683,6 +721,17 @@ impl<'a> Ion<'a> {
             .as_decoder()
             .map(|d| d.to_mzml_metadata_only())
             .unwrap_or_else(|| Ok(self.clone_as_mzml_metadata_only()))
+    }
+
+    pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+        match &mut self.backend {
+            IonBackend::Decoder(d) => d.spectrum_at(index),
+            IonBackend::Materialized => Ok(self
+                .run
+                .spectrum_list
+                .as_ref()
+                .and_then(|l| l.spectra.get(index).cloned())),
+        }
     }
 }
 
@@ -1287,7 +1336,6 @@ fn unfilter_array_bytes(
     dtype: u8,
     array_filter: u8,
 ) -> IonResult<std::borrow::Cow<'_, [u8]>> {
-    use crate::ion::packing::{Dtype as PkDtype, packing_by_id};
     let pk_id = PackingId::from_byte(array_filter)?;
     match pk_id {
         PackingId::Raw | PackingId::ByteShuffle => Ok(std::borrow::Cow::Borrowed(raw)),
@@ -1303,21 +1351,21 @@ fn unfilter_array_bytes(
             } else {
                 Ok(std::borrow::Cow::Borrowed(raw))
             }
-        }
-        PackingId::Alp | PackingId::Alp2 | PackingId::DeltaSquaredVByte | PackingId::Chimp => {
-            let pk_dtype = match dtype {
-                FILE_DTYPE_F64 => PkDtype::F64,
-                FILE_DTYPE_F32 => PkDtype::F32,
-                FILE_DTYPE_F16 => PkDtype::F16,
-                FILE_DTYPE_I16 => PkDtype::I16,
-                FILE_DTYPE_I32 => PkDtype::I32,
-                FILE_DTYPE_I64 => PkDtype::I64,
-                _ => return Err(IonError::from(format!("unsupported dtype {dtype}"))),
-            };
-            let mut out = Vec::new();
-            packing_by_id(pk_id).decode(raw, pk_dtype, &mut out)?;
-            Ok(std::borrow::Cow::Owned(out))
-        }
+        } // PackingId::Alp => {
+          //     use crate::ion::packing::{Dtype as PkDtype, packing_by_id};
+          //     let pk_dtype = match dtype {
+          //         FILE_DTYPE_F64 => PkDtype::F64,
+          //         FILE_DTYPE_F32 => PkDtype::F32,
+          //         FILE_DTYPE_F16 => PkDtype::F16,
+          //         FILE_DTYPE_I16 => PkDtype::I16,
+          //         FILE_DTYPE_I32 => PkDtype::I32,
+          //         FILE_DTYPE_I64 => PkDtype::I64,
+          //         _ => return Err(IonError::from(format!("unsupported dtype {dtype}"))),
+          //     };
+          //     let mut out = Vec::new();
+          //     packing_by_id(pk_id).decode(raw, pk_dtype, &mut out)?;
+          //     Ok(std::borrow::Cow::Owned(out))
+          // }
     }
 }
 
