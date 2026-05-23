@@ -110,7 +110,7 @@ struct ConvertArgs {
 
     #[arg(
         long = "level",
-        default_value_t = 12,
+        default_value_t = 18,
         value_parser = clap::value_parser!(u8).range(0..=22)
     )]
     compression_level: u8,
@@ -159,6 +159,9 @@ struct ConvertWhich {
 
     #[arg(long = "ion-to-mzml")]
     ion_to_mzml: bool,
+
+    #[arg(long = "benchmark-decode")]
+    benchmark_decode: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -175,8 +178,22 @@ struct CatArgs {
     #[arg(long = "full", short = 'f', action = ArgAction::SetTrue, default_value_t = false)]
     full: bool,
 
-    #[arg(long = "check", action = ArgAction::SetTrue, default_value_t = false, conflicts_with = "full")]
+    #[arg(
+        long = "check",
+        action = ArgAction::SetTrue,
+        default_value_t = false,
+        conflicts_with_all = ["full", "scan"]
+    )]
     check: bool,
+
+    #[arg(
+        long = "scan",
+        value_name = "N",
+        help = "Print a single spectrum (1-based position in the spectrum list) as JSON",
+        value_parser = clap::value_parser!(u32).range(1..),
+        conflicts_with = "full"
+    )]
+    scan: Option<u32>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -213,11 +230,42 @@ fn cat(cmd: CatArgs) -> Result<(), String> {
     if cmd.check {
         return check_ion_file(&file_path);
     }
+    if let Some(n) = cmd.scan {
+        return cat_scan(&file_path, n);
+    }
     let mut mzml = read_mzml_or_ion(&file_path)?;
     if !cmd.full {
         trim_mzml_for_cat(&mut mzml);
     }
     print_json_full(&mzml)
+}
+
+fn cat_scan(file_path: &Path, scan_1based: u32) -> Result<(), String> {
+    let index = (scan_1based - 1) as usize;
+    let spectrum = load_spectrum_at(file_path, index)?
+        .ok_or_else(|| format!("scan {scan_1based} is out of range"))?;
+    print_json_full(&spectrum)
+}
+
+fn load_spectrum_at(file_path: &Path, index: usize) -> Result<Option<Spectrum>, String> {
+    match file_ext_lower(file_path).as_str() {
+        "ion" => {
+            let mut ion = Ion::open_file(file_path, DecoderConfig::default())
+                .map_err(|e| format!("Ion::open_file failed: {e}"))?;
+            ion.spectrum_at(index)
+                .map_err(|e| format!("spectrum_at failed: {e}"))
+        }
+        "mzml" => {
+            let bytes = fs::read(file_path).map_err(|e| format!("read failed: {e}"))?;
+            let mut mzml = parse_mzml(&bytes).map_err(|e| format!("parse_mzml failed: {e}"))?;
+            Ok(mzml
+                .run
+                .spectrum_list
+                .as_mut()
+                .and_then(|l| (index < l.spectra.len()).then(|| std::mem::take(&mut l.spectra[index]))))
+        }
+        other => Err(format!("unsupported file extension: {other:?}")),
+    }
 }
 
 fn file_ext_lower(path: &Path) -> String {
@@ -427,8 +475,12 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     let t_all = Instant::now();
 
-    let default_mzml_to_ion =
-        !cmd.which.mzml_to_ion && !cmd.which.mzml_to_b32 && !cmd.which.ion_to_mzml;
+    let benchmark_decode = cmd.which.benchmark_decode;
+
+    let default_mzml_to_ion = !cmd.which.mzml_to_ion
+        && !cmd.which.mzml_to_b32
+        && !cmd.which.ion_to_mzml
+        && !benchmark_decode;
 
     let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let mzml_to_b32 = cmd.which.mzml_to_b32;
@@ -874,6 +926,70 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             h, m, s
         );
 
+        if had_failed.load(Ordering::Relaxed) {
+            return Err("some files failed".to_string());
+        }
+        return Ok(());
+    }
+
+    if benchmark_decode {
+        let files = collect_files_with_exts(&input_root, &["ion"], filter.as_deref())?;
+        if files.is_empty() {
+            return Err(format!(
+                "no matching .ion files found under {}",
+                input_root.display()
+            ));
+        }
+        let total = files.len();
+        let benchmark_one = |in_path: &PathBuf| {
+            let name = basename(in_path);
+            let t0 = Instant::now();
+            match Ion::open_file(
+                in_path,
+                DecoderConfig {
+                    parallel: matches!(encoding, Encoding::Parallel),
+                    ..DecoderConfig::default()
+                },
+            ) {
+                Ok(mut ion) => {
+                    let count = ion.spectrum_count() as usize;
+                    let mut buf = Vec::new();
+                    for i in 0..count {
+                        if let Some(refs) = ion.spectrum_array_refs(i) {
+                            for aref in refs {
+                                let _ = ion.read_spectrum_array(&aref, &mut buf);
+                            }
+                        }
+                    }
+                    let elapsed_s = t0.elapsed().as_secs_f64();
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let in_mb = fs::metadata(in_path)
+                        .map(|m| m.len() as f64 / MB)
+                        .unwrap_or(0.0);
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    println!(
+                        "{ANSI_GREEN}[ok]{ANSI_RESET} [{}/{}] {}  {:.2} MB  {:.3}s",
+                        n, total, name, in_mb, elapsed_s
+                    );
+                    let _ = stdout().flush();
+                }
+                Err(e) => {
+                    had_failed.store(true, Ordering::Relaxed);
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    eprintln!(
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: {e}",
+                        n, total, name
+                    );
+                    let _ = stderr().flush();
+                }
+            }
+        };
+        pool.install(|| match encoding {
+            Encoding::Sequential => files.par_iter().for_each(benchmark_one),
+            Encoding::Parallel => files.iter().for_each(benchmark_one),
+        });
         if had_failed.load(Ordering::Relaxed) {
             return Err("some files failed".to_string());
         }

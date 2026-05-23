@@ -22,14 +22,12 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
-        encoder::{
-            encode::{
-                FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
-                FILE_DTYPE_I64,
-            },
-            utilities::{container_builder::FilterType, delta_filter},
+        encoder::encode::{
+            FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
+            FILE_DTYPE_I64,
         },
         filter_summary::{ChromatogramSummary, SpectrumSummary},
+        packing::PackingId,
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
@@ -101,6 +99,7 @@ pub struct ArrayRef {
     pub array_type: u32,
     pub dtype: u8,
     pub array_filter: u8,
+    pub encoded_len: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -136,7 +135,6 @@ enum IonBacking {
     Map(Mmap),
 }
 
-// Field order is load-bearing: ion must drop before _backing (UB otherwise).
 pub struct OwnedIon {
     ion: Ion<'static>,
     _backing: IonBacking,
@@ -186,7 +184,8 @@ impl DerefMut for OwnedIon {
 impl<'a> Decoder<'a> {
     pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
-        let filter = FilterType::try_from(header.default_array_filter).unwrap_or(FilterType::None);
+        let block_packing_id =
+            PackingId::from_byte(header.default_array_filter).unwrap_or(PackingId::Raw);
 
         let spec_container = {
             let off = usize::try_from(header.off_spec_container)
@@ -203,7 +202,7 @@ impl<'a> Decoder<'a> {
                 cb,
                 header.spec_block_count,
                 header.compression_level,
-                filter,
+                block_packing_id,
                 config.verify_checksums,
                 "spec",
                 DefaultProcessor,
@@ -226,7 +225,7 @@ impl<'a> Decoder<'a> {
                 container_bytes,
                 header.chrom_block_count,
                 header.compression_level,
-                filter,
+                block_packing_id,
                 config.verify_checksums,
                 "chrom",
                 DefaultProcessor,
@@ -362,15 +361,15 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
+        let (element_offset, count, stride) = aref_read_params(aref);
         let raw = self.spec_container.get_item_from_block(
             aref.block_id,
-            aref.element_offset,
-            aref.element_count,
-            dtype_stride(aref.dtype),
+            element_offset,
+            count,
+            stride,
             "read_spectrum_array",
         )?;
-        decode_into(out, raw, aref.dtype, aref.array_filter);
-        Ok(())
+        decode_into(out, raw, aref.dtype, aref.array_filter)
     }
 
     pub fn read_chromatogram_array(
@@ -382,15 +381,15 @@ impl<'a> Decoder<'a> {
             .chrom_container
             .as_mut()
             .ok_or_else(|| IonError::from("no chromatogram container"))?;
+        let (element_offset, count, stride) = aref_read_params(aref);
         let raw = container.get_item_from_block(
             aref.block_id,
-            aref.element_offset,
-            aref.element_count,
-            dtype_stride(aref.dtype),
+            element_offset,
+            count,
+            stride,
             "read_chromatogram_array",
         )?;
-        decode_into(out, raw, aref.dtype, aref.array_filter);
-        Ok(())
+        decode_into(out, raw, aref.dtype, aref.array_filter)
     }
 
     pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
@@ -450,6 +449,44 @@ impl<'a> Decoder<'a> {
 
     pub fn to_mzml(&mut self) -> IonResult<MzML> {
         MzmlConverter::new(self).full()
+    }
+
+    pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+        if index >= self.header.spectrum_count as usize {
+            return Ok(None);
+        }
+        let mut mzml = MzmlConverter::metadata_only(self)?;
+        let Some(list) = mzml.run.spectrum_list.as_mut() else {
+            return Ok(None);
+        };
+        if index >= list.spectra.len() {
+            return Ok(None);
+        }
+        let mut spectrum = std::mem::take(&mut list.spectra[index]);
+
+        if let Some(arefs) = read_array_refs_at(
+            self.bytes,
+            self.header.off_spec_entries as usize,
+            self.header.off_spec_arrayrefs as usize,
+            index,
+        ) {
+            let bd_list = spectrum
+                .binary_data_array_list
+                .get_or_insert_with(BinaryDataArrayList::default);
+            for aref in arefs.as_slice() {
+                let (eo, count, stride) = aref_read_params(aref);
+                let raw = self.spec_container.get_item_from_block(
+                    aref.block_id,
+                    eo,
+                    count,
+                    stride,
+                    "spectrum_at",
+                )?;
+                attach_array(bd_list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
+            }
+            bd_list.count = Some(bd_list.binary_data_arrays.len());
+        }
+        Ok(Some(spectrum))
     }
 }
 
@@ -684,6 +721,17 @@ impl<'a> Ion<'a> {
             .as_decoder()
             .map(|d| d.to_mzml_metadata_only())
             .unwrap_or_else(|| Ok(self.clone_as_mzml_metadata_only()))
+    }
+
+    pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+        match &mut self.backend {
+            IonBackend::Decoder(d) => d.spectrum_at(index),
+            IonBackend::Materialized => Ok(self
+                .run
+                .spectrum_list
+                .as_ref()
+                .and_then(|l| l.spectra.get(index).cloned())),
+        }
     }
 }
 
@@ -1218,6 +1266,20 @@ fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
         array_type: u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
         dtype: bytes[24],
         array_filter: bytes[25],
+        encoded_len: u32::from_le_bytes(bytes[26..30].try_into().unwrap()),
+    }
+}
+
+#[inline]
+fn aref_read_params(aref: &ArrayRef) -> (u64, u64, usize) {
+    if aref.encoded_len > 0 {
+        (aref.element_offset, aref.encoded_len as u64, 1)
+    } else {
+        (
+            aref.element_offset,
+            aref.element_count,
+            dtype_stride(aref.dtype),
+        )
     }
 }
 
@@ -1252,17 +1314,9 @@ fn decode_from_block(
     buf: &mut Vec<f64>,
     aref: &ArrayRef,
 ) -> bool {
-    match container.get_item_from_block(
-        aref.block_id,
-        aref.element_offset,
-        aref.element_count,
-        dtype_stride(aref.dtype),
-        "scan",
-    ) {
-        Ok(raw) => {
-            decode_into(buf, raw, aref.dtype, aref.array_filter);
-            true
-        }
+    let (element_offset, count, stride) = aref_read_params(aref);
+    match container.get_item_from_block(aref.block_id, element_offset, count, stride, "scan") {
+        Ok(raw) => decode_into(buf, raw, aref.dtype, aref.array_filter).is_ok(),
         Err(_) => false,
     }
 }
@@ -1277,57 +1331,99 @@ fn dtype_stride(dtype: u8) -> usize {
     }
 }
 
-fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) {
+fn unfilter_array_bytes(
+    raw: &[u8],
+    dtype: u8,
+    array_filter: u8,
+) -> IonResult<std::borrow::Cow<'_, [u8]>> {
+    let pk_id = PackingId::from_byte(array_filter)?;
+    match pk_id {
+        PackingId::Raw | PackingId::ByteShuffle => Ok(std::borrow::Cow::Borrowed(raw)),
+        PackingId::DeltaShuffle => {
+            if dtype == FILE_DTYPE_F64 {
+                let mut out = Vec::with_capacity(raw.len());
+                let mut prev: u64 = 0;
+                for chunk in raw.chunks_exact(8) {
+                    prev = prev.wrapping_add(u64::from_le_bytes(chunk.try_into().unwrap()));
+                    out.extend_from_slice(&prev.to_le_bytes());
+                }
+                Ok(std::borrow::Cow::Owned(out))
+            } else {
+                Ok(std::borrow::Cow::Borrowed(raw))
+            }
+        } // PackingId::Alp => {
+          //     use crate::ion::packing::{Dtype as PkDtype, packing_by_id};
+          //     let pk_dtype = match dtype {
+          //         FILE_DTYPE_F64 => PkDtype::F64,
+          //         FILE_DTYPE_F32 => PkDtype::F32,
+          //         FILE_DTYPE_F16 => PkDtype::F16,
+          //         FILE_DTYPE_I16 => PkDtype::I16,
+          //         FILE_DTYPE_I32 => PkDtype::I32,
+          //         FILE_DTYPE_I64 => PkDtype::I64,
+          //         _ => return Err(IonError::from(format!("unsupported dtype {dtype}"))),
+          //     };
+          //     let mut out = Vec::new();
+          //     packing_by_id(pk_id).decode(raw, pk_dtype, &mut out)?;
+          //     Ok(std::borrow::Cow::Owned(out))
+          // }
+    }
+}
+
+fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<()> {
     buf.clear();
+    let bytes = unfilter_array_bytes(raw, dtype, array_filter)?;
     match dtype {
         FILE_DTYPE_F64 => {
-            buf.reserve(raw.len() / 8);
-            if array_filter == FilterType::DeltaShuffle as u8 {
-                delta_filter::decode_f64(raw, buf);
-            } else {
-                buf.extend(
-                    raw.chunks_exact(8)
-                        .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
-                );
-            }
+            buf.reserve(bytes.len() / 8);
+            buf.extend(
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
+            );
         }
         FILE_DTYPE_F32 => {
-            buf.reserve(raw.len() / 4);
+            buf.reserve(bytes.len() / 4);
             buf.extend(
-                raw.chunks_exact(4)
+                bytes
+                    .chunks_exact(4)
                     .map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_F16 => {
-            buf.reserve(raw.len() / 2);
+            buf.reserve(bytes.len() / 2);
             buf.extend(
-                raw.chunks_exact(2)
+                bytes
+                    .chunks_exact(2)
                     .map(|c| f16_bits_to_f64(u16::from_le_bytes(c.try_into().unwrap()))),
             );
         }
         FILE_DTYPE_I16 => {
-            buf.reserve(raw.len() / 2);
+            buf.reserve(bytes.len() / 2);
             buf.extend(
-                raw.chunks_exact(2)
+                bytes
+                    .chunks_exact(2)
                     .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_I32 => {
-            buf.reserve(raw.len() / 4);
+            buf.reserve(bytes.len() / 4);
             buf.extend(
-                raw.chunks_exact(4)
+                bytes
+                    .chunks_exact(4)
                     .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_I64 => {
-            buf.reserve(raw.len() / 8);
+            buf.reserve(bytes.len() / 8);
             buf.extend(
-                raw.chunks_exact(8)
+                bytes
+                    .chunks_exact(8)
                     .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn attach_binaries<E: BinaryArrayOwner>(
@@ -1350,7 +1446,11 @@ fn attach_binaries<E: BinaryArrayOwner>(
             continue;
         }
         for aref in item_refs.as_slice() {
-            let stride = dtype_stride(aref.dtype);
+            let stride = if aref.encoded_len > 0 {
+                1
+            } else {
+                dtype_stride(aref.dtype)
+            };
             if let Some(old) = blocks.insert(aref.block_id, stride)
                 && old != stride
             {
@@ -1402,26 +1502,29 @@ fn attach_binaries<E: BinaryArrayOwner>(
             let block = data
                 .get(&aref.block_id)
                 .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", aref.block_id)))?;
-            let stride = dtype_stride(aref.dtype);
-            let start = usize::try_from(aref.element_offset)
-                .ok()
-                .and_then(|offset| offset.checked_mul(stride))
-                .ok_or_else(|| {
-                    IonError::from(format!(
-                        "{ctx}: item range overflow for block {}",
-                        aref.block_id
-                    ))
-                })?;
-            let end = usize::try_from(aref.element_count)
-                .ok()
-                .and_then(|count| count.checked_mul(stride))
-                .and_then(|len| start.checked_add(len))
-                .ok_or_else(|| {
-                    IonError::from(format!(
-                        "{ctx}: item range overflow for block {}",
-                        aref.block_id
-                    ))
-                })?;
+            let (start, end) = {
+                let (element_offset, count, stride) = aref_read_params(aref);
+                let s = usize::try_from(element_offset)
+                    .ok()
+                    .and_then(|offset| offset.checked_mul(stride))
+                    .ok_or_else(|| {
+                        IonError::from(format!(
+                            "{ctx}: item range overflow for block {}",
+                            aref.block_id
+                        ))
+                    })?;
+                let e = usize::try_from(count)
+                    .ok()
+                    .and_then(|c| c.checked_mul(stride))
+                    .and_then(|len| s.checked_add(len))
+                    .ok_or_else(|| {
+                        IonError::from(format!(
+                            "{ctx}: item range overflow for block {}",
+                            aref.block_id
+                        ))
+                    })?;
+                (s, e)
+            };
             let raw = block.get(start..end).ok_or_else(|| {
                 IonError::from(format!(
                     "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
@@ -1477,31 +1580,24 @@ fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> Ion
 }
 
 fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<BinaryData> {
+    let bytes = unfilter_array_bytes(raw, dtype, array_filter)?;
     match dtype {
-        FILE_DTYPE_F64 => {
-            if array_filter == FilterType::DeltaShuffle as u8 {
-                let mut out = Vec::with_capacity(raw.len() / 8);
-                delta_filter::decode_f64(raw, &mut out);
-                Ok(BinaryData::F64(out))
-            } else {
-                Ok(BinaryData::F64(raw_to_vec(raw, 8, |c| {
-                    f64::from_le_bytes(c.try_into().unwrap())
-                })?))
-            }
-        }
-        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(raw, 4, |c| {
+        FILE_DTYPE_F64 => Ok(BinaryData::F64(raw_to_vec(&bytes, 8, |c| {
+            f64::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(&bytes, 4, |c| {
             f32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(raw, 2, |c| {
+        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(&bytes, 2, |c| {
             u16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(raw, 2, |c| {
+        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(&bytes, 2, |c| {
             i16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(raw, 4, |c| {
+        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(&bytes, 4, |c| {
             i32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(raw, 8, |c| {
+        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(&bytes, 8, |c| {
             i64::from_le_bytes(c.try_into().unwrap())
         })?)),
         _ => Err(IonError::from(format!(
@@ -1762,7 +1858,7 @@ mod tests {
         let vals = [1.5f64, 2.5, 3.5];
         let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut buf = Vec::new();
-        decode_into(&mut buf, &raw, 1, 0);
+        decode_into(&mut buf, &raw, 1, 0).unwrap();
         assert_eq!(buf, vals);
     }
 
@@ -1771,7 +1867,7 @@ mod tests {
         let vals = [1.0f32, 2.0];
         let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut buf = Vec::new();
-        decode_into(&mut buf, &raw, 2, 0);
+        decode_into(&mut buf, &raw, 2, 0).unwrap();
         assert!((buf[0] - 1.0).abs() < f64::EPSILON);
         assert!((buf[1] - 2.0).abs() < f64::EPSILON);
     }

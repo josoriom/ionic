@@ -20,9 +20,7 @@ use crate::ion::utilities::parse_header::{
 
 #[derive(Default)]
 pub(crate) struct FileHeader {
-    // "START\0\0\0" at 0..8
-    // endianness_flag: 0 at 8
-    // format_version: 1 at 9..11
+    pub(crate) format_version: u16,
     pub(crate) compression_codec: u8,
     pub(crate) compression_level: u8,
     pub(crate) array_filter_id: u8,
@@ -85,7 +83,12 @@ impl FileHeader {
     pub(crate) fn write_into(&self, buf: &mut [u8]) {
         buf[0..8].copy_from_slice(b"START\0\0\0");
         buf[8] = 0u8; // endianness_flag: little-endian
-        patch_u16_at(buf, HEADER_FORMAT_VERSION, 1u16);
+        let fv = if self.format_version == 0 {
+            1u16
+        } else {
+            self.format_version
+        };
+        patch_u16_at(buf, HEADER_FORMAT_VERSION, fv);
 
         patch_u8_at(buf, HEADER_CODEC_ID, self.compression_codec);
         patch_u8_at(buf, HEADER_COMPRESSION_LEVEL, self.compression_level);

@@ -1,5 +1,6 @@
 pub(crate) mod byte_transpose;
 pub mod filter_summary;
+pub(crate) mod packing;
 pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
 pub mod decoder;
 pub use decoder::decode::{Decoder, DecoderConfig, Ion, OwnedIon};

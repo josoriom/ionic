@@ -17,11 +17,10 @@ use crate::{
         },
     },
     ion::{
-        IonResult,
-        encoder::utilities::{
-            CompressionMode, ContainerBuilder, DefaultCompressor, FilterType, delta_filter,
-        },
+        IonError, IonResult,
+        encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor},
         filter_summary::{ChromatogramSummary, SpectrumSummary},
+        packing::{Dtype, Packing, PackingId, PackingInput, packing_for},
         utilities::spectrum_source::summary_from_spectrum,
     },
     mzml::structs::{
@@ -32,12 +31,9 @@ use crate::{
 
 pub const HEADER_SIZE: usize = 1024;
 pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
-pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 32 * 1024 * 1024;
+pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1 * 1024 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
-
-const ARRAY_FILTER_NONE: u8 = 0;
-const ARRAY_FILTER_BYTE_SHUFFLE: u8 = 1;
 
 pub(crate) const FILE_DTYPE_F64: u8 = 1;
 pub(crate) const FILE_DTYPE_F32: u8 = 2;
@@ -346,6 +342,7 @@ impl<'o> Encoder<'o> {
         info: &HeaderInfo,
     ) -> FileHeader {
         FileHeader {
+            format_version: 1,
             compression_codec: config.codec_id(),
             compression_level: config.compression_level,
             array_filter_id: config.array_filter_id(),
@@ -446,9 +443,9 @@ impl EncodingConfig {
 
     fn array_filter_id(self) -> u8 {
         if self.compression_is_enabled() {
-            ARRAY_FILTER_BYTE_SHUFFLE
+            PackingId::ByteShuffle as u8
         } else {
-            ARRAY_FILTER_NONE
+            PackingId::Raw as u8
         }
     }
 
@@ -462,11 +459,11 @@ impl EncodingConfig {
         }
     }
 
-    fn filter_type(self) -> FilterType {
+    fn block_packing_id(self) -> PackingId {
         if self.compression_is_enabled() {
-            FilterType::Shuffle
+            PackingId::ByteShuffle
         } else {
-            FilterType::None
+            PackingId::Raw
         }
     }
 
@@ -647,7 +644,6 @@ fn write_array_data(buf: &mut Vec<u8>, data: ArrayData<'_>, dtype: u8) {
         (FILE_DTYPE_I32, ArrayData::I32(e)) => write_i32_slice_le(buf, e),
         (FILE_DTYPE_I64, ArrayData::I64(e)) => write_i64_slice_le(buf, e),
         // SAFETY: `validate_array_dtype` is always called before this function.
-        // This branch is unreachable when the caller validates first.
         _ => unreachable!("write_array_data called with unvalidated dtype/data combination"),
     }
 }
@@ -675,6 +671,7 @@ fn write_arrayref_entry(
     array_accession: u32,
     dtype: u8,
     array_filter: u8,
+    encoded_len: u32,
 ) {
     write_u64_le(buf, element_offset);
     write_u64_le(buf, element_count);
@@ -682,7 +679,8 @@ fn write_arrayref_entry(
     write_u32_le(buf, array_accession);
     buf.push(dtype);
     buf.push(array_filter);
-    buf.extend_from_slice(&[0u8; 6]);
+    write_u32_le(buf, encoded_len);
+    buf.extend_from_slice(&[0u8; 2]);
 }
 
 struct PackedArraySection {
@@ -738,28 +736,58 @@ fn fill_container<T: HasBinaryDataArrayList>(
                 let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
                 validate_array_dtype(data, dtype)?;
                 let elem_bytes = element_byte_size_for_dtype(dtype);
-                let use_delta = acc == MZ_ARRAY
-                    && dtype == FILE_DTYPE_F64
-                    && matches!(data, ArrayData::F64(_))
-                    && config.compression_is_enabled();
-                let array_filter = if use_delta {
-                    FilterType::DeltaShuffle as u8
+                let dtype_enum = Dtype::from_byte(dtype).unwrap_or(Dtype::F64);
+                let array_packing: &'static dyn Packing = if config.compression_is_enabled() {
+                    packing_for(acc, dtype_enum, data.element_count())
                 } else {
-                    0u8
+                    &crate::ion::packing::raw::RAW
                 };
-                let (block_id, elem_offset) = container.add_item_to_box(
-                    data.element_count() * elem_bytes,
-                    elem_bytes,
-                    |buf| {
-                        if use_delta {
-                            if let ArrayData::F64(slice) = data {
-                                delta_filter::encode_f64(slice, buf);
-                            }
-                        } else {
-                            write_array_data(buf, data, dtype);
+                let array_filter = array_packing.id() as u8;
+                let (block_id, elem_offset, encoded_len) = if array_packing.is_variable_length() {
+                    let mut encoded = Vec::new();
+                    let packing_input = match (data, dtype_enum) {
+                        (ArrayData::F64(s), Dtype::F64) => {
+                            array_packing.encode(PackingInput::F64(s), &mut encoded)?;
+                            None
                         }
-                    },
-                )?;
+                        (ArrayData::F32(s), Dtype::F32) => {
+                            array_packing.encode(PackingInput::F32(s), &mut encoded)?;
+                            None
+                        }
+                        _ => Some(data),
+                    };
+                    if let Some(d) = packing_input {
+                        write_array_data(&mut encoded, d, dtype);
+                    }
+                    let enc_len = u32::try_from(encoded.len())
+                        .map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
+                    let (bid, eoff) = container.add_item_to_box(encoded.len(), 1, |buf| {
+                        buf.extend_from_slice(&encoded);
+                        Ok(())
+                    })?;
+                    (bid, eoff, enc_len)
+                } else {
+                    let (bid, eoff) = container.add_item_to_box(
+                        data.element_count() * elem_bytes,
+                        elem_bytes,
+                        |buf| match array_packing.id() {
+                            PackingId::DeltaShuffle => match data {
+                                ArrayData::F64(slice) => {
+                                    array_packing.encode(PackingInput::F64(slice), buf)
+                                }
+                                _ => {
+                                    write_array_data(buf, data, dtype);
+                                    Ok(())
+                                }
+                            },
+                            _ => {
+                                write_array_data(buf, data, dtype);
+                                Ok(())
+                            }
+                        },
+                    )?;
+                    (bid, eoff, 0u32)
+                };
                 write_arrayref_entry(
                     aref_bytes,
                     elem_offset,
@@ -768,6 +796,7 @@ fn fill_container<T: HasBinaryDataArrayList>(
                     acc,
                     dtype,
                     array_filter,
+                    encoded_len,
                 );
                 aref_cursor += 1;
                 aref_count += 1;
@@ -794,7 +823,7 @@ fn pack_arrays_into_memory<T: HasBinaryDataArrayList>(
         &mut container_bytes,
         config.uncompressed_block_size,
         config.compression_mode(),
-        config.filter_type(),
+        config.block_packing_id(),
     );
     let mut container = if config.parallel {
         builder
@@ -837,7 +866,7 @@ fn pack_arrays_streaming<T: HasBinaryDataArrayList>(
         output,
         config.uncompressed_block_size,
         config.compression_mode(),
-        config.filter_type(),
+        config.block_packing_id(),
     );
     let mut container = if config.parallel {
         builder
@@ -1097,8 +1126,8 @@ mod tests {
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
-        assert_eq!(config.array_filter_id(), ARRAY_FILTER_NONE);
-        assert!(matches!(config.filter_type(), FilterType::None));
+        assert_eq!(config.array_filter_id(), PackingId::Raw as u8);
+        assert!(matches!(config.block_packing_id(), PackingId::Raw));
     }
 
     #[test]
@@ -1112,8 +1141,8 @@ mod tests {
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);
-        assert_eq!(config.array_filter_id(), ARRAY_FILTER_BYTE_SHUFFLE);
-        assert!(matches!(config.filter_type(), FilterType::Shuffle));
+        assert_eq!(config.array_filter_id(), PackingId::ByteShuffle as u8);
+        assert!(matches!(config.block_packing_id(), PackingId::ByteShuffle));
     }
 
     #[test]

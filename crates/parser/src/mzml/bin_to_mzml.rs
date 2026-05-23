@@ -259,8 +259,6 @@ fn write_file_description(
 
     writer.write_event(Event::End(BytesEnd::new("fileContent")))?;
 
-    // XSD requires at least one <sourceFile> child if <sourceFileList> is
-    // present.  Omit the element entirely when the list is empty.
     if !fd.source_file_list.source_file.is_empty() {
         write_source_file_list(writer, &fd.source_file_list)?;
     }
@@ -1536,10 +1534,8 @@ fn write_index_list_offset(writer: &mut Writer<Vec<u8>>, off: u64) -> Result<(),
 }
 
 fn write_file_checksum(writer: &mut Writer<Vec<u8>>) -> Result<(), BinToMzmlError> {
-    // Write the open tag so its bytes are part of the hash input.
     writer.write_event(Event::Start(BytesStart::new("fileChecksum")))?;
 
-    // Hash everything written so far (including "<fileChecksum>").
     let digest = Sha1::digest(writer.get_ref());
     let hex: String = digest.iter().fold(String::with_capacity(40), |mut acc, b| {
         use std::fmt::Write;
