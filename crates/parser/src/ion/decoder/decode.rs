@@ -32,6 +32,7 @@ use crate::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
             container_view::{ContainerAccess, ContainerView, DefaultProcessor},
+            decompression_budget::DecompressionBudget,
             parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
@@ -107,6 +108,7 @@ pub struct DecoderConfig {
     pub max_cached_bytes: usize,
     pub verify_checksums: bool,
     pub parallel: bool,
+    pub decompression_budget: DecompressionBudget,
 }
 
 impl Default for DecoderConfig {
@@ -115,6 +117,7 @@ impl Default for DecoderConfig {
             max_cached_bytes: DEFAULT_MAX_CACHED_BYTES,
             verify_checksums: true,
             parallel: true,
+            decompression_budget: DecompressionBudget::default(),
         }
     }
 }
@@ -127,6 +130,7 @@ pub struct Decoder<'a> {
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
     parallel: bool,
+    decompression_budget: DecompressionBudget,
 }
 
 #[allow(dead_code)]
@@ -207,6 +211,7 @@ impl<'a> Decoder<'a> {
                 "spec",
                 DefaultProcessor,
                 config.max_cached_bytes,
+                config.decompression_budget,
             )?
         };
 
@@ -230,6 +235,7 @@ impl<'a> Decoder<'a> {
                 "chrom",
                 DefaultProcessor,
                 config.max_cached_bytes,
+                config.decompression_budget,
             )?)
         } else {
             None
@@ -243,6 +249,7 @@ impl<'a> Decoder<'a> {
             mz_buf: Vec::new(),
             int_buf: Vec::new(),
             parallel: config.parallel,
+            decompression_budget: config.decompression_budget,
         })
     }
 
@@ -406,6 +413,7 @@ impl<'a> Decoder<'a> {
             self.header.global_meta_string_count,
             self.header.compression_codec,
             self.header.global_meta_uncompressed_bytes,
+            self.decompression_budget,
         )
     }
 
@@ -423,6 +431,7 @@ impl<'a> Decoder<'a> {
             self.header.spec_meta_string_count,
             self.header.compression_codec,
             self.header.spec_meta_uncompressed_bytes as usize,
+            self.decompression_budget,
         )
     }
 
@@ -440,6 +449,7 @@ impl<'a> Decoder<'a> {
             self.header.chrom_meta_string_count,
             self.header.compression_codec,
             self.header.chrom_meta_uncompressed_bytes as usize,
+            self.decompression_budget,
         )
     }
 
@@ -1245,6 +1255,10 @@ fn read_array_refs_at(
     let entry = bytes.get(entry_offset..entry_end)?;
     let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
     let ref_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
+    let max_refs = bytes.len().saturating_sub(aref_base) / ARRAY_REF_BYTES;
+    if ref_count > max_refs {
+        return None;
+    }
     let mut refs = ArrayRefs::with_capacity(ref_count);
     for offset in 0..ref_count {
         let pos = ref_start
@@ -1848,6 +1862,7 @@ mod tests {
             max_cached_bytes: 1024 * 1024,
             verify_checksums: true,
             parallel: true,
+            decompression_budget: DecompressionBudget::default(),
         };
         let d = Decoder::open(BYTES, config).unwrap();
         assert!(d.spectrum_count() > 0);
@@ -1927,5 +1942,367 @@ mod tests {
                 .iter()
                 .any(|b| b.binary.is_some())
         );
+    }
+
+    #[test]
+    fn mixed_normal_and_oversized_spectra_preserve_order_and_data() {
+        use crate::{
+            ion::encoder::encode::{EncodingConfig, WritingMode, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            mzml::structs::{
+                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+                SpectrumList,
+            },
+        };
+        use crate::ion::encoder::encode::Encoder;
+
+        fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: name.to_string(),
+                    value: None,
+                    unit_cv_ref: None,
+                    unit_name: None,
+                    unit_accession: None,
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        fn make_spectrum(id: &str, mz: Vec<f64>, int: Vec<f64>) -> Spectrum {
+            Spectrum {
+                id: id.to_string(),
+                binary_data_array_list: Some(BinaryDataArrayList {
+                    count: Some(2),
+                    binary_data_arrays: vec![
+                        make_bda("MS:1000514", "m/z array", mz),
+                        make_bda("MS:1000515", "intensity array", int),
+                    ],
+                }),
+                ..Default::default()
+            }
+        }
+
+        let small_count_before = 5;
+        let small_count_after = 5;
+        let huge_n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
+
+        let mut expected_spectra: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
+        let mut spectra = Vec::new();
+
+        for i in 0..small_count_before {
+            let mz: Vec<f64> = (0..10).map(|j| 100.0 + i as f64 + j as f64 * 0.1).collect();
+            let int: Vec<f64> = (0..10).map(|j| (i * 10 + j) as f64).collect();
+            let id = format!("small_pre_{i}");
+            spectra.push(make_spectrum(&id, mz.clone(), int.clone()));
+            expected_spectra.push((id, mz, int));
+        }
+
+        let huge_mz: Vec<f64> = (0..huge_n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let huge_int: Vec<f64> = (0..huge_n).map(|i| i as f64 * 10.0).collect();
+        let huge_id = "huge_ms1".to_string();
+        spectra.push(make_spectrum(&huge_id, huge_mz.clone(), huge_int.clone()));
+        expected_spectra.push((huge_id, huge_mz, huge_int));
+
+        for i in 0..small_count_after {
+            let mz: Vec<f64> = (0..10).map(|j| 500.0 + i as f64 + j as f64 * 0.1).collect();
+            let int: Vec<f64> = (0..10).map(|j| (i * 20 + j) as f64).collect();
+            let id = format!("small_post_{i}");
+            spectra.push(make_spectrum(&id, mz.clone(), int.clone()));
+            expected_spectra.push((id, mz, int));
+        }
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        Encoder::new(
+            &mut encoded,
+            EncodingConfig {
+                compression_level: 3,
+                force_f32: false,
+                writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
+            },
+        )
+        .encode(&mzml_in)
+        .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mzml_out = decoder.to_mzml().unwrap();
+        let out_spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+
+        assert_eq!(out_spectra.len(), expected_spectra.len());
+
+        for (out, (expected_id, expected_mz, expected_int)) in
+            out_spectra.iter().zip(expected_spectra.iter())
+        {
+            assert_eq!(&out.id, expected_id);
+            let arrays = out
+                .binary_data_array_list
+                .as_ref()
+                .unwrap()
+                .binary_data_arrays
+                .as_slice();
+            let mz_out = arrays
+                .iter()
+                .find(|a| {
+                    a.cv_params
+                        .iter()
+                        .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+                })
+                .and_then(|a| a.binary.as_ref())
+                .unwrap();
+            let int_out = arrays
+                .iter()
+                .find(|a| {
+                    a.cv_params
+                        .iter()
+                        .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+                })
+                .and_then(|a| a.binary.as_ref())
+                .unwrap();
+            let BinaryData::F64(mz_vec) = mz_out else {
+                panic!("expected F64 mz array for {expected_id}");
+            };
+            let BinaryData::F64(int_vec) = int_out else {
+                panic!("expected F64 intensity array for {expected_id}");
+            };
+            assert_eq!(mz_vec, expected_mz, "mz mismatch for {expected_id}");
+            assert_eq!(int_vec, expected_int, "intensity mismatch for {expected_id}");
+        }
+    }
+
+    #[test]
+    fn oversized_array_roundtrips_with_compression_and_parallel() {
+        use crate::{
+            ion::encoder::encode::{EncodingConfig, WritingMode, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            mzml::structs::{
+                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+                SpectrumList,
+            },
+        };
+        use crate::ion::encoder::encode::Encoder;
+
+        let n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
+        let mz_data: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int_data: Vec<f64> = (0..n).map(|i| i as f64 * 10.0).collect();
+
+        fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: name.to_string(),
+                    value: None,
+                    unit_cv_ref: None,
+                    unit_name: None,
+                    unit_accession: None,
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        let spectrum = Spectrum {
+            id: "scan=1".to_string(),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![
+                    make_bda("MS:1000514", "m/z array", mz_data.clone()),
+                    make_bda("MS:1000515", "intensity array", int_data.clone()),
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        Encoder::new(
+            &mut encoded,
+            EncodingConfig {
+                compression_level: 3,
+                force_f32: false,
+                writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
+            },
+        )
+        .encode(&mzml_in)
+        .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mzml_out = decoder.to_mzml().unwrap();
+
+        let spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+        let arrays = spectra[0]
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays
+            .as_slice();
+
+        let mz_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+        let int_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+
+        let BinaryData::F64(mz_vec) = mz_out else {
+            panic!("expected F64 mz array");
+        };
+        let BinaryData::F64(int_vec) = int_out else {
+            panic!("expected F64 intensity array");
+        };
+
+        assert_eq!(mz_vec.len(), n);
+        assert_eq!(int_vec.len(), n);
+        assert_eq!(mz_vec, &mz_data);
+        assert_eq!(int_vec, &int_data);
+    }
+
+    #[test]
+    fn oversized_array_roundtrips_through_encode_decode() {
+        use crate::{
+            ion::encoder::encode::{EncodingConfig, WritingMode, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            mzml::structs::{
+                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+                SpectrumList,
+            },
+        };
+        use crate::ion::encoder::encode::Encoder;
+
+        let n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
+        let mz_data: Vec<f64> = (0..n).map(|i| i as f64 * 0.001).collect();
+        let int_data: Vec<f64> = (0..n).map(|i| i as f64 * 10.0).collect();
+
+        fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: name.to_string(),
+                    value: None,
+                    unit_cv_ref: None,
+                    unit_name: None,
+                    unit_accession: None,
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        let spectrum = Spectrum {
+            id: "scan=1".to_string(),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![
+                    make_bda("MS:1000514", "m/z array", mz_data.clone()),
+                    make_bda("MS:1000515", "intensity array", int_data.clone()),
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        Encoder::new(
+            &mut encoded,
+            EncodingConfig {
+                compression_level: 0,
+                force_f32: false,
+                writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: false,
+            },
+        )
+        .encode(&mzml_in)
+        .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mzml_out = decoder.to_mzml().unwrap();
+
+        let spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+        let arrays = spectra[0]
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays
+            .as_slice();
+
+        let mz_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+        let int_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+
+        let BinaryData::F64(mz_vec) = mz_out else {
+            panic!("expected F64 mz array");
+        };
+        let BinaryData::F64(int_vec) = int_out else {
+            panic!("expected F64 intensity array");
+        };
+
+        assert_eq!(mz_vec.len(), n);
+        assert_eq!(int_vec.len(), n);
+        assert_eq!(mz_vec, &mz_data);
+        assert_eq!(int_vec, &int_data);
     }
 }

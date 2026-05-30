@@ -43,6 +43,7 @@ pub(crate) use parse_cv_list::parse_cv_list;
 pub(crate) mod children_lookup;
 pub(crate) mod container_view;
 pub(crate) mod cv_table;
+pub(crate) mod decompression_budget;
 pub(crate) mod spectrum_source;
 
 #[cfg(test)]

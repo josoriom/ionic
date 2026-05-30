@@ -1,8 +1,13 @@
 use std::{fs, path::PathBuf};
 
-use crate::ion::decoder::decode::Metadatum;
-use crate::ion::utilities::children_lookup::{ChildrenLookup, DefaultMetadataPolicy};
-use crate::ion::utilities::{parse_chromatogram_list, parse_header, parse_metadata};
+use crate::ion::{
+    DecompressionBudget,
+    decoder::decode::Metadatum,
+    utilities::{
+        children_lookup::{ChildrenLookup, DefaultMetadataPolicy},
+        parse_chromatogram_list, parse_header, parse_metadata,
+    },
+};
 use crate::mzml::structs::{ChromatogramList, CvParam};
 
 const PATH: &str = "data/ion/test.ion";
@@ -53,7 +58,14 @@ fn parse_metadata_section_from_test_file(
     };
 
     let meta = parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
+        slice,
+        item_count,
+        meta_count,
+        num_count,
+        str_count,
+        codec_id,
+        expected,
+        DecompressionBudget::default(),
     )
     .expect("parse_metadata failed");
 

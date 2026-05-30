@@ -157,6 +157,7 @@ impl BlockDirectory {
 struct ActiveBlock {
     block_id: u32,
     accumulated_data: Vec<u8>,
+    is_dedicated: bool,
 }
 
 struct StrideSlots([Option<ActiveBlock>; 4]);
@@ -219,6 +220,7 @@ impl BlockStore {
                 ActiveBlock {
                     block_id,
                     accumulated_data: Vec::with_capacity(capacity_hint),
+                    is_dedicated: false,
                 },
             );
         }
@@ -247,6 +249,7 @@ impl BlockStore {
             ActiveBlock {
                 block_id,
                 accumulated_data: Vec::with_capacity(capacity),
+                is_dedicated: true,
             },
         );
         block_id
@@ -273,6 +276,7 @@ struct PendingBlock {
     block_id: u32,
     stride: Stride,
     data: Vec<u8>,
+    is_dedicated: bool,
 }
 
 struct ReadyBlock {
@@ -280,6 +284,38 @@ struct ReadyBlock {
     bytes: Vec<u8>,
     raw_len: u64,
     checksum: u32,
+}
+
+fn merge_sorted_by_block_id(left: Vec<ReadyBlock>, right: Vec<ReadyBlock>) -> Vec<ReadyBlock> {
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let mut left_iter = left.into_iter();
+    let mut right_iter = right.into_iter();
+    let mut left_head = left_iter.next();
+    let mut right_head = right_iter.next();
+    loop {
+        match (&left_head, &right_head) {
+            (Some(l), Some(r)) => {
+                if l.block_id <= r.block_id {
+                    out.push(left_head.take().unwrap());
+                    left_head = left_iter.next();
+                } else {
+                    out.push(right_head.take().unwrap());
+                    right_head = right_iter.next();
+                }
+            }
+            (Some(_), None) => {
+                out.push(left_head.take().unwrap());
+                out.extend(left_iter);
+                return out;
+            }
+            (None, Some(_)) => {
+                out.push(right_head.take().unwrap());
+                out.extend(right_iter);
+                return out;
+            }
+            (None, None) => return out,
+        }
+    }
 }
 
 pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
@@ -388,6 +424,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
             block_id: active_block.block_id,
             stride,
             data: active_block.accumulated_data,
+            is_dedicated: active_block.is_dedicated,
         });
         Ok(())
     }
@@ -491,22 +528,28 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
             self.seal_open_block_for_stride(stride)?;
         }
 
-        let blocks = std::mem::take(&mut self.pending);
+        let all_pending = std::mem::take(&mut self.pending);
+        let (dedicated, shared): (Vec<_>, Vec<_>) =
+            all_pending.into_iter().partition(|b| b.is_dedicated);
+
+        let dedicated_ready = self.finish_seq(dedicated)?;
 
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-        let blocks = {
+        let shared_ready = {
             let par_min_blocks = self.par_min_blocks;
-            if blocks.len() < par_min_blocks {
-                self.finish_seq(blocks)?
+            if shared.len() < par_min_blocks {
+                self.finish_seq(shared)?
             } else {
-                self.finish_par(blocks)?
+                self.finish_par(shared)?
             }
         };
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-        let blocks = self.finish_seq(blocks)?;
+        let shared_ready = self.finish_seq(shared)?;
+
+        let ready = merge_sorted_by_block_id(dedicated_ready, shared_ready);
 
         let mut payload_bytes = 0u64;
-        for block in blocks {
+        for block in ready {
             self.output.write_bytes(&block.bytes)?;
             self.store.seal(
                 block.block_id,
@@ -622,6 +665,7 @@ mod tests {
             ActiveBlock {
                 block_id: 7,
                 accumulated_data: vec![1, 2, 3, 4],
+                is_dedicated: false,
             },
         );
         assert!(slots.is_open(Stride::FourBytes));
@@ -640,6 +684,7 @@ mod tests {
             ActiveBlock {
                 block_id: 0,
                 accumulated_data: vec![0u8; 12],
+                is_dedicated: false,
             },
         );
         assert_eq!(slots.byte_len(Stride::FourBytes), 12);
@@ -930,6 +975,155 @@ mod tests {
         assert_eq!(block_count, 0);
         assert_eq!(total_bytes, 0);
         assert!(output.0.is_empty());
+    }
+
+    fn ready_block(block_id: u32) -> ReadyBlock {
+        ReadyBlock {
+            block_id,
+            bytes: vec![block_id as u8],
+            raw_len: 1,
+            checksum: 0,
+        }
+    }
+
+    #[test]
+    fn merge_sorted_by_block_id_interleaves_correctly() {
+        let left = vec![ready_block(0), ready_block(3), ready_block(5)];
+        let right = vec![ready_block(1), ready_block(2), ready_block(4)];
+        let merged = merge_sorted_by_block_id(left, right);
+        let ids: Vec<u32> = merged.iter().map(|b| b.block_id).collect();
+        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn merge_sorted_by_block_id_handles_empty_inputs() {
+        let only_left = vec![ready_block(0), ready_block(1)];
+        let merged = merge_sorted_by_block_id(only_left, Vec::new());
+        let ids: Vec<u32> = merged.iter().map(|b| b.block_id).collect();
+        assert_eq!(ids, vec![0, 1]);
+
+        let only_right = vec![ready_block(0), ready_block(1)];
+        let merged = merge_sorted_by_block_id(Vec::new(), only_right);
+        let ids: Vec<u32> = merged.iter().map(|b| b.block_id).collect();
+        assert_eq!(ids, vec![0, 1]);
+
+        let merged = merge_sorted_by_block_id(Vec::new(), Vec::new());
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn oversized_item_gets_dedicated_block() {
+        let max_block_size = 16usize;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            max_block_size,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        let (block_id, element_offset) = builder
+            .add_item_to_box(64, 8, |buf| {
+                buf.extend_from_slice(&[0xABu8; 64]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(element_offset, 0);
+        let (block_count, _) = builder.finish().unwrap();
+        assert_eq!(block_count, 1);
+        assert_eq!(block_id, 0);
+        assert!(output.0.starts_with(&[0xABu8; 64]));
+    }
+
+    #[test]
+    fn oversized_item_between_normal_items_produces_three_blocks() {
+        let max_block_size = 16usize;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            max_block_size,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        let (bid_before, _) = builder
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0x01u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        let (bid_oversized, off_oversized) = builder
+            .add_item_to_box(64, 8, |buf| {
+                buf.extend_from_slice(&[0x02u8; 64]);
+                Ok(())
+            })
+            .unwrap();
+        let (bid_after, _) = builder
+            .add_item_to_box(8, 8, |buf| {
+                buf.extend_from_slice(&[0x03u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(off_oversized, 0);
+        assert_ne!(bid_before, bid_oversized);
+        assert_ne!(bid_oversized, bid_after);
+        let (block_count, _) = builder.finish().unwrap();
+        assert_eq!(block_count, 3);
+    }
+
+    #[test]
+    fn two_consecutive_oversized_items_get_separate_dedicated_blocks() {
+        let max_block_size = 16usize;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            max_block_size,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        let (bid_a, off_a) = builder
+            .add_item_to_box(64, 8, |buf| {
+                buf.extend_from_slice(&[0x11u8; 64]);
+                Ok(())
+            })
+            .unwrap();
+        let (bid_b, off_b) = builder
+            .add_item_to_box(64, 8, |buf| {
+                buf.extend_from_slice(&[0x22u8; 64]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(off_a, 0);
+        assert_eq!(off_b, 0);
+        assert_ne!(bid_a, bid_b);
+        let (block_count, _) = builder.finish().unwrap();
+        assert_eq!(block_count, 2);
+    }
+
+    #[test]
+    fn oversized_item_directory_entry_records_actual_uncompressed_size() {
+        let max_block_size = 16usize;
+        let item_size = 128usize;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            max_block_size,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder
+            .add_item_to_box(item_size, 8, |buf| {
+                buf.extend_from_slice(&[0xFFu8; 128]);
+                Ok(())
+            })
+            .unwrap();
+        let (block_count, _total_bytes) = builder.finish().unwrap();
+        assert_eq!(block_count, 1);
+        let directory_start = output.0.len() - BLOCK_DIRECTORY_ENTRY_SIZE;
+        let uncomp_bytes = u64::from_le_bytes(
+            output.0[directory_start + 16..directory_start + 24]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(uncomp_bytes, item_size as u64);
     }
 
     #[test]

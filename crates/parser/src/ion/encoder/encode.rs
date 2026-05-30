@@ -20,6 +20,7 @@ use crate::{
         IonError, IonResult,
         encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor},
         filter_summary::{ChromatogramSummary, SpectrumSummary},
+        packing::raw::RAW as RAW_PACKING,
         packing::{Dtype, Packing, PackingId, PackingInput, packing_for},
         utilities::spectrum_source::summary_from_spectrum,
     },
@@ -708,6 +709,105 @@ impl HasBinaryDataArrayList for Chromatogram {
     }
 }
 
+struct EncodedArrayRef {
+    element_offset: u64,
+    element_count: u64,
+    block_id: u32,
+    accession: u32,
+    dtype: u8,
+    array_filter: u8,
+    encoded_len: u32,
+}
+
+fn encode_variable_length_array(
+    data: ArrayData<'_>,
+    dtype: u8,
+    dtype_enum: Dtype,
+    packing: &'static dyn Packing,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+) -> IonResult<(u32, u64, u32)> {
+    let mut encoded = Vec::new();
+    match (data, dtype_enum) {
+        (ArrayData::F64(s), Dtype::F64) => packing.encode(PackingInput::F64(s), &mut encoded)?,
+        (ArrayData::F32(s), Dtype::F32) => packing.encode(PackingInput::F32(s), &mut encoded)?,
+        _ => write_array_data(&mut encoded, data, dtype),
+    }
+    let enc_len =
+        u32::try_from(encoded.len()).map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
+    let (bid, eoff) = container.add_item_to_box(encoded.len(), 1, |buf| {
+        buf.extend_from_slice(&encoded);
+        Ok(())
+    })?;
+    Ok((bid, eoff, enc_len))
+}
+
+fn encode_fixed_length_array(
+    data: ArrayData<'_>,
+    dtype: u8,
+    dtype_enum: Dtype,
+    elem_bytes: usize,
+    packing: &'static dyn Packing,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+) -> IonResult<(u32, u64, u32)> {
+    let (bid, eoff) =
+        container.add_item_to_box(data.element_count() * elem_bytes, elem_bytes, |buf| {
+            match packing.id() {
+                PackingId::DeltaShuffle => match (data, dtype_enum) {
+                    (ArrayData::F64(slice), Dtype::F64) => {
+                        packing.encode(PackingInput::F64(slice), buf)
+                    }
+                    _ => {
+                        write_array_data(buf, data, dtype);
+                        Ok(())
+                    }
+                },
+                _ => {
+                    write_array_data(buf, data, dtype);
+                    Ok(())
+                }
+            }
+        })?;
+    Ok((bid, eoff, 0u32))
+}
+
+fn encode_single_array(
+    bda: &BinaryDataArray,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+) -> IonResult<Option<EncodedArrayRef>> {
+    let Some(data) = array_data_from_binary_data_array(bda) else {
+        return Ok(None);
+    };
+    if data.is_empty() {
+        return Ok(None);
+    }
+    let accession = array_type_accession_from_binary_data_array(bda);
+    let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(accession));
+    validate_array_dtype(data, dtype)?;
+    let elem_bytes = element_byte_size_for_dtype(dtype);
+    let dtype_enum = Dtype::from_byte(dtype).unwrap_or(Dtype::F64);
+    let packing: &'static dyn Packing = if config.compression_is_enabled() {
+        packing_for(accession, dtype_enum, data.element_count())
+    } else {
+        &RAW_PACKING
+    };
+    let (block_id, element_offset, encoded_len) = if packing.is_variable_length() {
+        encode_variable_length_array(data, dtype, dtype_enum, packing, container)?
+    } else {
+        encode_fixed_length_array(data, dtype, dtype_enum, elem_bytes, packing, container)?
+    };
+    Ok(Some(EncodedArrayRef {
+        element_offset,
+        element_count: data.element_count() as u64,
+        block_id,
+        accession,
+        dtype,
+        array_filter: packing.id() as u8,
+        encoded_len,
+    }))
+}
+
 fn fill_container<T: HasBinaryDataArrayList>(
     items: &[T],
     config: EncodingConfig,
@@ -723,80 +823,21 @@ fn fill_container<T: HasBinaryDataArrayList>(
         let mut aref_count: u64 = 0;
         if let Some(list) = item.binary_data_array_list() {
             for bda in &list.binary_data_arrays {
-                let Some(data) = array_data_from_binary_data_array(bda) else {
+                let Some(aref) = encode_single_array(bda, config, policy, container)? else {
                     continue;
                 };
-                if data.is_empty() {
-                    continue;
+                if aref.accession != 0 && !seen_types.contains(&aref.accession) {
+                    seen_types.push(aref.accession);
                 }
-                let acc = array_type_accession_from_binary_data_array(bda);
-                if acc != 0 && !seen_types.contains(&acc) {
-                    seen_types.push(acc);
-                }
-                let dtype = resolve_array_dtype(bda, data, policy.should_force_f32(acc));
-                validate_array_dtype(data, dtype)?;
-                let elem_bytes = element_byte_size_for_dtype(dtype);
-                let dtype_enum = Dtype::from_byte(dtype).unwrap_or(Dtype::F64);
-                let array_packing: &'static dyn Packing = if config.compression_is_enabled() {
-                    packing_for(acc, dtype_enum, data.element_count())
-                } else {
-                    &crate::ion::packing::raw::RAW
-                };
-                let array_filter = array_packing.id() as u8;
-                let (block_id, elem_offset, encoded_len) = if array_packing.is_variable_length() {
-                    let mut encoded = Vec::new();
-                    let packing_input = match (data, dtype_enum) {
-                        (ArrayData::F64(s), Dtype::F64) => {
-                            array_packing.encode(PackingInput::F64(s), &mut encoded)?;
-                            None
-                        }
-                        (ArrayData::F32(s), Dtype::F32) => {
-                            array_packing.encode(PackingInput::F32(s), &mut encoded)?;
-                            None
-                        }
-                        _ => Some(data),
-                    };
-                    if let Some(d) = packing_input {
-                        write_array_data(&mut encoded, d, dtype);
-                    }
-                    let enc_len = u32::try_from(encoded.len())
-                        .map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
-                    let (bid, eoff) = container.add_item_to_box(encoded.len(), 1, |buf| {
-                        buf.extend_from_slice(&encoded);
-                        Ok(())
-                    })?;
-                    (bid, eoff, enc_len)
-                } else {
-                    let (bid, eoff) = container.add_item_to_box(
-                        data.element_count() * elem_bytes,
-                        elem_bytes,
-                        |buf| match array_packing.id() {
-                            PackingId::DeltaShuffle => match data {
-                                ArrayData::F64(slice) => {
-                                    array_packing.encode(PackingInput::F64(slice), buf)
-                                }
-                                _ => {
-                                    write_array_data(buf, data, dtype);
-                                    Ok(())
-                                }
-                            },
-                            _ => {
-                                write_array_data(buf, data, dtype);
-                                Ok(())
-                            }
-                        },
-                    )?;
-                    (bid, eoff, 0u32)
-                };
                 write_arrayref_entry(
                     aref_bytes,
-                    elem_offset,
-                    data.element_count() as u64,
-                    block_id,
-                    acc,
-                    dtype,
-                    array_filter,
-                    encoded_len,
+                    aref.element_offset,
+                    aref.element_count,
+                    aref.block_id,
+                    aref.accession,
+                    aref.dtype,
+                    aref.array_filter,
+                    aref.encoded_len,
                 );
                 aref_cursor += 1;
                 aref_count += 1;

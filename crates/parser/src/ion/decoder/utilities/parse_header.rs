@@ -2,6 +2,7 @@ use crate::ion::IonResult;
 
 const HEADER_SIZE: usize = 1024;
 const RESERVED_EXT_SIZE: usize = 656;
+const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
 
 pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
     if bytes.len() < HEADER_SIZE {
@@ -421,20 +422,28 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         ));
     }
 
-    if h.spec_block_count * 32 > h.len_spec_container {
-        failures.push(format!(
-            "condition 5: spec_block_count × 32 ({}) > len_spec_container ({})",
-            h.spec_block_count * 32,
+    match h.spec_block_count.checked_mul(BLOCK_DIRECTORY_ENTRY_SIZE_U64) {
+        None => failures.push(format!(
+            "condition 5: spec_block_count ({}) × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} overflows u64",
+            h.spec_block_count
+        )),
+        Some(directory_bytes) if directory_bytes > h.len_spec_container => failures.push(format!(
+            "condition 5: spec_block_count × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} ({directory_bytes}) > len_spec_container ({})",
             h.len_spec_container
-        ));
+        )),
+        _ => {}
     }
 
-    if h.chrom_block_count * 32 > h.len_chrom_container {
-        failures.push(format!(
-            "condition 6: chrom_block_count × 32 ({}) > len_chrom_container ({})",
-            h.chrom_block_count * 32,
+    match h.chrom_block_count.checked_mul(BLOCK_DIRECTORY_ENTRY_SIZE_U64) {
+        None => failures.push(format!(
+            "condition 6: chrom_block_count ({}) × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} overflows u64",
+            h.chrom_block_count
+        )),
+        Some(directory_bytes) if directory_bytes > h.len_chrom_container => failures.push(format!(
+            "condition 6: chrom_block_count × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} ({directory_bytes}) > len_chrom_container ({})",
             h.len_chrom_container
-        ));
+        )),
+        _ => {}
     }
 
     let trailer_start = h.total_file_size.saturating_sub(8);
@@ -483,12 +492,15 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
     for i in 1..sorted.len() {
         let (prev_name, prev_off, prev_len) = sorted[i - 1];
         let (curr_name, curr_off, _) = sorted[i];
-        if prev_off + prev_len > curr_off {
-            failures.push(format!(
+        match prev_off.checked_add(prev_len) {
+            None => failures.push(format!(
+                "condition 8: section {prev_name} offset+length overflows u64"
+            )),
+            Some(prev_end) if prev_end > curr_off => failures.push(format!(
                 "condition 8: sections {prev_name} and {curr_name} overlap \
-                 ({prev_name} ends at {}, {curr_name} starts at {curr_off})",
-                prev_off + prev_len
-            ));
+                 ({prev_name} ends at {prev_end}, {curr_name} starts at {curr_off})"
+            )),
+            _ => {}
         }
     }
 
@@ -523,7 +535,7 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
             h.global_meta_crc32,
         ),
     ] {
-        match bytes.get(off as usize..(off + len) as usize) {
+        match resolve_section(bytes, off, len) {
             None => failures.push(format!("condition {cond}: {name} section out of bounds")),
             Some(section) => {
                 let computed = crc32fast::hash(section);
@@ -537,6 +549,42 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         }
     }
 
+    enforce_count_bounds(&mut failures, h, file_len);
+
     let passed = failures.is_empty();
     (passed, failures)
+}
+
+#[inline]
+fn resolve_section(bytes: &[u8], off: u64, len: u64) -> Option<&[u8]> {
+    let start = usize::try_from(off).ok()?;
+    let end = usize::try_from(off.checked_add(len)?).ok()?;
+    bytes.get(start..end)
+}
+
+fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, file_len: u64) {
+    let checks: &[(&str, u64)] = &[
+        ("spec_block_count", h.spec_block_count),
+        ("chrom_block_count", h.chrom_block_count),
+        ("spectrum_count", h.spectrum_count),
+        ("chrom_count", h.chrom_count),
+        ("spec_meta_count", h.spec_meta_count),
+        ("spec_meta_numeric_count", h.spec_meta_numeric_count),
+        ("spec_meta_string_count", h.spec_meta_string_count),
+        ("chrom_meta_count", h.chrom_meta_count),
+        ("chrom_meta_numeric_count", h.chrom_meta_numeric_count),
+        ("chrom_meta_string_count", h.chrom_meta_string_count),
+        ("global_meta_count", h.global_meta_count),
+        ("global_meta_numeric_count", h.global_meta_numeric_count),
+        ("global_meta_string_count", h.global_meta_string_count),
+        ("spec_array_type_count", h.spec_array_type_count),
+        ("chrom_array_type_count", h.chrom_array_type_count),
+    ];
+    for &(name, count) in checks {
+        if count > file_len {
+            failures.push(format!(
+                "condition 13: {name} ({count}) exceeds file size ({file_len})"
+            ));
+        }
+    }
 }

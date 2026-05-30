@@ -4,6 +4,9 @@ pub(crate) mod packing;
 pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
 pub mod decoder;
 pub use decoder::decode::{Decoder, DecoderConfig, Ion, OwnedIon};
+pub use decoder::utilities::decompression_budget::{
+    DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionBudget,
+};
 pub(crate) use decoder::utilities;
 pub mod encoder;
 pub use encoder::{encode::WritingMode, encode::encode, utilities::FileEncoderOutput};
