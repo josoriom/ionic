@@ -1,11 +1,15 @@
 use std::{fs, path::PathBuf};
 
-use crate::ion::utilities::children_lookup::{ChildrenLookup, OwnerRows};
-use crate::mzml::schema::TagId;
-use crate::mzml::structs::CvParam;
 use crate::{
-    ion::decoder::decode::Metadatum,
-    ion::utilities::{parse_header, parse_metadata, parse_precursor_list},
+    ion::{
+        DecompressionBudget,
+        decoder::decode::Metadatum,
+        utilities::{
+            children_lookup::{ChildrenLookup, OwnerRows},
+            parse_header, parse_metadata, parse_precursor_list,
+        },
+    },
+    mzml::{schema::TagId, structs::CvParam},
 };
 
 const PATH: &str = "data/ion/test.ion";
@@ -56,7 +60,14 @@ fn parse_metadata_section_from_test_file(
     };
 
     let meta = parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
+        slice,
+        item_count,
+        meta_count,
+        num_count,
+        str_count,
+        codec_id,
+        expected,
+        DecompressionBudget::default(),
     )
     .expect("parse_metadata failed");
 

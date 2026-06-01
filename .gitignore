@@ -1,11 +1,10 @@
 target/
 .DS_Store
 .config/
-.opencode/
 checks/
-docs/
-inputs/
-pwiz/
 scripts/
 tmp/
 workplan.md
+target-linux-amd64
+target-linux-arm64
+target-windows-amd64

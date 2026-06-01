@@ -1,8 +1,9 @@
 use crate::{
     decoder::{
         decode::{Metadatum, MetadatumValue},
-        utilities::common::{
-            decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes,
+        utilities::{
+            common::{decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes},
+            decompression_budget::DecompressionBudget,
         },
     },
     ion::{IonResult, attr_meta::format_accession, utilities::common::*},
@@ -20,25 +21,34 @@ pub(crate) fn parse_metadata(
     str_count: u64,
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
+    decompression_budget: DecompressionBudget,
 ) -> IonResult<Vec<Metadatum>> {
     let owned;
     let bytes = match compression_codec {
         HDR_CODEC_NONE => bytes,
         HDR_CODEC_ZSTD => {
-            owned = decompress_zstd_allow_aligned_padding(bytes, expected_uncompressed_bytes)?;
+            owned = decompress_zstd_allow_aligned_padding(
+                bytes,
+                expected_uncompressed_bytes,
+                decompression_budget,
+            )?;
             owned.as_slice()
         }
         other => return Err(format!("unsupported compression_codec={other}").into()),
     };
 
-    let item_count = item_count as usize;
-    let meta_count = meta_count as usize;
-    let num_count = num_count as usize;
-    let str_count = str_count as usize;
+    let byte_budget = bytes.len();
+    let item_count = bound_count(item_count, byte_budget, "metadata item_count")?;
+    let meta_count = bound_count(meta_count, byte_budget, "metadata meta_count")?;
+    let num_count = bound_count(num_count, byte_budget, "metadata num_count")?;
+    let str_count = bound_count(str_count, byte_budget, "metadata str_count")?;
 
     let mut pos = 0usize;
 
-    let children_index = read_u32_vec(bytes, &mut pos, item_count + 1)?;
+    let children_index_len = item_count
+        .checked_add(1)
+        .ok_or_else(|| crate::ion::IonError::from("metadata item_count+1 overflows usize"))?;
+    let children_index = read_u32_vec(bytes, &mut pos, children_index_len)?;
     let metadatum_owner_ids = read_u32_vec(bytes, &mut pos, meta_count)?;
     let metadatum_parent_ids = read_u32_vec(bytes, &mut pos, meta_count)?;
     let metadatum_tag_ids = take(bytes, &mut pos, meta_count, "metadatum tag id")?;
@@ -191,4 +201,14 @@ fn parse_value(
         2 => Ok(MetadatumValue::Empty),
         other => Err(format!("invalid value kind VK={other}").into()),
     }
+}
+
+#[inline]
+fn bound_count(count: u64, byte_budget: usize, ctx: &'static str) -> IonResult<usize> {
+    if count > byte_budget as u64 {
+        return Err(
+            format!("{ctx}: declared count {count} exceeds byte budget {byte_budget}").into(),
+        );
+    }
+    Ok(count as usize)
 }

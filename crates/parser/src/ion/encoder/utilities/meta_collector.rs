@@ -1762,7 +1762,8 @@ mod tests {
             y_array_accession: INTENSITY_ARRAY,
             force_f32: false,
         };
-        let meta = collector.collect_item_list_meta::<Spectrum, SpectrumList>(spectra, 0, None, policy);
+        let meta =
+            collector.collect_item_list_meta::<Spectrum, SpectrumList>(spectra, 0, None, policy);
         assert_eq!(meta.index_offsets, vec![0]);
         assert!(meta.ids.is_empty());
     }

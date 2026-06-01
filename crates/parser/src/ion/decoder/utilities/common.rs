@@ -3,7 +3,10 @@ use std::mem::MaybeUninit;
 use zstd::zstd_safe;
 
 use crate::{
-    decoder::decode::{Metadatum, MetadatumValue},
+    decoder::{
+        decode::{Metadatum, MetadatumValue},
+        utilities::decompression_budget::DecompressionBudget,
+    },
     ion::{
         IonError, IonResult,
         attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
@@ -63,7 +66,10 @@ pub(crate) fn read_u64_le_at(bytes: &[u8], pos: &mut usize, field: &'static str)
 
 #[inline]
 pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult<Vec<u32>> {
-    let raw = take(bytes, pos, n * 4, "u32 vector")?;
+    let byte_len = n
+        .checked_mul(4)
+        .ok_or_else(|| IonError::from("u32 vector length overflows usize"))?;
+    let raw = take(bytes, pos, byte_len, "u32 vector")?;
     let mut out = Vec::with_capacity(n);
     for chunk in raw.chunks_exact(4) {
         out.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
@@ -73,7 +79,10 @@ pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult
 
 #[inline]
 pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult<Vec<f64>> {
-    let raw = take(bytes, pos, n * 8, "f64 vector")?;
+    let byte_len = n
+        .checked_mul(8)
+        .ok_or_else(|| IonError::from("f64 vector length overflows usize"))?;
+    let raw = take(bytes, pos, byte_len, "f64 vector")?;
     let mut out = Vec::with_capacity(n);
     for chunk in raw.chunks_exact(8) {
         out.push(f64::from_le_bytes(chunk.try_into().unwrap()));
@@ -82,10 +91,16 @@ pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult
 }
 
 #[inline]
-pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> IonResult<Vec<u8>> {
+pub(crate) fn decompress_zstd(
+    comp: &[u8],
+    expected: usize,
+    budget: DecompressionBudget,
+) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
     }
+
+    budget.validate(comp.len(), expected)?;
 
     let mut out: Vec<u8> = Vec::with_capacity(expected);
 
@@ -113,6 +128,7 @@ pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> IonResult<Vec<u8>
 pub(crate) fn decompress_zstd_allow_aligned_padding(
     input: &[u8],
     expected: usize,
+    budget: DecompressionBudget,
 ) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
@@ -121,12 +137,12 @@ pub(crate) fn decompress_zstd_allow_aligned_padding(
     if let Ok(n) = zstd::zstd_safe::find_frame_compressed_size(input)
         && n > 0
         && n <= input.len()
-        && let Ok(v) = decompress_zstd(&input[..n], expected)
+        && let Ok(v) = decompress_zstd(&input[..n], expected, budget)
     {
         return Ok(v);
     }
 
-    match decompress_zstd(input, expected) {
+    match decompress_zstd(input, expected, budget) {
         Ok(v) => Ok(v),
         Err(first_err) => {
             let mut trimmed = input;
@@ -136,7 +152,7 @@ pub(crate) fn decompress_zstd_allow_aligned_padding(
                     break;
                 }
                 trimmed = &trimmed[..trimmed.len() - 1];
-                if let Ok(v) = decompress_zstd(trimmed, expected) {
+                if let Ok(v) = decompress_zstd(trimmed, expected, budget) {
                     return Ok(v);
                 }
             }

@@ -1,0 +1,9 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+serde_json = { workspace = true }
+regex = { workspace = true }

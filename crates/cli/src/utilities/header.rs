@@ -1,7 +1,10 @@
 use std::{fs, path::Path};
 
-const HEADER_SIZE: usize = 1024;
-const TRAILER: &[u8; 8] = b"END\0\0\0\0\0";
+use ionic::ion::{
+    format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, is_supported},
+    get_version_from_header,
+};
+
 const RESET: &str = "\x1b[0m";
 const GREEN: &str = "\x1b[1;32m";
 const RED: &str = "\x1b[1;31m";
@@ -60,9 +63,6 @@ impl<'a> HeaderView<'a> {
         }
     }
 
-    fn h_u16(&self, off: usize) -> u16 {
-        u16_at(self.header, off)
-    }
     fn h_u32(&self, off: usize) -> u32 {
         u32_at(self.header, off)
     }
@@ -71,7 +71,7 @@ impl<'a> HeaderView<'a> {
     }
 
     fn signature_ok(&self) -> bool {
-        &self.header[0..8] == b"START\0\0\0"
+        self.header[0..FILE_SIGNATURE.len()] == FILE_SIGNATURE
     }
 
     fn header_crc_ok(&self) -> bool {
@@ -79,7 +79,7 @@ impl<'a> HeaderView<'a> {
     }
 
     fn trailer_ok(&self) -> bool {
-        self.bytes.ends_with(TRAILER)
+        self.bytes.ends_with(&FILE_TRAILER)
     }
 
     fn file_size_ok(&self) -> bool {
@@ -183,7 +183,11 @@ fn print_summary(view: &HeaderView<'_>) {
         &format!("\"{sig}\""),
         Some(view.signature_ok()),
     );
-    field("format_version", &view.h_u16(9).to_string(), None);
+    let (version_text, version_ok) = match get_version_from_header(view.bytes) {
+        Some(v) => (v.to_string(), Some(is_supported(v))),
+        None => ("?".to_string(), Some(false)),
+    };
+    field("format_version", &version_text, version_ok);
     let codec = match view.header[11] {
         0 => "none",
         1 => "zstd",
@@ -255,8 +259,8 @@ fn print_integrity(view: &HeaderView<'_>) {
         ("12  global_meta CRC-32", view.crc_ok(152, 160, 1016)),
     ];
     for (label, ok) in checks {
-        let (color, mark) = if *ok { (GREEN, "PASS") } else { (RED, "FAIL") };
-        println!("  {color}[{mark}]{RESET}  {label}");
+        let (color, mark) = if *ok { (GREEN, "✓") } else { (RED, "✗") };
+        println!("  {color}{mark}{RESET}  {label}");
     }
     let passed = checks.iter().filter(|(_, ok)| *ok).count();
     println!();
@@ -289,12 +293,6 @@ fn bytes_text(bytes: &[u8]) -> String {
         }
     }
     text
-}
-
-fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    let mut out = [0; 2];
-    out.copy_from_slice(&bytes[offset..offset + 2]);
-    u16::from_le_bytes(out)
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {

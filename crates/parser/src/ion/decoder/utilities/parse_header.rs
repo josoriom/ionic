@@ -1,7 +1,23 @@
-use crate::ion::IonResult;
+use crate::ion::{
+    IonResult,
+    format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, allow_compression, allow_version},
+};
 
-const HEADER_SIZE: usize = 1024;
 const RESERVED_EXT_SIZE: usize = 656;
+const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
+
+pub const HEADER_FORMAT_VERSION_OFFSET: usize = 9;
+
+#[inline]
+pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
+    let end = HEADER_FORMAT_VERSION_OFFSET + 2;
+    if bytes.len() < end {
+        return None;
+    }
+    let mut buf = [0u8; 2];
+    buf.copy_from_slice(&bytes[HEADER_FORMAT_VERSION_OFFSET..end]);
+    Some(u16::from_le_bytes(buf))
+}
 
 pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
     if bytes.len() < HEADER_SIZE {
@@ -16,18 +32,11 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         return Err("header: expected little-endian endianness_flag=0".into());
     }
 
-    let format_version = u16::from_le_bytes(
-        <[u8; 2]>::try_from(&h[HEADER_FORMAT_VERSION..HEADER_FORMAT_VERSION + 2]).unwrap(),
-    );
-    if format_version > 1 {
-        return Err(format!(
-            "header: unsupported format_version={} (expected 0 or 1)",
-            format_version
-        )
-        .into());
-    }
+    let format_version = get_version_from_header(bytes).unwrap();
+    allow_version(format_version)?;
     let compression_codec = h[HEADER_CODEC_ID];
     let compression_level = h[HEADER_COMPRESSION_LEVEL];
+    allow_compression(compression_codec, compression_level)?;
     let default_array_filter = h[HEADER_ARRAY_FILTER_ID];
 
     let reserved_14_15 = <[u8; 2]>::try_from(&h[14..16]).unwrap();
@@ -344,7 +353,6 @@ pub(crate) struct Header {
     pub(crate) header_crc32: u32,
 }
 
-pub(crate) const HEADER_FORMAT_VERSION: usize = 9;
 pub(crate) const HEADER_CODEC_ID: usize = 11;
 pub(crate) const HEADER_COMPRESSION_LEVEL: usize = 12;
 pub(crate) const HEADER_ARRAY_FILTER_ID: usize = 13;
@@ -399,7 +407,7 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
     let mut failures = Vec::new();
     let file_len = bytes.len() as u64;
 
-    if &h.file_signature != b"START\0\0\0" {
+    if h.file_signature != FILE_SIGNATURE {
         failures.push(format!(
             "condition 1: invalid file_signature (stored={:?}, expected=\"START\\0\\0\\0\")",
             String::from_utf8_lossy(&h.file_signature)
@@ -414,7 +422,9 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         ));
     }
 
-    if bytes.len() < 8 || &bytes[bytes.len() - 8..] != b"END\0\0\0\0\0" {
+    if bytes.len() < FILE_TRAILER.len()
+        || &bytes[bytes.len() - FILE_TRAILER.len()..] != FILE_TRAILER
+    {
         failures.push("condition 3: missing or invalid file trailer".to_string());
     }
 
@@ -425,20 +435,28 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         ));
     }
 
-    if h.spec_block_count * 32 > h.len_spec_container {
-        failures.push(format!(
-            "condition 5: spec_block_count × 32 ({}) > len_spec_container ({})",
-            h.spec_block_count * 32,
+    match h.spec_block_count.checked_mul(BLOCK_DIRECTORY_ENTRY_SIZE_U64) {
+        None => failures.push(format!(
+            "condition 5: spec_block_count ({}) × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} overflows u64",
+            h.spec_block_count
+        )),
+        Some(directory_bytes) if directory_bytes > h.len_spec_container => failures.push(format!(
+            "condition 5: spec_block_count × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} ({directory_bytes}) > len_spec_container ({})",
             h.len_spec_container
-        ));
+        )),
+        _ => {}
     }
 
-    if h.chrom_block_count * 32 > h.len_chrom_container {
-        failures.push(format!(
-            "condition 6: chrom_block_count × 32 ({}) > len_chrom_container ({})",
-            h.chrom_block_count * 32,
+    match h.chrom_block_count.checked_mul(BLOCK_DIRECTORY_ENTRY_SIZE_U64) {
+        None => failures.push(format!(
+            "condition 6: chrom_block_count ({}) × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} overflows u64",
+            h.chrom_block_count
+        )),
+        Some(directory_bytes) if directory_bytes > h.len_chrom_container => failures.push(format!(
+            "condition 6: chrom_block_count × {BLOCK_DIRECTORY_ENTRY_SIZE_U64} ({directory_bytes}) > len_chrom_container ({})",
             h.len_chrom_container
-        ));
+        )),
+        _ => {}
     }
 
     let trailer_start = h.total_file_size.saturating_sub(8);
@@ -487,12 +505,15 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
     for i in 1..sorted.len() {
         let (prev_name, prev_off, prev_len) = sorted[i - 1];
         let (curr_name, curr_off, _) = sorted[i];
-        if prev_off + prev_len > curr_off {
-            failures.push(format!(
+        match prev_off.checked_add(prev_len) {
+            None => failures.push(format!(
+                "condition 8: section {prev_name} offset+length overflows u64"
+            )),
+            Some(prev_end) if prev_end > curr_off => failures.push(format!(
                 "condition 8: sections {prev_name} and {curr_name} overlap \
-                 ({prev_name} ends at {}, {curr_name} starts at {curr_off})",
-                prev_off + prev_len
-            ));
+                 ({prev_name} ends at {prev_end}, {curr_name} starts at {curr_off})"
+            )),
+            _ => {}
         }
     }
 
@@ -527,7 +548,7 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
             h.global_meta_crc32,
         ),
     ] {
-        match bytes.get(off as usize..(off + len) as usize) {
+        match resolve_section(bytes, off, len) {
             None => failures.push(format!("condition {cond}: {name} section out of bounds")),
             Some(section) => {
                 let computed = crc32fast::hash(section);
@@ -541,6 +562,76 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         }
     }
 
+    enforce_count_bounds(&mut failures, h, file_len);
+
     let passed = failures.is_empty();
     (passed, failures)
+}
+
+#[inline]
+fn resolve_section(bytes: &[u8], off: u64, len: u64) -> Option<&[u8]> {
+    let start = usize::try_from(off).ok()?;
+    let end = usize::try_from(off.checked_add(len)?).ok()?;
+    bytes.get(start..end)
+}
+
+fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, file_len: u64) {
+    let checks: &[(&str, u64)] = &[
+        ("spec_block_count", h.spec_block_count),
+        ("chrom_block_count", h.chrom_block_count),
+        ("spectrum_count", h.spectrum_count),
+        ("chrom_count", h.chrom_count),
+        ("spec_meta_count", h.spec_meta_count),
+        ("spec_meta_numeric_count", h.spec_meta_numeric_count),
+        ("spec_meta_string_count", h.spec_meta_string_count),
+        ("chrom_meta_count", h.chrom_meta_count),
+        ("chrom_meta_numeric_count", h.chrom_meta_numeric_count),
+        ("chrom_meta_string_count", h.chrom_meta_string_count),
+        ("global_meta_count", h.global_meta_count),
+        ("global_meta_numeric_count", h.global_meta_numeric_count),
+        ("global_meta_string_count", h.global_meta_string_count),
+        ("spec_array_type_count", h.spec_array_type_count),
+        ("chrom_array_type_count", h.chrom_array_type_count),
+    ];
+    for &(name, count) in checks {
+        if count > file_len {
+            failures.push(format!(
+                "condition 13: {name} ({count}) exceeds file size ({file_len})"
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod inline_tests {
+    use super::*;
+    use crate::ion::format::CURRENT_VERSION;
+
+    #[test]
+    fn get_version_returns_none_on_short_buffer() {
+        let too_short = [0u8; HEADER_FORMAT_VERSION_OFFSET + 1];
+        assert_eq!(get_version_from_header(&too_short), None);
+    }
+
+    #[test]
+    fn get_version_reads_little_endian_word() {
+        let mut bytes = [0u8; HEADER_SIZE];
+        bytes[HEADER_FORMAT_VERSION_OFFSET..HEADER_FORMAT_VERSION_OFFSET + 2]
+            .copy_from_slice(&CURRENT_VERSION.to_le_bytes());
+        assert_eq!(get_version_from_header(&bytes), Some(CURRENT_VERSION));
+    }
+
+    #[test]
+    fn get_version_handles_max_u16() {
+        let mut bytes = [0u8; HEADER_SIZE];
+        bytes[HEADER_FORMAT_VERSION_OFFSET..HEADER_FORMAT_VERSION_OFFSET + 2]
+            .copy_from_slice(&u16::MAX.to_le_bytes());
+        assert_eq!(get_version_from_header(&bytes), Some(u16::MAX));
+    }
+
+    #[test]
+    fn get_version_handles_exact_minimum_buffer_length() {
+        let bytes = [0u8; HEADER_FORMAT_VERSION_OFFSET + 2];
+        assert_eq!(get_version_from_header(&bytes), Some(0));
+    }
 }

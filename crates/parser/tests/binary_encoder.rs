@@ -2,15 +2,16 @@ mod common;
 
 use common::test_files;
 use common::{decode_ion, encode_to_ion, top_level_software_ids, top_level_source_file_ids};
+use ionic::ion::format::{FILE_SIGNATURE, HEADER_SIZE};
 
 #[test]
 fn ion_header_signature_is_correct() {
     let bytes = encode_to_ion(test_files::tiny_pwiz_11(), 12, false);
     assert!(
-        bytes.len() > 1024,
+        bytes.len() > HEADER_SIZE,
         "encoded bytes should include header and payload"
     );
-    assert_eq!(&bytes[..8], b"START\0\0\0");
+    assert_eq!(&bytes[..FILE_SIGNATURE.len()], &FILE_SIGNATURE);
 }
 
 #[test]

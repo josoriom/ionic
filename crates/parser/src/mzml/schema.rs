@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::default::Default;
-use std::sync::OnceLock;
+use std::{collections::HashMap, default::Default, sync::OnceLock};
 
 static SCHEMA: OnceLock<SchemaTree> = OnceLock::new();
 

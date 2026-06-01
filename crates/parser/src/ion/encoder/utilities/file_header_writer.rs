@@ -1,9 +1,10 @@
+use crate::ion::format::{CURRENT_VERSION, FILE_SIGNATURE};
 use crate::ion::utilities::parse_header::{
     HEADER_ARRAY_FILTER_ID, HEADER_CHROM_ARRAY_TYPE_COUNT, HEADER_CHROM_BLOCK_COUNT,
     HEADER_CHROM_COUNT, HEADER_CHROM_META_CRC32, HEADER_CHROM_META_NUMERIC_COUNT,
     HEADER_CHROM_META_ROW_COUNT, HEADER_CHROM_META_STRING_COUNT,
     HEADER_CHROM_META_UNCOMPRESSED_SIZE, HEADER_CODEC_ID, HEADER_COMPRESSION_LEVEL, HEADER_CRC32,
-    HEADER_FORMAT_VERSION, HEADER_GLOBAL_META_CRC32, HEADER_GLOBAL_META_NUMERIC_COUNT,
+    HEADER_FORMAT_VERSION_OFFSET, HEADER_GLOBAL_META_CRC32, HEADER_GLOBAL_META_NUMERIC_COUNT,
     HEADER_GLOBAL_META_ROW_COUNT, HEADER_GLOBAL_META_STRING_COUNT,
     HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, HEADER_LEN_CHROM_ARRAYREFS, HEADER_LEN_CHROM_ENTRIES,
     HEADER_LEN_CHROM_META, HEADER_LEN_CHROM_SUMMARY, HEADER_LEN_GLOBAL_META,
@@ -20,9 +21,6 @@ use crate::ion::utilities::parse_header::{
 
 #[derive(Default)]
 pub(crate) struct FileHeader {
-    // "START\0\0\0" at 0..8
-    // endianness_flag: 0 at 8
-    // format_version: 1 at 9..11
     pub(crate) compression_codec: u8,
     pub(crate) compression_level: u8,
     pub(crate) array_filter_id: u8,
@@ -83,9 +81,9 @@ pub(crate) struct FileHeader {
 
 impl FileHeader {
     pub(crate) fn write_into(&self, buf: &mut [u8]) {
-        buf[0..8].copy_from_slice(b"START\0\0\0");
-        buf[8] = 0u8; // endianness_flag: little-endian
-        patch_u16_at(buf, HEADER_FORMAT_VERSION, 1u16);
+        buf[0..FILE_SIGNATURE.len()].copy_from_slice(&FILE_SIGNATURE);
+        buf[8] = 0u8;
+        patch_u16_at(buf, HEADER_FORMAT_VERSION_OFFSET, CURRENT_VERSION);
 
         patch_u8_at(buf, HEADER_CODEC_ID, self.compression_codec);
         patch_u8_at(buf, HEADER_COMPRESSION_LEVEL, self.compression_level);

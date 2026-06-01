@@ -5,11 +5,7 @@ use common::helpers::{
     build_mzml, default_cv_list_like_writer, make_chromatogram_f64, make_spectrum_f64,
     minimal_file_description, synthetic_binary_data_array,
 };
-use ionic::mzml::{
-    bin_to_mzml::bin_to_mzml,
-    parse_mzml::parse_mzml,
-    structs::*,
-};
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*};
 
 #[test]
 fn bin_to_mzml_produces_valid_xml() {

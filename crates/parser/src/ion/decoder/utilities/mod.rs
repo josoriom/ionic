@@ -20,9 +20,9 @@ pub(crate) use parse_spectrum_list::parse_spectrum_list;
 pub(crate) mod parse_chromatogram_list;
 pub(crate) use parse_chromatogram_list::parse_chromatogram_list;
 pub(crate) mod assign_attributes;
-pub(crate) use assign_attributes::{assign_attributes_into, EmitAttributes};
 #[cfg(test)]
 pub(crate) use assign_attributes::assign_attributes;
+pub(crate) use assign_attributes::{EmitAttributes, assign_attributes_into};
 pub(crate) mod parse_file_description;
 pub(crate) use parse_file_description::parse_file_description;
 pub(crate) mod parse_referenceable_param_group_list;
@@ -43,6 +43,7 @@ pub(crate) use parse_cv_list::parse_cv_list;
 pub(crate) mod children_lookup;
 pub(crate) mod container_view;
 pub(crate) mod cv_table;
+pub(crate) mod decompression_budget;
 pub(crate) mod spectrum_source;
 
 #[cfg(test)]

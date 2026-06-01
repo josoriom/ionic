@@ -1,4 +1,4 @@
-use crate::ion::utilities::parse_header;
+use crate::ion::{format::FILE_SIGNATURE, utilities::parse_header};
 use std::{fs, path::PathBuf};
 
 const PATH: &str = "data/ion/test.ion";
@@ -13,7 +13,7 @@ fn check_header() {
     let bytes = read_bytes(PATH);
     let header = parse_header(&bytes).expect("parse_header failed");
 
-    assert_eq!(header.file_signature, *b"START\0\0\0");
+    assert_eq!(header.file_signature, FILE_SIGNATURE);
     assert_eq!(header.endianness_flag, 0);
     assert_eq!(header.spectrum_count, 2);
     assert_eq!(header.chrom_count, 2);
@@ -33,7 +33,7 @@ fn check_header() {
     assert_eq!(header.default_array_filter, 1);
     assert!(header.spec_array_type_count > 0);
     assert!(header.chrom_array_type_count > 0);
-    assert_eq!(header.target_block_uncompressed_bytes, 32 * 1024 * 1024);
+    assert_eq!(header.target_block_uncompressed_bytes, 1 * 1024 * 1024);
     assert!(header.spec_meta_uncompressed_bytes > 0);
     assert!(header.chrom_meta_uncompressed_bytes > 0);
     assert!(header.global_meta_uncompressed_bytes > 0);

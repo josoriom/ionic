@@ -1,7 +1,9 @@
 mod common;
 
+use std::fs;
+
 use common::helpers::{minimal_file_description, synthetic_binary_data_array};
-use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
+use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode, encoder::FileEncoderOutput};
 use ionic::mzml::structs::*;
 
 #[test]
@@ -31,9 +33,6 @@ fn memory_mode_roundtrip_multi_spectrum() {
 
 #[test]
 fn streaming_mode_roundtrip_via_tempfile() {
-    use ionic::ion::encoder::FileEncoderOutput;
-    use std::fs;
-
     let mzml = build_multi_spectrum_mzml(5, 50);
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("ionic_test_streaming.ion");
@@ -64,9 +63,6 @@ fn streaming_mode_roundtrip_via_tempfile() {
 
 #[test]
 fn memory_and_streaming_produce_equivalent_results() {
-    use ionic::ion::encoder::FileEncoderOutput;
-    use std::fs;
-
     let mzml = build_multi_spectrum_mzml(3, 20);
 
     let mut mem_buf = Vec::new();

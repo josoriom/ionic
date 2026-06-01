@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     ion::{
+        DecompressionBudget,
         attr_meta::*,
         decoder::decode::{Metadatum, MetadatumValue},
         utilities::{assign_attributes, common::find_node_by_tag, parse_header, parse_metadata},
@@ -52,6 +53,7 @@ fn spectra_meta_from_test_ion() -> Vec<Metadatum> {
         header.spec_meta_string_count,
         header.compression_codec,
         expected,
+        DecompressionBudget::default(),
     )
     .expect("parse_metadata(spectra) failed")
 }

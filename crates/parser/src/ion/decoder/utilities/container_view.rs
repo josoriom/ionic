@@ -1,18 +1,27 @@
 use crate::ion::encoder::utilities::container_builder::{
-    BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, FilterType, Stride,
+    BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride,
 };
 use crate::ion::{
     IonError, IonResult,
-    utilities::common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
+    packing::PackingId,
+    utilities::{
+        common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
+        decompression_budget::DecompressionBudget,
+    },
 };
 use std::ops::Deref;
 
 const LRU_NONE: usize = usize::MAX;
 
 pub(crate) trait BlockProcessor {
-    fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>>;
+    fn decompress(
+        &self,
+        source: &[u8],
+        target_len: usize,
+        budget: DecompressionBudget,
+    ) -> IonResult<Vec<u8>>;
     fn unshuffle(&self, source: &[u8], target: &mut [u8], stride: usize);
-    fn requires_unshuffle(&self, filter: FilterType) -> bool;
+    fn requires_unshuffle(&self, block_packing_id: PackingId) -> bool;
 }
 
 pub(crate) trait ContainerAccess {
@@ -31,8 +40,13 @@ pub(crate) struct DefaultProcessor;
 
 impl BlockProcessor for DefaultProcessor {
     #[inline]
-    fn decompress(&self, source: &[u8], target_len: usize) -> IonResult<Vec<u8>> {
-        decompress_zstd(source, target_len)
+    fn decompress(
+        &self,
+        source: &[u8],
+        target_len: usize,
+        budget: DecompressionBudget,
+    ) -> IonResult<Vec<u8>> {
+        decompress_zstd(source, target_len, budget)
     }
 
     #[inline]
@@ -41,8 +55,8 @@ impl BlockProcessor for DefaultProcessor {
     }
 
     #[inline]
-    fn requires_unshuffle(&self, filter: FilterType) -> bool {
-        filter == FilterType::Shuffle
+    fn requires_unshuffle(&self, block_packing_id: PackingId) -> bool {
+        block_packing_id == PackingId::ByteShuffle
     }
 }
 
@@ -84,8 +98,9 @@ pub(crate) struct ContainerView<'a, P: BlockProcessor> {
     max_cached_bytes: usize,
     stride_history: Box<[Option<Stride>]>,
     compression_level: u8,
-    filter: FilterType,
+    block_packing_id: PackingId,
     verify_checksums: bool,
+    decompression_budget: DecompressionBudget,
     processor: P,
 }
 
@@ -95,7 +110,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         raw_data: &'a [u8],
         block_count: u64,
         compression_level: u8,
-        filter: FilterType,
+        block_packing_id: PackingId,
         verify_checksums: bool,
         ctx: &'static str,
         processor: P,
@@ -105,11 +120,12 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             raw_data,
             block_count,
             compression_level,
-            filter,
+            block_packing_id,
             verify_checksums,
             ctx,
             processor,
             max_cached_bytes,
+            DecompressionBudget::default(),
         )
     }
 
@@ -117,19 +133,15 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         raw_data: &'a [u8],
         block_count: u64,
         compression_level: u8,
-        filter: FilterType,
+        block_packing_id: PackingId,
         verify_checksums: bool,
         ctx: &'static str,
         processor: P,
         max_cached_bytes: usize,
+        decompression_budget: DecompressionBudget,
     ) -> IonResult<Self> {
-        let block_count = block_count as usize;
+        let block_count = validate_block_count(block_count, raw_data.len(), ctx)?;
         let directory_byte_size = block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
-
-        if raw_data.len() < directory_byte_size {
-            return Err(format!("{ctx}: container too small to hold block directory").into());
-        }
-
         let directory_start_offset = raw_data.len() - directory_byte_size;
         let directory_bytes = &raw_data[directory_start_offset..];
         let mut read_position = 0;
@@ -164,8 +176,9 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             max_cached_bytes,
             stride_history: vec![None; block_count].into_boxed_slice(),
             compression_level,
-            filter,
+            block_packing_id,
             verify_checksums,
+            decompression_budget,
             processor,
         })
     }
@@ -201,7 +214,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
 
         let payload = &self.raw_data[payload_start..payload_end];
 
-        if self.verify_checksums && entry.checksum != 0 {
+        if self.verify_checksums {
             let computed = crc32fast::hash(payload);
             if computed != entry.checksum {
                 return Err(format!(
@@ -221,8 +234,11 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         uncompressed_len: usize,
         stride: Stride,
     ) -> IonResult<Vec<u8>> {
+        self.decompression_budget
+            .validate(payload.len(), uncompressed_len)?;
+
         let needs_unshuffle =
-            self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
+            self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
         let mut data = if self.compression_level == 0 {
             if payload.len() != uncompressed_len {
@@ -234,7 +250,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
             }
             payload.to_vec()
         } else {
-            self.processor.decompress(payload, uncompressed_len)?
+            self.processor
+                .decompress(payload, uncompressed_len, self.decompression_budget)?
         };
 
         if needs_unshuffle {
@@ -258,7 +275,8 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         let (entry, payload) = self.block_payload(block_index, ctx)?;
 
         if self.compression_level == 0
-            && (!self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte)
+            && (!self.processor.requires_unshuffle(self.block_packing_id)
+                || stride == Stride::OneByte)
         {
             if payload.len() != entry.uncompressed_len_bytes as usize {
                 return Err(format!(
@@ -378,7 +396,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         stride: Stride,
         ctx: &'static str,
     ) -> IonResult<()> {
-        if !self.processor.requires_unshuffle(self.filter) || stride == Stride::OneByte {
+        if !self.processor.requires_unshuffle(self.block_packing_id) || stride == Stride::OneByte {
             return Ok(());
         }
         match self.stride_history[block_index] {
@@ -401,7 +419,7 @@ impl<'a, P: BlockProcessor> ContainerView<'a, P> {
         stride: Stride,
     ) -> IonResult<BlockData<'a>> {
         let needs_unshuffle =
-            self.processor.requires_unshuffle(self.filter) && stride != Stride::OneByte;
+            self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
         if self.compression_level == 0 && !needs_unshuffle {
             if payload.len() != uncompressed_len {
@@ -468,30 +486,50 @@ fn unshuffle_bytes(source: &[u8], target: &mut [u8], stride: usize) {
     crate::ion::byte_transpose::unshuffle(source, target, stride);
 }
 
+#[inline]
+fn validate_block_count(
+    block_count: u64,
+    container_byte_size: usize,
+    ctx: &'static str,
+) -> IonResult<usize> {
+    let max_blocks = (container_byte_size / BLOCK_DIRECTORY_ENTRY_SIZE) as u64;
+    if block_count > max_blocks {
+        return Err(format!(
+            "{ctx}: block_count {block_count} exceeds maximum {max_blocks} derivable from container size {container_byte_size}"
+        )
+        .into());
+    }
+    Ok(block_count as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_raw_directory_entry(off: u64, size: u64, uncomp: u64) -> Vec<u8> {
+    fn make_raw_directory_entry(off: u64, size: u64, uncomp: u64, checksum: u32) -> Vec<u8> {
         let mut e = Vec::with_capacity(BLOCK_DIRECTORY_ENTRY_SIZE);
         e.extend_from_slice(&off.to_le_bytes());
         e.extend_from_slice(&size.to_le_bytes());
         e.extend_from_slice(&uncomp.to_le_bytes());
-        e.extend_from_slice(&0u32.to_le_bytes());
+        e.extend_from_slice(&checksum.to_le_bytes());
         e.extend_from_slice(&[0u8; 4]);
         e
     }
 
     fn make_container(block_size: usize, count: usize) -> Vec<u8> {
         let mut raw = Vec::new();
+        let mut checksums = Vec::with_capacity(count);
         for i in 0..count {
-            raw.extend(vec![i as u8; block_size]);
+            let payload = vec![i as u8; block_size];
+            checksums.push(crc32fast::hash(&payload));
+            raw.extend(payload);
         }
-        for i in 0..count {
+        for (i, &checksum) in checksums.iter().enumerate() {
             raw.extend_from_slice(&make_raw_directory_entry(
                 (i * block_size) as u64,
                 block_size as u64,
                 block_size as u64,
+                checksum,
             ));
         }
         raw
@@ -504,7 +542,7 @@ mod tests {
             &tiny,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -521,7 +559,7 @@ mod tests {
                 &empty,
                 0,
                 0,
-                FilterType::None,
+                PackingId::Raw,
                 true,
                 "test",
                 DefaultProcessor,
@@ -534,7 +572,7 @@ mod tests {
     #[test]
     fn container_view_get_item_returns_correct_bytes_uncompressed() {
         let payload = vec![0u8, 1, 2, 3, 4, 5, 6, 7];
-        let dir = make_raw_directory_entry(0, 8, 8);
+        let dir = make_raw_directory_entry(0, 8, 8, crc32fast::hash(&payload));
         let mut raw = Vec::new();
         raw.extend_from_slice(&payload);
         raw.extend_from_slice(&dir);
@@ -543,7 +581,7 @@ mod tests {
             &raw,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -559,7 +597,7 @@ mod tests {
     #[test]
     fn container_view_rejects_out_of_bounds_element_range() {
         let payload = vec![0u8; 8];
-        let dir = make_raw_directory_entry(0, 8, 8);
+        let dir = make_raw_directory_entry(0, 8, 8, crc32fast::hash(&payload));
         let mut raw = Vec::new();
         raw.extend_from_slice(&payload);
         raw.extend_from_slice(&dir);
@@ -568,7 +606,7 @@ mod tests {
             &raw,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -585,7 +623,7 @@ mod tests {
             &empty,
             0,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
@@ -604,11 +642,12 @@ mod tests {
             &raw,
             3,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
             bs * 2,
+            DecompressionBudget::default(),
         )
         .unwrap();
 
@@ -632,11 +671,12 @@ mod tests {
             &raw,
             3,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
             bs * 2,
+            DecompressionBudget::default(),
         )
         .unwrap();
 
@@ -659,11 +699,12 @@ mod tests {
             &raw,
             4,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
             0,
+            DecompressionBudget::default(),
         )
         .unwrap();
 
@@ -677,7 +718,7 @@ mod tests {
     #[test]
     fn borrowed_blocks_dont_count_toward_byte_limit() {
         let payload = vec![0u8; 8];
-        let dir = make_raw_directory_entry(0, 8, 8);
+        let dir = make_raw_directory_entry(0, 8, 8, crc32fast::hash(&payload));
         let mut raw = Vec::new();
         raw.extend_from_slice(&payload);
         raw.extend_from_slice(&dir);
@@ -686,16 +727,78 @@ mod tests {
             &raw,
             1,
             0,
-            FilterType::None,
+            PackingId::Raw,
             true,
             "test",
             DefaultProcessor,
             4,
+            DecompressionBudget::default(),
         )
         .unwrap();
 
         view.get_item_from_block(0, 0, 1, 4, "test").unwrap();
         assert_eq!(view.cached_bytes, 8);
+    }
+
+    #[test]
+    fn checksum_mismatch_is_rejected_when_verification_enabled() {
+        let payload = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let wrong_checksum = crc32fast::hash(&payload).wrapping_add(1);
+        let dir = make_raw_directory_entry(0, 8, 8, wrong_checksum);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&payload);
+        raw.extend_from_slice(&dir);
+
+        let mut view = ContainerView::new(
+            &raw,
+            1,
+            0,
+            PackingId::Raw,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        )
+        .unwrap();
+        assert!(view.get_item_from_block(0, 0, 1, 4, "test").is_err());
+    }
+
+    #[test]
+    fn zero_checksum_is_not_treated_as_bypass() {
+        let payload = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let dir = make_raw_directory_entry(0, 8, 8, 0);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&payload);
+        raw.extend_from_slice(&dir);
+
+        let mut view = ContainerView::new(
+            &raw,
+            1,
+            0,
+            PackingId::Raw,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        )
+        .unwrap();
+        assert!(view.get_item_from_block(0, 0, 1, 4, "test").is_err());
+    }
+
+    #[test]
+    fn container_view_rejects_block_count_exceeding_directory_capacity() {
+        let raw = vec![0u8; 16];
+        let result = ContainerView::new(
+            &raw,
+            10,
+            0,
+            PackingId::Raw,
+            true,
+            "test",
+            DefaultProcessor,
+            0,
+        );
+        assert!(result.is_err());
     }
 
     #[test]

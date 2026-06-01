@@ -99,7 +99,11 @@ pub fn read_base64_binary<R: BufRead>(
 pub fn attr_any(element: &BytesStart, candidate_names: &[&[u8]]) -> Option<String> {
     for a in element.attributes().with_checks(false).flatten() {
         if candidate_names.iter().any(|n| *n == a.key.as_ref()) {
-            return Some(a.normalized_value(XmlVersion::Implicit1_0).ok()?.to_string());
+            return Some(
+                a.normalized_value(XmlVersion::Implicit1_0)
+                    .ok()?
+                    .to_string(),
+            );
         }
     }
     None

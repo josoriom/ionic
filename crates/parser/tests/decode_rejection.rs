@@ -2,6 +2,7 @@ mod common;
 
 use common::test_files;
 use common::{decode_ion, encode_to_ion};
+use ionic::ion::{HEADER_FORMAT_VERSION_OFFSET, format::MAX_SUPPORTED_VERSION};
 
 #[test]
 fn rejects_invalid_signature() {
@@ -12,14 +13,27 @@ fn rejects_invalid_signature() {
 }
 
 #[test]
-fn rejects_invalid_header_version_word() {
+fn rejects_unsupported_format_version() {
     let mut bytes = encode_to_ion(test_files::tiny_pwiz_11(), 9, false);
-    bytes[4..8].copy_from_slice(b"X999");
-    let err = decode_ion(&bytes).expect_err("decode must reject unsupported header version");
+    let unsupported = MAX_SUPPORTED_VERSION + 1;
+    bytes[HEADER_FORMAT_VERSION_OFFSET..HEADER_FORMAT_VERSION_OFFSET + 2]
+        .copy_from_slice(&unsupported.to_le_bytes());
+    let err = decode_ion(&bytes).expect_err("decode must reject unsupported format version");
     assert!(
-        err.contains("version") || err.contains("signature") || err.contains("endianness_flag"),
+        err.contains("unsupported format version"),
         "unexpected decode error: {err}"
     );
+}
+
+#[test]
+fn accepts_all_supported_format_versions() {
+    use ionic::ion::format::{MIN_SUPPORTED_VERSION, allow_version};
+    for version in MIN_SUPPORTED_VERSION..=MAX_SUPPORTED_VERSION {
+        assert!(
+            allow_version(version).is_ok(),
+            "version {version} must be allowed"
+        );
+    }
 }
 
 #[test]

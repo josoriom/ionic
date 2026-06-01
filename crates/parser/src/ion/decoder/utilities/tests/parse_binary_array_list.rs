@@ -7,6 +7,7 @@ use std::{
 use crate::mzml::structs::CvParam;
 use crate::{
     ion::{
+        DecompressionBudget,
         decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, OwnerRows},
@@ -62,7 +63,14 @@ fn parse_metadata_section_from_test_file(
         .unwrap_or_else(|_| panic!("{section_name}: expected_uncompressed overflow"));
 
     parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
+        slice,
+        item_count,
+        meta_count,
+        num_count,
+        str_count,
+        codec_id,
+        expected,
+        DecompressionBudget::default(),
     )
     .unwrap_or_else(|e| panic!("{section_name}: parse_metadata failed: {e}"))
 }

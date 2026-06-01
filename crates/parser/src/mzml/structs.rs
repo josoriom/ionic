@@ -479,6 +479,11 @@ pub struct BinaryDataArray {
 
     pub numeric_type: Option<NumericType>,
     pub binary: Option<BinaryData>,
+
+    #[serde(skip)]
+    pub pending_base64: Option<Vec<u8>>,
+    #[serde(skip)]
+    pub pending_zlib: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

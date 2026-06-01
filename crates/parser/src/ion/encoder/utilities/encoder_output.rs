@@ -1,5 +1,7 @@
-use std::fs::File;
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::{
+    fs::File,
+    io::{BufWriter, Seek, SeekFrom, Write},
+};
 
 use crate::ion::{IonError, IonResult};
 

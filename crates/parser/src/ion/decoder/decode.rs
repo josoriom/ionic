@@ -22,18 +22,17 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
-        encoder::{
-            encode::{
-                FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
-                FILE_DTYPE_I64,
-            },
-            utilities::{container_builder::FilterType, delta_filter},
+        encoder::encode::{
+            FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
+            FILE_DTYPE_I64,
         },
         filter_summary::{ChromatogramSummary, SpectrumSummary},
+        packing::PackingId,
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
             container_view::{ContainerAccess, ContainerView, DefaultProcessor},
+            decompression_budget::DecompressionBudget,
             parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
@@ -101,6 +100,7 @@ pub struct ArrayRef {
     pub array_type: u32,
     pub dtype: u8,
     pub array_filter: u8,
+    pub encoded_len: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +108,7 @@ pub struct DecoderConfig {
     pub max_cached_bytes: usize,
     pub verify_checksums: bool,
     pub parallel: bool,
+    pub decompression_budget: DecompressionBudget,
 }
 
 impl Default for DecoderConfig {
@@ -116,6 +117,7 @@ impl Default for DecoderConfig {
             max_cached_bytes: DEFAULT_MAX_CACHED_BYTES,
             verify_checksums: true,
             parallel: true,
+            decompression_budget: DecompressionBudget::default(),
         }
     }
 }
@@ -128,6 +130,7 @@ pub struct Decoder<'a> {
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
     parallel: bool,
+    decompression_budget: DecompressionBudget,
 }
 
 #[allow(dead_code)]
@@ -136,7 +139,6 @@ enum IonBacking {
     Map(Mmap),
 }
 
-// Field order is load-bearing: ion must drop before _backing (UB otherwise).
 pub struct OwnedIon {
     ion: Ion<'static>,
     _backing: IonBacking,
@@ -167,6 +169,11 @@ impl OwnedIon {
             _backing: IonBacking::Map(map),
         })
     }
+
+    #[inline]
+    pub fn format_version(&self) -> Option<u16> {
+        self.ion.format_version()
+    }
 }
 
 impl Deref for OwnedIon {
@@ -186,7 +193,7 @@ impl DerefMut for OwnedIon {
 impl<'a> Decoder<'a> {
     pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
         let header = parse_header(bytes)?;
-        let filter = FilterType::try_from(header.default_array_filter).unwrap_or(FilterType::None);
+        let block_packing_id = PackingId::from_byte(header.default_array_filter)?;
 
         let spec_container = {
             let off = usize::try_from(header.off_spec_container)
@@ -203,11 +210,12 @@ impl<'a> Decoder<'a> {
                 cb,
                 header.spec_block_count,
                 header.compression_level,
-                filter,
+                block_packing_id,
                 config.verify_checksums,
                 "spec",
                 DefaultProcessor,
                 config.max_cached_bytes,
+                config.decompression_budget,
             )?
         };
 
@@ -226,11 +234,12 @@ impl<'a> Decoder<'a> {
                 container_bytes,
                 header.chrom_block_count,
                 header.compression_level,
-                filter,
+                block_packing_id,
                 config.verify_checksums,
                 "chrom",
                 DefaultProcessor,
                 config.max_cached_bytes,
+                config.decompression_budget,
             )?)
         } else {
             None
@@ -244,12 +253,13 @@ impl<'a> Decoder<'a> {
             mz_buf: Vec::new(),
             int_buf: Vec::new(),
             parallel: config.parallel,
+            decompression_budget: config.decompression_budget,
         })
     }
 
     #[inline]
-    pub(crate) fn header(&self) -> &Header {
-        &self.header
+    pub fn format_version(&self) -> u16 {
+        self.header.format_version
     }
 
     #[inline]
@@ -362,15 +372,15 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
+        let (element_offset, count, stride) = aref_read_params(aref);
         let raw = self.spec_container.get_item_from_block(
             aref.block_id,
-            aref.element_offset,
-            aref.element_count,
-            dtype_stride(aref.dtype),
+            element_offset,
+            count,
+            stride,
             "read_spectrum_array",
         )?;
-        decode_into(out, raw, aref.dtype, aref.array_filter);
-        Ok(())
+        decode_into(out, raw, aref.dtype, aref.array_filter)
     }
 
     pub fn read_chromatogram_array(
@@ -382,15 +392,15 @@ impl<'a> Decoder<'a> {
             .chrom_container
             .as_mut()
             .ok_or_else(|| IonError::from("no chromatogram container"))?;
+        let (element_offset, count, stride) = aref_read_params(aref);
         let raw = container.get_item_from_block(
             aref.block_id,
-            aref.element_offset,
-            aref.element_count,
-            dtype_stride(aref.dtype),
+            element_offset,
+            count,
+            stride,
             "read_chromatogram_array",
         )?;
-        decode_into(out, raw, aref.dtype, aref.array_filter);
-        Ok(())
+        decode_into(out, raw, aref.dtype, aref.array_filter)
     }
 
     pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
@@ -407,6 +417,7 @@ impl<'a> Decoder<'a> {
             self.header.global_meta_string_count,
             self.header.compression_codec,
             self.header.global_meta_uncompressed_bytes,
+            self.decompression_budget,
         )
     }
 
@@ -424,6 +435,7 @@ impl<'a> Decoder<'a> {
             self.header.spec_meta_string_count,
             self.header.compression_codec,
             self.header.spec_meta_uncompressed_bytes as usize,
+            self.decompression_budget,
         )
     }
 
@@ -441,6 +453,7 @@ impl<'a> Decoder<'a> {
             self.header.chrom_meta_string_count,
             self.header.compression_codec,
             self.header.chrom_meta_uncompressed_bytes as usize,
+            self.decompression_budget,
         )
     }
 
@@ -450,6 +463,44 @@ impl<'a> Decoder<'a> {
 
     pub fn to_mzml(&mut self) -> IonResult<MzML> {
         MzmlConverter::new(self).full()
+    }
+
+    pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+        if index >= self.header.spectrum_count as usize {
+            return Ok(None);
+        }
+        let mut mzml = MzmlConverter::metadata_only(self)?;
+        let Some(list) = mzml.run.spectrum_list.as_mut() else {
+            return Ok(None);
+        };
+        if index >= list.spectra.len() {
+            return Ok(None);
+        }
+        let mut spectrum = std::mem::take(&mut list.spectra[index]);
+
+        if let Some(arefs) = read_array_refs_at(
+            self.bytes,
+            self.header.off_spec_entries as usize,
+            self.header.off_spec_arrayrefs as usize,
+            index,
+        ) {
+            let bd_list = spectrum
+                .binary_data_array_list
+                .get_or_insert_with(BinaryDataArrayList::default);
+            for aref in arefs.as_slice() {
+                let (eo, count, stride) = aref_read_params(aref);
+                let raw = self.spec_container.get_item_from_block(
+                    aref.block_id,
+                    eo,
+                    count,
+                    stride,
+                    "spectrum_at",
+                )?;
+                attach_array(bd_list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
+            }
+            bd_list.count = Some(bd_list.binary_data_arrays.len());
+        }
+        Ok(Some(spectrum))
     }
 }
 
@@ -606,8 +657,8 @@ impl<'a> Ion<'a> {
     }
 
     #[inline]
-    pub(crate) fn header(&self) -> Option<&Header> {
-        self.backend.as_decoder().map(|d| d.header())
+    pub fn format_version(&self) -> Option<u16> {
+        self.backend.as_decoder().map(|d| d.format_version())
     }
 
     #[inline]
@@ -684,6 +735,17 @@ impl<'a> Ion<'a> {
             .as_decoder()
             .map(|d| d.to_mzml_metadata_only())
             .unwrap_or_else(|| Ok(self.clone_as_mzml_metadata_only()))
+    }
+
+    pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+        match &mut self.backend {
+            IonBackend::Decoder(d) => d.spectrum_at(index),
+            IonBackend::Materialized => Ok(self
+                .run
+                .spectrum_list
+                .as_ref()
+                .and_then(|l| l.spectra.get(index).cloned())),
+        }
     }
 }
 
@@ -1197,6 +1259,10 @@ fn read_array_refs_at(
     let entry = bytes.get(entry_offset..entry_end)?;
     let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
     let ref_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
+    let max_refs = bytes.len().saturating_sub(aref_base) / ARRAY_REF_BYTES;
+    if ref_count > max_refs {
+        return None;
+    }
     let mut refs = ArrayRefs::with_capacity(ref_count);
     for offset in 0..ref_count {
         let pos = ref_start
@@ -1218,6 +1284,20 @@ fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
         array_type: u32::from_le_bytes(bytes[20..24].try_into().unwrap()),
         dtype: bytes[24],
         array_filter: bytes[25],
+        encoded_len: u32::from_le_bytes(bytes[26..30].try_into().unwrap()),
+    }
+}
+
+#[inline]
+fn aref_read_params(aref: &ArrayRef) -> (u64, u64, usize) {
+    if aref.encoded_len > 0 {
+        (aref.element_offset, aref.encoded_len as u64, 1)
+    } else {
+        (
+            aref.element_offset,
+            aref.element_count,
+            dtype_stride(aref.dtype),
+        )
     }
 }
 
@@ -1252,17 +1332,9 @@ fn decode_from_block(
     buf: &mut Vec<f64>,
     aref: &ArrayRef,
 ) -> bool {
-    match container.get_item_from_block(
-        aref.block_id,
-        aref.element_offset,
-        aref.element_count,
-        dtype_stride(aref.dtype),
-        "scan",
-    ) {
-        Ok(raw) => {
-            decode_into(buf, raw, aref.dtype, aref.array_filter);
-            true
-        }
+    let (element_offset, count, stride) = aref_read_params(aref);
+    match container.get_item_from_block(aref.block_id, element_offset, count, stride, "scan") {
+        Ok(raw) => decode_into(buf, raw, aref.dtype, aref.array_filter).is_ok(),
         Err(_) => false,
     }
 }
@@ -1277,57 +1349,90 @@ fn dtype_stride(dtype: u8) -> usize {
     }
 }
 
-fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) {
-    buf.clear();
-    match dtype {
-        FILE_DTYPE_F64 => {
-            buf.reserve(raw.len() / 8);
-            if array_filter == FilterType::DeltaShuffle as u8 {
-                delta_filter::decode_f64(raw, buf);
+fn unfilter_array_bytes(
+    raw: &[u8],
+    dtype: u8,
+    array_filter: u8,
+) -> IonResult<std::borrow::Cow<'_, [u8]>> {
+    let pk_id = PackingId::from_byte(array_filter)?;
+    match pk_id {
+        PackingId::Raw | PackingId::ByteShuffle => Ok(std::borrow::Cow::Borrowed(raw)),
+        PackingId::DeltaShuffle => {
+            if dtype == FILE_DTYPE_F64 {
+                let mut out = Vec::with_capacity(raw.len());
+                let mut prev: u64 = 0;
+                for chunk in raw.chunks_exact(8) {
+                    prev = prev.wrapping_add(u64::from_le_bytes(chunk.try_into().unwrap()));
+                    out.extend_from_slice(&prev.to_le_bytes());
+                }
+                Ok(std::borrow::Cow::Owned(out))
             } else {
-                buf.extend(
-                    raw.chunks_exact(8)
-                        .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
-                );
+                Ok(std::borrow::Cow::Borrowed(raw))
             }
         }
-        FILE_DTYPE_F32 => {
-            buf.reserve(raw.len() / 4);
+    }
+}
+
+fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<()> {
+    buf.clear();
+    let bytes = unfilter_array_bytes(raw, dtype, array_filter)?;
+    match dtype {
+        FILE_DTYPE_F64 => {
+            buf.reserve(bytes.len() / 8);
             buf.extend(
-                raw.chunks_exact(4)
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| f64::from_le_bytes(c.try_into().unwrap())),
+            );
+        }
+        FILE_DTYPE_F32 => {
+            buf.reserve(bytes.len() / 4);
+            buf.extend(
+                bytes
+                    .chunks_exact(4)
                     .map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_F16 => {
-            buf.reserve(raw.len() / 2);
+            buf.reserve(bytes.len() / 2);
             buf.extend(
-                raw.chunks_exact(2)
+                bytes
+                    .chunks_exact(2)
                     .map(|c| f16_bits_to_f64(u16::from_le_bytes(c.try_into().unwrap()))),
             );
         }
         FILE_DTYPE_I16 => {
-            buf.reserve(raw.len() / 2);
+            buf.reserve(bytes.len() / 2);
             buf.extend(
-                raw.chunks_exact(2)
+                bytes
+                    .chunks_exact(2)
                     .map(|c| i16::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_I32 => {
-            buf.reserve(raw.len() / 4);
+            buf.reserve(bytes.len() / 4);
             buf.extend(
-                raw.chunks_exact(4)
+                bytes
+                    .chunks_exact(4)
                     .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
         FILE_DTYPE_I64 => {
-            buf.reserve(raw.len() / 8);
+            buf.reserve(bytes.len() / 8);
             buf.extend(
-                raw.chunks_exact(8)
+                bytes
+                    .chunks_exact(8)
                     .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f64),
             );
         }
-        _ => {}
+        _ => {
+            return Err(IonError::BadDtype {
+                dtype,
+                kind: "decode array dtype",
+            });
+        }
     }
+    Ok(())
 }
 
 fn attach_binaries<E: BinaryArrayOwner>(
@@ -1350,7 +1455,11 @@ fn attach_binaries<E: BinaryArrayOwner>(
             continue;
         }
         for aref in item_refs.as_slice() {
-            let stride = dtype_stride(aref.dtype);
+            let stride = if aref.encoded_len > 0 {
+                1
+            } else {
+                dtype_stride(aref.dtype)
+            };
             if let Some(old) = blocks.insert(aref.block_id, stride)
                 && old != stride
             {
@@ -1402,26 +1511,29 @@ fn attach_binaries<E: BinaryArrayOwner>(
             let block = data
                 .get(&aref.block_id)
                 .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", aref.block_id)))?;
-            let stride = dtype_stride(aref.dtype);
-            let start = usize::try_from(aref.element_offset)
-                .ok()
-                .and_then(|offset| offset.checked_mul(stride))
-                .ok_or_else(|| {
-                    IonError::from(format!(
-                        "{ctx}: item range overflow for block {}",
-                        aref.block_id
-                    ))
-                })?;
-            let end = usize::try_from(aref.element_count)
-                .ok()
-                .and_then(|count| count.checked_mul(stride))
-                .and_then(|len| start.checked_add(len))
-                .ok_or_else(|| {
-                    IonError::from(format!(
-                        "{ctx}: item range overflow for block {}",
-                        aref.block_id
-                    ))
-                })?;
+            let (start, end) = {
+                let (element_offset, count, stride) = aref_read_params(aref);
+                let s = usize::try_from(element_offset)
+                    .ok()
+                    .and_then(|offset| offset.checked_mul(stride))
+                    .ok_or_else(|| {
+                        IonError::from(format!(
+                            "{ctx}: item range overflow for block {}",
+                            aref.block_id
+                        ))
+                    })?;
+                let e = usize::try_from(count)
+                    .ok()
+                    .and_then(|c| c.checked_mul(stride))
+                    .and_then(|len| s.checked_add(len))
+                    .ok_or_else(|| {
+                        IonError::from(format!(
+                            "{ctx}: item range overflow for block {}",
+                            aref.block_id
+                        ))
+                    })?;
+                (s, e)
+            };
             let raw = block.get(start..end).ok_or_else(|| {
                 IonError::from(format!(
                     "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
@@ -1477,31 +1589,24 @@ fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> Ion
 }
 
 fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<BinaryData> {
+    let bytes = unfilter_array_bytes(raw, dtype, array_filter)?;
     match dtype {
-        FILE_DTYPE_F64 => {
-            if array_filter == FilterType::DeltaShuffle as u8 {
-                let mut out = Vec::with_capacity(raw.len() / 8);
-                delta_filter::decode_f64(raw, &mut out);
-                Ok(BinaryData::F64(out))
-            } else {
-                Ok(BinaryData::F64(raw_to_vec(raw, 8, |c| {
-                    f64::from_le_bytes(c.try_into().unwrap())
-                })?))
-            }
-        }
-        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(raw, 4, |c| {
+        FILE_DTYPE_F64 => Ok(BinaryData::F64(raw_to_vec(&bytes, 8, |c| {
+            f64::from_le_bytes(c.try_into().unwrap())
+        })?)),
+        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(&bytes, 4, |c| {
             f32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(raw, 2, |c| {
+        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(&bytes, 2, |c| {
             u16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(raw, 2, |c| {
+        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(&bytes, 2, |c| {
             i16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(raw, 4, |c| {
+        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(&bytes, 4, |c| {
             i32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(raw, 8, |c| {
+        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(&bytes, 8, |c| {
             i64::from_le_bytes(c.try_into().unwrap())
         })?)),
         _ => Err(IonError::from(format!(
@@ -1752,6 +1857,7 @@ mod tests {
             max_cached_bytes: 1024 * 1024,
             verify_checksums: true,
             parallel: true,
+            decompression_budget: DecompressionBudget::default(),
         };
         let d = Decoder::open(BYTES, config).unwrap();
         assert!(d.spectrum_count() > 0);
@@ -1762,7 +1868,7 @@ mod tests {
         let vals = [1.5f64, 2.5, 3.5];
         let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut buf = Vec::new();
-        decode_into(&mut buf, &raw, 1, 0);
+        decode_into(&mut buf, &raw, 1, 0).unwrap();
         assert_eq!(buf, vals);
     }
 
@@ -1771,7 +1877,7 @@ mod tests {
         let vals = [1.0f32, 2.0];
         let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut buf = Vec::new();
-        decode_into(&mut buf, &raw, 2, 0);
+        decode_into(&mut buf, &raw, 2, 0).unwrap();
         assert!((buf[0] - 1.0).abs() < f64::EPSILON);
         assert!((buf[1] - 2.0).abs() < f64::EPSILON);
     }
@@ -1831,5 +1937,370 @@ mod tests {
                 .iter()
                 .any(|b| b.binary.is_some())
         );
+    }
+
+    #[test]
+    fn mixed_normal_and_oversized_spectra_preserve_order_and_data() {
+        use crate::ion::encoder::encode::Encoder;
+        use crate::{
+            ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
+            mzml::structs::{
+                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+                SpectrumList,
+            },
+        };
+
+        fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: name.to_string(),
+                    value: None,
+                    unit_cv_ref: None,
+                    unit_name: None,
+                    unit_accession: None,
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        fn make_spectrum(id: &str, mz: Vec<f64>, int: Vec<f64>) -> Spectrum {
+            Spectrum {
+                id: id.to_string(),
+                binary_data_array_list: Some(BinaryDataArrayList {
+                    count: Some(2),
+                    binary_data_arrays: vec![
+                        make_bda("MS:1000514", "m/z array", mz),
+                        make_bda("MS:1000515", "intensity array", int),
+                    ],
+                }),
+                ..Default::default()
+            }
+        }
+
+        let small_count_before = 5;
+        let small_count_after = 5;
+        let huge_n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
+
+        let mut expected_spectra: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
+        let mut spectra = Vec::new();
+
+        for i in 0..small_count_before {
+            let mz: Vec<f64> = (0..10).map(|j| 100.0 + i as f64 + j as f64 * 0.1).collect();
+            let int: Vec<f64> = (0..10).map(|j| (i * 10 + j) as f64).collect();
+            let id = format!("small_pre_{i}");
+            spectra.push(make_spectrum(&id, mz.clone(), int.clone()));
+            expected_spectra.push((id, mz, int));
+        }
+
+        let huge_mz: Vec<f64> = (0..huge_n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let huge_int: Vec<f64> = (0..huge_n).map(|i| i as f64 * 10.0).collect();
+        let huge_id = "huge_ms1".to_string();
+        spectra.push(make_spectrum(&huge_id, huge_mz.clone(), huge_int.clone()));
+        expected_spectra.push((huge_id, huge_mz, huge_int));
+
+        for i in 0..small_count_after {
+            let mz: Vec<f64> = (0..10).map(|j| 500.0 + i as f64 + j as f64 * 0.1).collect();
+            let int: Vec<f64> = (0..10).map(|j| (i * 20 + j) as f64).collect();
+            let id = format!("small_post_{i}");
+            spectra.push(make_spectrum(&id, mz.clone(), int.clone()));
+            expected_spectra.push((id, mz, int));
+        }
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        Encoder::new(
+            &mut encoded,
+            EncodingConfig {
+                compression_level: 3,
+                force_f32: false,
+                writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
+            },
+        )
+        .encode(&mzml_in)
+        .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mzml_out = decoder.to_mzml().unwrap();
+        let out_spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+
+        assert_eq!(out_spectra.len(), expected_spectra.len());
+
+        for (out, (expected_id, expected_mz, expected_int)) in
+            out_spectra.iter().zip(expected_spectra.iter())
+        {
+            assert_eq!(&out.id, expected_id);
+            let arrays = out
+                .binary_data_array_list
+                .as_ref()
+                .unwrap()
+                .binary_data_arrays
+                .as_slice();
+            let mz_out = arrays
+                .iter()
+                .find(|a| {
+                    a.cv_params
+                        .iter()
+                        .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+                })
+                .and_then(|a| a.binary.as_ref())
+                .unwrap();
+            let int_out = arrays
+                .iter()
+                .find(|a| {
+                    a.cv_params
+                        .iter()
+                        .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+                })
+                .and_then(|a| a.binary.as_ref())
+                .unwrap();
+            let BinaryData::F64(mz_vec) = mz_out else {
+                panic!("expected F64 mz array for {expected_id}");
+            };
+            let BinaryData::F64(int_vec) = int_out else {
+                panic!("expected F64 intensity array for {expected_id}");
+            };
+            assert_eq!(mz_vec, expected_mz, "mz mismatch for {expected_id}");
+            assert_eq!(
+                int_vec, expected_int,
+                "intensity mismatch for {expected_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_array_roundtrips_with_compression_and_parallel() {
+        use crate::ion::encoder::encode::Encoder;
+        use crate::{
+            ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
+            mzml::structs::{
+                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+                SpectrumList,
+            },
+        };
+
+        let n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
+        let mz_data: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int_data: Vec<f64> = (0..n).map(|i| i as f64 * 10.0).collect();
+
+        fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: name.to_string(),
+                    value: None,
+                    unit_cv_ref: None,
+                    unit_name: None,
+                    unit_accession: None,
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        let spectrum = Spectrum {
+            id: "scan=1".to_string(),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![
+                    make_bda("MS:1000514", "m/z array", mz_data.clone()),
+                    make_bda("MS:1000515", "intensity array", int_data.clone()),
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        Encoder::new(
+            &mut encoded,
+            EncodingConfig {
+                compression_level: 3,
+                force_f32: false,
+                writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
+            },
+        )
+        .encode(&mzml_in)
+        .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mzml_out = decoder.to_mzml().unwrap();
+
+        let spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+        let arrays = spectra[0]
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays
+            .as_slice();
+
+        let mz_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+        let int_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+
+        let BinaryData::F64(mz_vec) = mz_out else {
+            panic!("expected F64 mz array");
+        };
+        let BinaryData::F64(int_vec) = int_out else {
+            panic!("expected F64 intensity array");
+        };
+
+        assert_eq!(mz_vec.len(), n);
+        assert_eq!(int_vec.len(), n);
+        assert_eq!(mz_vec, &mz_data);
+        assert_eq!(int_vec, &int_data);
+    }
+
+    #[test]
+    fn oversized_array_roundtrips_through_encode_decode() {
+        use crate::ion::encoder::encode::Encoder;
+        use crate::{
+            ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
+            mzml::structs::{
+                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+                SpectrumList,
+            },
+        };
+
+        let n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
+        let mz_data: Vec<f64> = (0..n).map(|i| i as f64 * 0.001).collect();
+        let int_data: Vec<f64> = (0..n).map(|i| i as f64 * 10.0).collect();
+
+        fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: name.to_string(),
+                    value: None,
+                    unit_cv_ref: None,
+                    unit_name: None,
+                    unit_accession: None,
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        let spectrum = Spectrum {
+            id: "scan=1".to_string(),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![
+                    make_bda("MS:1000514", "m/z array", mz_data.clone()),
+                    make_bda("MS:1000515", "intensity array", int_data.clone()),
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        Encoder::new(
+            &mut encoded,
+            EncodingConfig {
+                compression_level: 0,
+                force_f32: false,
+                writing_mode: WritingMode::Memory,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: false,
+            },
+        )
+        .encode(&mzml_in)
+        .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mzml_out = decoder.to_mzml().unwrap();
+
+        let spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+        let arrays = spectra[0]
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays
+            .as_slice();
+
+        let mz_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+        let int_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+
+        let BinaryData::F64(mz_vec) = mz_out else {
+            panic!("expected F64 mz array");
+        };
+        let BinaryData::F64(int_vec) = int_out else {
+            panic!("expected F64 intensity array");
+        };
+
+        assert_eq!(mz_vec.len(), n);
+        assert_eq!(int_vec.len(), n);
+        assert_eq!(mz_vec, &mz_data);
+        assert_eq!(int_vec, &int_data);
     }
 }

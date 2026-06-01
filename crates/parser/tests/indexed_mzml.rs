@@ -2,8 +2,7 @@ mod common;
 
 use common::assertions::*;
 use common::test_files;
-use ionic::mzml::bin_to_mzml::bin_to_mzml;
-use ionic::mzml::parse_mzml::parse_indexed_mzml;
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_indexed_mzml};
 
 #[test]
 fn test_file_indices_match_model() {

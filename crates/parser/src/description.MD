@@ -6,9 +6,9 @@ The Header is the "Root" of the file. It is a fixed-size block that contains glo
 | :----- | :--- | :-------------------------------- | :------ | :------------------------------------------------------------------ |
 | 0      | 8    | `file_signature`                  | u8[8]   | Signature: **"START\0\0\0"**.                                       |
 | 8      | 1    | `endianness_flag`                 | u8      | 0 = Little Endian, 1 = Big Endian. Files MUST be little-endian.     |
-| 9      | 2    | `format_version`                  | u16     | File format version. 0 = legacy/unversioned, 1 = current format.    |
+| 9      | 2    | `format_version`                  | u16     | File format version. Policy lives in [`crates/parser/src/ion/format.rs`](./ion/format.rs). |
 | 11     | 1    | `compression_codec`               | u8      | 0 = none, 1 = zstd.                                                 |
-| 12     | 1    | `compression_level`               | u8      | Codec level (e.g. 0–21 for zstd).                                   |
+| 12     | 1    | `compression_level`               | u8      | `0` when codec is none, `1`–`22` when zstd; `compression_codec` is authoritative. |
 | 13     | 1    | `default_array_filter`            | u8      | 0 = none, 1 = byte shuffle.                                         |
 | 14     | 2    | `reserved`                        | u8[2]   | Reserved (0).                                                       |
 | 16     | 8    | `target_block_uncompressed_bytes` | u64     | Target uncompressed bytes per block.                                |
@@ -101,7 +101,8 @@ A contiguous array of 32-byte entries. Each entry represents one array belonging
 |     20 |    4 | `array_type`   | u32   | **MS accession tail** (e.g. `1000515`)                                                                 |
 |     24 |    1 | `dtype`        | u8    | `1=F64, 2=F32, 3=F16, 4=I16, 5=I32, 6=I64`                                                             |
 |     25 |    1 | `array_filter` | u8    | Per-array transform: `0=none`, `2=delta+shuffle` for `dtype=1` (`F64`) only; other dtypes must use `0` |
-|     26 |    6 | `reserved`     | u8[6] | Reserved (0)                                                                                           |
+|     26 |    4 | `encoded_len`  | u32   | Byte length of the packed payload when `array_filter` uses a variable-length packing; `0` means the array is fixed-stride and `len_element` + `dtype` give its size |
+|     30 |    2 | `reserved`     | u8[2] | Reserved (0)                                                                                           |
 
 # Section B0: Chromatogram Summary (128 Bytes)
 
@@ -142,7 +143,8 @@ A contiguous array of 32-byte entries. Each entry represents one array belonging
 |     20 |    4 | `array_type`   | u32   | **MS accession tail** (e.g. `1000515`)                                                                 |
 |     24 |    1 | `dtype`        | u8    | `1=F64, 2=F32, 3=F16, 4=I16, 5=I32, 6=I64`                                                             |
 |     25 |    1 | `array_filter` | u8    | Per-array transform: `0=none`, `2=delta+shuffle` for `dtype=1` (`F64`) only; other dtypes must use `0` |
-|     26 |    6 | `reserved`     | u8[6] | Reserved (0)                                                                                           |
+|     26 |    4 | `encoded_len`  | u32   | Byte length of the packed payload when `array_filter` uses a variable-length packing; `0` means the array is fixed-stride and `len_element` + `dtype` give its size |
+|     30 |    2 | `reserved`     | u8[2] | Reserved (0)                                                                                           |
 
 # Section C & D: Metadata (Spectra and Chromatograms)
 

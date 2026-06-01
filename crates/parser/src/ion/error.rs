@@ -1,10 +1,15 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::{
+    error::Error,
+    fmt::{Display, Formatter},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IonError {
     Msg(String),
     BadDtype { dtype: u8, kind: &'static str },
+    UnsupportedPacking(u8),
+    UnsupportedFormatVersion(u16),
+    UnsupportedCodec(u8),
 }
 
 pub type IonResult<T> = Result<T, IonError>;
@@ -22,6 +27,9 @@ impl Display for IonError {
             Self::BadDtype { dtype, kind } => {
                 write!(f, "unsupported dtype {dtype} for {kind}")
             }
+            Self::UnsupportedPacking(b) => write!(f, "unsupported packing id: {b}"),
+            Self::UnsupportedFormatVersion(v) => write!(f, "unsupported format version: {v}"),
+            Self::UnsupportedCodec(c) => write!(f, "unsupported compression codec: {c}"),
         }
     }
 }

@@ -337,6 +337,5 @@ mod tests {
         assert_eq!(list.count, Some(4));
     }
 
-    use crate::ion::utilities::children_lookup::ChildrenLookup;
-    use crate::ion::utilities::children_lookup::DefaultMetadataPolicy;
+    use crate::ion::utilities::children_lookup::{ChildrenLookup, DefaultMetadataPolicy};
 }

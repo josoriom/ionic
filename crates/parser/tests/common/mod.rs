@@ -10,13 +10,10 @@ pub mod test_files;
 
 #[allow(unused_imports)]
 pub(crate) use binary_ext::BinaryDataExt;
-use ionic::ion::DecoderConfig;
-
-use std::collections::BTreeSet;
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeSet, fs, path::PathBuf, sync::OnceLock};
 
 use ionic::{
-    ion::{Decoder, IonResult, WritingMode, encode},
+    ion::{Decoder, DecoderConfig, IonResult, WritingMode, encode},
     mzml::{
         parse_mzml::{parse_indexed_mzml, parse_mzml},
         structs::*,

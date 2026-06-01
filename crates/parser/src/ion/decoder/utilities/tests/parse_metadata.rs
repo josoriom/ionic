@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use crate::ion::{
+    DecompressionBudget,
     attr_meta::*,
     decoder::decode::{Metadatum, MetadatumValue},
     utilities::{parse_header, parse_metadata},
@@ -55,7 +56,14 @@ fn parse_metadata_section_from_test_file(
     };
 
     let meta = parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
+        slice,
+        item_count,
+        meta_count,
+        num_count,
+        str_count,
+        codec_id,
+        expected,
+        DecompressionBudget::default(),
     )
     .expect("parse_metadata failed");
 

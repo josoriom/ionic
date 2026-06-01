@@ -24,6 +24,10 @@ pub(crate) const HIGHEST_OBSERVED_WAVELENGTH: u32 = 1_000_618;
 pub(crate) const LOWEST_OBSERVED_WAVELENGTH: u32 = 1_000_619;
 pub(crate) const LOWEST_ION_MOBILITY: u32 = 1_003_437;
 pub(crate) const HIGHEST_ION_MOBILITY: u32 = 1_003_438;
+pub(crate) const ION_MOBILITY_ARRAY: u32 = 1_002_893;
+pub(crate) const MEAN_ION_MOBILITY_ARRAY: u32 = 1_002_816;
+pub(crate) const RAW_ION_MOBILITY_ARRAY: u32 = 1_003_007;
+pub(crate) const RAW_ION_MOBILITY_DRIFT_TIME_ARRAY: u32 = 1_003_153;
 
 pub(crate) const ACC_MS_LEVEL: &str = "MS:1000511";
 

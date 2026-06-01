@@ -84,6 +84,8 @@ fn parse_binary_data_array<'a, P: MetadataPolicy>(
         cv_params,
         user_params,
         binary: None,
+        pending_base64: None,
+        pending_zlib: false,
         referenceable_param_group_refs: children_lookup
             .ids_for(array_id, TagId::ReferenceableParamGroupRef)
             .iter()

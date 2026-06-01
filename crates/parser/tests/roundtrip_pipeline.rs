@@ -3,8 +3,7 @@ mod common;
 use common::assertions::*;
 use common::test_files;
 use common::{decode_ion, encode_to_ion, semantic_fingerprint};
-use ionic::mzml::bin_to_mzml::bin_to_mzml;
-use ionic::mzml::parse_mzml::parse_mzml;
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml};
 
 #[test]
 fn full_pipeline_tiny11() {
