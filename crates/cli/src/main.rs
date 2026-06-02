@@ -22,7 +22,7 @@ use ionic::{
     ion::{
         DecoderConfig, FileEncoderOutput, Ion,
         encoder::encode::{Encoder, EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
-        format::FILE_TRAILER,
+        format::{CURRENT_VERSION, FILE_TRAILER, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION},
     },
     mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
@@ -77,6 +77,9 @@ fn cli_styles() -> Styles {
 struct Cli {
     #[arg(short = 'v', long = "version", action = ArgAction::SetTrue, global = true)]
     version: bool,
+
+    #[arg(long = "version-json", action = ArgAction::SetTrue, global = true)]
+    version_json: bool,
 
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -211,6 +214,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if cli.version_json {
+        print_version_json();
+        return Ok(());
+    }
+
     match cli.cmd {
         Some(Cmd::Convert(cmd)) => convert(cmd).map_err(|e| e.into()),
         Some(Cmd::Cat(cmd)) => cat(cmd).map_err(|e| e.into()),
@@ -222,6 +230,21 @@ fn print_json_full<T: Serialize>(v: &T) -> Result<(), String> {
     let s = serde_json::to_string_pretty(v).map_err(|e| format!("json failed: {e}"))?;
     println!("{s}");
     Ok(())
+}
+
+fn print_version_json() {
+    let report = serde_json::json!({
+        "package": VERSION,
+        "format": {
+            "current": CURRENT_VERSION,
+            "min_supported": MIN_SUPPORTED_VERSION,
+            "max_supported": MAX_SUPPORTED_VERSION,
+        }
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_default()
+    );
 }
 
 fn cat(cmd: CatArgs) -> Result<(), String> {

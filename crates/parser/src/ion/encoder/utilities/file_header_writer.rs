@@ -18,6 +18,9 @@ use crate::ion::utilities::parse_header::{
     HEADER_SPEC_META_STRING_COUNT, HEADER_SPEC_META_UNCOMPRESSED_SIZE, HEADER_SPECTRUM_BLOCK_COUNT,
     HEADER_SPECTRUM_COUNT, HEADER_TARGET_BLOCK_SIZE, HEADER_TOTAL_FILE_SIZE,
 };
+use crate::ion::utilities::parse_header::{
+    HEADER_CHROM_META_GROUP_COUNT, HEADER_META_GROUP_SIZE, HEADER_SPEC_META_GROUP_COUNT,
+};
 
 #[derive(Default)]
 pub(crate) struct FileHeader {
@@ -72,6 +75,10 @@ pub(crate) struct FileHeader {
     pub(crate) len_chrom_summary: u64,
 
     pub(crate) total_file_size: u64,
+
+    pub(crate) meta_group_size: u32,
+    pub(crate) spec_meta_group_count: u64,
+    pub(crate) chrom_meta_group_count: u64,
 
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
@@ -196,6 +203,18 @@ impl FileHeader {
         patch_u64_at(buf, HEADER_LEN_CHROM_SUMMARY, self.len_chrom_summary);
 
         patch_u64_at(buf, HEADER_TOTAL_FILE_SIZE, self.total_file_size);
+
+        patch_u32_at(buf, HEADER_META_GROUP_SIZE, self.meta_group_size);
+        patch_u64_at(
+            buf,
+            HEADER_SPEC_META_GROUP_COUNT,
+            self.spec_meta_group_count,
+        );
+        patch_u64_at(
+            buf,
+            HEADER_CHROM_META_GROUP_COUNT,
+            self.chrom_meta_group_count,
+        );
 
         patch_u32_at(buf, HEADER_SPEC_META_CRC32, self.spec_meta_crc32);
         patch_u32_at(buf, HEADER_CHROM_META_CRC32, self.chrom_meta_crc32);

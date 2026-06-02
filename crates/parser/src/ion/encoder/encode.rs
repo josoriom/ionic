@@ -35,12 +35,12 @@ pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1 * 1024 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
-pub(crate) const FILE_DTYPE_F64: u8 = 1;
-pub(crate) const FILE_DTYPE_F32: u8 = 2;
-pub(crate) const FILE_DTYPE_F16: u8 = 3;
-pub(crate) const FILE_DTYPE_I16: u8 = 4;
-pub(crate) const FILE_DTYPE_I32: u8 = 5;
-pub(crate) const FILE_DTYPE_I64: u8 = 6;
+pub(crate) const FILE_DTYPE_F64: u8 = Dtype::F64 as u8;
+pub(crate) const FILE_DTYPE_F32: u8 = Dtype::F32 as u8;
+pub(crate) const FILE_DTYPE_F16: u8 = Dtype::F16 as u8;
+pub(crate) const FILE_DTYPE_I16: u8 = Dtype::I16 as u8;
+pub(crate) const FILE_DTYPE_I32: u8 = Dtype::I32 as u8;
+pub(crate) const FILE_DTYPE_I64: u8 = Dtype::I64 as u8;
 
 const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
@@ -386,6 +386,10 @@ impl<'o> Encoder<'o> {
             spec_meta_uncompressed_size: compressed.spectrum_uncompressed_size,
             chrom_meta_uncompressed_size: compressed.chromatogram_uncompressed_size,
             global_meta_uncompressed_size: compressed.global_uncompressed_size,
+
+            meta_group_size: compressed.group_size,
+            spec_meta_group_count: compressed.spectrum_group_count,
+            chrom_meta_group_count: compressed.chromatogram_group_count,
 
             off_spec_summary: info.off_spec_summary,
             len_spec_summary: info.len_spec_summary,

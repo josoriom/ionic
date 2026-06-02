@@ -70,6 +70,9 @@ pub(crate) fn parse_global_metadata(
     let n_cvs = read_u16_le_at(bytes, &mut read_pos, "n_cvs")? as u64;
     let n_run = read_u16_le_at(bytes, &mut read_pos, "n_run")? as u64;
 
+    if bytes[read_pos..read_pos + 14].iter().any(|&b| b != 0) {
+        return Err("global metadata: reserved header bytes must be zero".into());
+    }
     read_pos += 14;
 
     let derived_item_count = [

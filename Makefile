@@ -15,5 +15,7 @@ build:
 test:
 	cargo test --workspace
 
-release: sync
-	$(MAKE) -C crates/cli all
+release: check
+	@version=$$(cargo run -p xtask --quiet -- package-version) && \
+	$(MAKE) -C crates/cli all PACKAGE_VERSION=$$version
+	cargo run -p xtask --quiet -- manifest

@@ -3,7 +3,7 @@ use crate::ion::{
     format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, allow_compression, allow_version},
 };
 
-const RESERVED_EXT_SIZE: usize = 656;
+const RESERVED_EXT_SIZE: usize = 632;
 const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
 
 pub const HEADER_FORMAT_VERSION_OFFSET: usize = 9;
@@ -27,6 +27,9 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
     let h = &bytes[..HEADER_SIZE];
 
     let file_signature = <[u8; 8]>::try_from(&h[0..8]).unwrap();
+    if file_signature != FILE_SIGNATURE {
+        return Err("header: invalid file signature".into());
+    }
     let endianness_flag = h[8];
     if endianness_flag != 0 {
         return Err("header: expected little-endian endianness_flag=0".into());
@@ -210,7 +213,19 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         <[u8; 8]>::try_from(&h[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8]).unwrap(),
     );
 
-    let reserved_ext = <[u8; RESERVED_EXT_SIZE]>::try_from(&h[352..1008]).unwrap();
+    let meta_group_size = u32::from_le_bytes(
+        <[u8; 4]>::try_from(&h[HEADER_META_GROUP_SIZE..HEADER_META_GROUP_SIZE + 4]).unwrap(),
+    );
+    let spec_meta_group_count = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_SPEC_META_GROUP_COUNT..HEADER_SPEC_META_GROUP_COUNT + 8])
+            .unwrap(),
+    );
+    let chrom_meta_group_count = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_CHROM_META_GROUP_COUNT..HEADER_CHROM_META_GROUP_COUNT + 8])
+            .unwrap(),
+    );
+
+    let reserved_ext = <[u8; RESERVED_EXT_SIZE]>::try_from(&h[376..1008]).unwrap();
     if reserved_ext.iter().any(|&b| b != 0) {
         return Err("header: reserved_ext must be all zeros".into());
     }
@@ -276,6 +291,9 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         off_chrom_summary,
         len_chrom_summary,
         total_file_size,
+        meta_group_size,
+        spec_meta_group_count,
+        chrom_meta_group_count,
         reserved_ext,
         spec_meta_crc32,
         chrom_meta_crc32,
@@ -346,6 +364,9 @@ pub(crate) struct Header {
     pub(crate) chrom_meta_uncompressed_bytes: u64,
     pub(crate) global_meta_uncompressed_bytes: u64,
     pub(crate) total_file_size: u64,
+    pub(crate) meta_group_size: u32,
+    pub(crate) spec_meta_group_count: u64,
+    pub(crate) chrom_meta_group_count: u64,
     pub(crate) reserved_ext: [u8; RESERVED_EXT_SIZE],
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
@@ -398,6 +419,9 @@ pub(crate) const HEADER_SPEC_META_UNCOMPRESSED_SIZE: usize = 320;
 pub(crate) const HEADER_CHROM_META_UNCOMPRESSED_SIZE: usize = 328;
 pub(crate) const HEADER_GLOBAL_META_UNCOMPRESSED_SIZE: usize = 336;
 pub(crate) const HEADER_TOTAL_FILE_SIZE: usize = 344;
+pub(crate) const HEADER_META_GROUP_SIZE: usize = 352;
+pub(crate) const HEADER_SPEC_META_GROUP_COUNT: usize = 360;
+pub(crate) const HEADER_CHROM_META_GROUP_COUNT: usize = 368;
 pub(crate) const HEADER_SPEC_META_CRC32: usize = 1008;
 pub(crate) const HEADER_CHROM_META_CRC32: usize = 1012;
 pub(crate) const HEADER_GLOBAL_META_CRC32: usize = 1016;
@@ -521,6 +545,11 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         if len > 0 && off % 8 != 0 {
             failures.push(format!(
                 "condition 9: {name} offset ({off}) is not 8-byte aligned"
+            ));
+        }
+        if len > 0 && off < HEADER_SIZE as u64 {
+            failures.push(format!(
+                "condition 9: {name} offset ({off}) is inside the {HEADER_SIZE}-byte header"
             ));
         }
     }

@@ -1,8 +1,8 @@
 use crate::ion::{IonError, IonResult};
 
 pub const HEADER_SIZE: usize = 1024;
-pub const FILE_SIGNATURE: [u8; 8] = *b"START\0\0\0";
-pub const FILE_TRAILER: [u8; 8] = *b"END\0\0\0\0\0";
+pub const FILE_SIGNATURE: [u8; 8] = *b"IONIC\0\0\0";
+pub const FILE_TRAILER: [u8; 8] = *b"CINOI\0\0\0";
 
 pub use crate::ion::version_generated::{
     CURRENT_VERSION, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION,

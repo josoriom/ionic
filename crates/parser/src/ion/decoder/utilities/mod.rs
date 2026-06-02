@@ -2,8 +2,9 @@ pub(crate) mod parse_header;
 #[allow(unused_imports)]
 pub(crate) use parse_header::parse_header;
 pub(crate) mod common;
+pub(crate) mod meta_group_reader;
 pub(crate) mod parse_metadata;
-pub(crate) use parse_metadata::parse_metadata;
+pub(crate) use meta_group_reader::MetaGroupReader;
 pub(crate) mod parse_binary_data_array_list;
 pub(crate) use parse_binary_data_array_list::parse_binary_data_array_list;
 pub(crate) mod parse_cv_and_user_params;

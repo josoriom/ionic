@@ -29,6 +29,7 @@ use crate::{
         filter_summary::{ChromatogramSummary, SpectrumSummary},
         packing::PackingId,
         utilities::{
+            MetaGroupReader,
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
             container_view::{ContainerAccess, ContainerView, DefaultProcessor},
@@ -37,8 +38,8 @@ use crate::{
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
             parse_header::{Header, parse_header},
-            parse_instrument_list, parse_metadata, parse_referenceable_param_group_list,
-            parse_sample_list, parse_scan_settings_list, parse_software_list, parse_spectrum_list,
+            parse_instrument_list, parse_referenceable_param_group_list, parse_sample_list,
+            parse_scan_settings_list, parse_software_list, parse_spectrum_list,
             spectrum_source::{
                 ScanSource, ScanSummary, f16_bits_to_f64, load_scan_from_spectra,
                 summary_from_spectra, summary_from_spectrum,
@@ -131,6 +132,7 @@ pub struct Decoder<'a> {
     int_buf: Vec<f64>,
     parallel: bool,
     decompression_budget: DecompressionBudget,
+    verify_checksums: bool,
 }
 
 #[allow(dead_code)]
@@ -254,6 +256,7 @@ impl<'a> Decoder<'a> {
             int_buf: Vec::new(),
             parallel: config.parallel,
             decompression_budget: config.decompression_budget,
+            verify_checksums: config.verify_checksums,
         })
     }
 
@@ -422,37 +425,43 @@ impl<'a> Decoder<'a> {
     }
 
     pub(crate) fn spectrum_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        parse_metadata(
+        self.spectrum_meta_reader()?.read_all()
+    }
+
+    pub(crate) fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
+        self.chromatogram_meta_reader()?.read_all()
+    }
+
+    fn spectrum_meta_reader(&self) -> IonResult<MetaGroupReader<'a>> {
+        MetaGroupReader::new(
             slice_at(
                 self.bytes,
                 self.header.off_spec_meta,
                 self.header.len_spec_meta,
                 "spec_meta",
             )?,
+            self.header.spec_meta_group_count,
+            self.header.meta_group_size,
             self.header.spectrum_count,
-            self.header.spec_meta_count,
-            self.header.spec_meta_numeric_count,
-            self.header.spec_meta_string_count,
             self.header.compression_codec,
-            self.header.spec_meta_uncompressed_bytes as usize,
+            self.verify_checksums,
             self.decompression_budget,
         )
     }
 
-    pub(crate) fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        parse_metadata(
+    fn chromatogram_meta_reader(&self) -> IonResult<MetaGroupReader<'a>> {
+        MetaGroupReader::new(
             slice_at(
                 self.bytes,
                 self.header.off_chrom_meta,
                 self.header.len_chrom_meta,
                 "chrom_meta",
             )?,
+            self.header.chrom_meta_group_count,
+            self.header.meta_group_size,
             self.header.chrom_count,
-            self.header.chrom_meta_count,
-            self.header.chrom_meta_numeric_count,
-            self.header.chrom_meta_string_count,
             self.header.compression_codec,
-            self.header.chrom_meta_uncompressed_bytes as usize,
+            self.verify_checksums,
             self.decompression_budget,
         )
     }

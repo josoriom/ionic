@@ -1,6 +1,5 @@
 mod common;
 
-use common::BinaryDataExt;
 use common::assertions::*;
 use common::helpers::*;
 use common::test_files;

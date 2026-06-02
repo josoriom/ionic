@@ -28,6 +28,10 @@ use crate::{
     },
 };
 
+use crate::ion::meta_groups::{
+    METADATA_GROUP_SIZE, MetaGroupEntry, group_count_for, item_range_of_group, write_group_header,
+};
+
 const USER_PARAM_NAME_VALUE_SEPARATOR: char = '\0';
 
 pub(crate) struct MetaCollector {
@@ -116,6 +120,9 @@ pub(crate) struct CompressedMetaSections {
     pub(crate) spectrum_bytes: Vec<u8>,
     pub(crate) chromatogram_bytes: Vec<u8>,
     pub(crate) global_bytes: Vec<u8>,
+    pub(crate) spectrum_group_count: u64,
+    pub(crate) chromatogram_group_count: u64,
+    pub(crate) group_size: u32,
     pub(crate) spectrum_uncompressed_size: u64,
     pub(crate) chromatogram_uncompressed_size: u64,
     pub(crate) global_uncompressed_size: u64,
@@ -129,18 +136,125 @@ impl CompressedMetaSections {
         counts: &GlobalCounts,
         level: u8,
     ) -> Self {
-        let raw_s = serialize_packed_meta(spectrum_meta);
-        let raw_c = serialize_packed_meta(chrom_meta);
+        let group_size = METADATA_GROUP_SIZE;
+        let spectrum = build_grouped_section(spectrum_meta, group_size, level);
+        let chromatogram = build_grouped_section(chrom_meta, group_size, level);
         let raw_g = serialize_global_meta_with_counts(counts, global_meta);
         Self {
-            spectrum_uncompressed_size: raw_s.len() as u64,
-            chromatogram_uncompressed_size: raw_c.len() as u64,
+            spectrum_uncompressed_size: spectrum.uncompressed_size,
+            chromatogram_uncompressed_size: chromatogram.uncompressed_size,
             global_uncompressed_size: raw_g.len() as u64,
-            spectrum_bytes: compress_bytes_if_enabled(raw_s, level),
-            chromatogram_bytes: compress_bytes_if_enabled(raw_c, level),
+            spectrum_bytes: spectrum.bytes,
+            chromatogram_bytes: chromatogram.bytes,
             global_bytes: compress_bytes_if_enabled(raw_g, level),
+            spectrum_group_count: spectrum.group_count,
+            chromatogram_group_count: chromatogram.group_count,
+            group_size,
         }
     }
+}
+
+struct GroupedSection {
+    bytes: Vec<u8>,
+    group_count: u64,
+    uncompressed_size: u64,
+}
+
+fn build_grouped_section(meta: &PackedMeta, group_size: u32, level: u8) -> GroupedSection {
+    let item_count = (meta.index_offsets.len() - 1) as u64;
+    let group_count = group_count_for(item_count, group_size);
+
+    let mut payloads = Vec::new();
+    let mut directory = Vec::with_capacity(group_count as usize);
+    let mut uncompressed_size = 0u64;
+
+    for group_index in 0..group_count {
+        let (item_start, item_end) = item_range_of_group(group_index, group_size, item_count);
+        let raw = serialize_group(meta, item_start as usize, item_end as usize);
+        let raw_size = raw.len() as u64;
+        uncompressed_size += raw_size;
+        let payload_offset = payloads.len() as u64;
+        let compressed = compress_bytes_if_enabled(raw, level);
+        directory.push(MetaGroupEntry {
+            payload_offset,
+            payload_size: compressed.len() as u64,
+            uncompressed_size: raw_size,
+            checksum: crc32fast::hash(&compressed),
+        });
+        payloads.extend_from_slice(&compressed);
+    }
+
+    let mut bytes = payloads;
+    for entry in &directory {
+        entry.write_into(&mut bytes);
+    }
+    GroupedSection {
+        bytes,
+        group_count,
+        uncompressed_size,
+    }
+}
+
+fn serialize_group(meta: &PackedMeta, item_start: usize, item_end: usize) -> Vec<u8> {
+    let row_start = meta.index_offsets[item_start] as usize;
+    let row_end = meta.index_offsets[item_end] as usize;
+    let meta_count = row_end - row_start;
+    let first_row = meta.index_offsets[item_start];
+
+    let mut local_index_offsets = Vec::with_capacity(item_end - item_start + 1);
+    for item in item_start..=item_end {
+        local_index_offsets.push(meta.index_offsets[item] - first_row);
+    }
+
+    let mut numeric_values = Vec::new();
+    let mut string_offsets = Vec::new();
+    let mut string_lengths = Vec::new();
+    let mut string_bytes = Vec::new();
+    let mut value_indices = Vec::with_capacity(meta_count);
+    for row in row_start..row_end {
+        match meta.value_kinds[row] {
+            0 => {
+                let source = meta.value_indices[row] as usize;
+                value_indices.push(numeric_values.len() as u32);
+                numeric_values.push(meta.numeric_values[source]);
+            }
+            1 => {
+                let source = meta.value_indices[row] as usize;
+                let offset = meta.string_offsets[source] as usize;
+                let length = meta.string_lengths[source] as usize;
+                value_indices.push(string_offsets.len() as u32);
+                string_offsets.push(string_bytes.len() as u32);
+                string_lengths.push(length as u32);
+                string_bytes.extend_from_slice(&meta.string_bytes[offset..offset + length]);
+            }
+            _ => {
+                value_indices.push(0);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    write_group_header(
+        &mut out,
+        meta_count as u32,
+        numeric_values.len() as u32,
+        string_offsets.len() as u32,
+    );
+    write_u32_slice_le(&mut out, &local_index_offsets);
+    write_u32_slice_le(&mut out, &meta.ids[row_start..row_end]);
+    write_u32_slice_le(&mut out, &meta.parent_indices[row_start..row_end]);
+    out.extend_from_slice(&meta.tag_ids[row_start..row_end]);
+    out.extend_from_slice(&meta.ref_codes[row_start..row_end]);
+    write_u32_slice_le(&mut out, &meta.accession_numbers[row_start..row_end]);
+    out.extend_from_slice(&meta.unit_ref_codes[row_start..row_end]);
+    write_u32_slice_le(&mut out, &meta.unit_accession_numbers[row_start..row_end]);
+    out.extend_from_slice(&meta.value_kinds[row_start..row_end]);
+    write_u32_slice_le(&mut out, &value_indices);
+    write_f64_slice_le(&mut out, &numeric_values);
+    write_u32_slice_le(&mut out, &string_offsets);
+    write_u32_slice_le(&mut out, &string_lengths);
+    out.extend_from_slice(&string_bytes);
+    out
 }
 
 struct IdAllocator(u32);
@@ -1790,9 +1904,11 @@ mod tests {
             n_cvs: 0,
         };
         let compressed = CompressedMetaSections::build(&meta, &meta, &meta, &counts, 0);
-        let raw_s = serialize_packed_meta(&meta);
-        assert_eq!(compressed.spectrum_bytes, raw_s);
-        assert_eq!(compressed.spectrum_uncompressed_size, raw_s.len() as u64);
+        assert_eq!(compressed.group_size, METADATA_GROUP_SIZE);
+        assert_eq!(compressed.spectrum_group_count, 0);
+        assert!(compressed.spectrum_bytes.is_empty());
+        let raw_global = serialize_global_meta_with_counts(&counts, &meta);
+        assert_eq!(compressed.global_bytes, raw_global);
     }
 
     #[test]
