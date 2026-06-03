@@ -3,6 +3,7 @@ use std::{fs, path::PathBuf};
 use crate::ion::{
     DecompressionBudget,
     decoder::decode::Metadatum,
+    meta_groups::MetaTotals,
     utilities::{MetaGroupReader, parse_header},
 };
 
@@ -21,6 +22,12 @@ pub(super) fn spectra_metadata(path: &str) -> Vec<Metadatum> {
         header.spec_meta_group_count,
         header.meta_group_size,
         header.spectrum_count,
+        MetaTotals {
+            rows: header.spec_meta_count,
+            numeric: header.spec_meta_numeric_count,
+            string: header.spec_meta_string_count,
+            uncompressed: header.spec_meta_uncompressed_bytes,
+        },
         header.compression_codec,
         true,
         DecompressionBudget::default(),
@@ -41,6 +48,12 @@ pub(super) fn chromatograms_metadata(path: &str) -> Vec<Metadatum> {
         header.chrom_meta_group_count,
         header.meta_group_size,
         header.chrom_count,
+        MetaTotals {
+            rows: header.chrom_meta_count,
+            numeric: header.chrom_meta_numeric_count,
+            string: header.chrom_meta_string_count,
+            uncompressed: header.chrom_meta_uncompressed_bytes,
+        },
         header.compression_codec,
         true,
         DecompressionBudget::default(),

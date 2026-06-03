@@ -667,4 +667,61 @@ mod inline_tests {
         let bytes = [0u8; HEADER_FORMAT_VERSION_OFFSET + 2];
         assert_eq!(get_version_from_header(&bytes), Some(0));
     }
+
+    #[test]
+    fn header_offsets_match_format_contract() {
+        assert_eq!(HEADER_FORMAT_VERSION_OFFSET, 9);
+        assert_eq!(HEADER_CODEC_ID, 11);
+        assert_eq!(HEADER_COMPRESSION_LEVEL, 12);
+        assert_eq!(HEADER_ARRAY_FILTER_ID, 13);
+        assert_eq!(HEADER_TARGET_BLOCK_SIZE, 16);
+        assert_eq!(HEADER_OFF_SPEC_SUMMARY, 24);
+        assert_eq!(HEADER_LEN_SPEC_SUMMARY, 32);
+        assert_eq!(HEADER_OFFSET_SPEC_ENTRIES, 40);
+        assert_eq!(HEADER_LEN_SPEC_ENTRIES, 48);
+        assert_eq!(HEADER_OFFSET_SPEC_ARRAYREFS, 56);
+        assert_eq!(HEADER_LEN_SPEC_ARRAYREFS, 64);
+        assert_eq!(HEADER_OFF_CHROM_SUMMARY, 72);
+        assert_eq!(HEADER_LEN_CHROM_SUMMARY, 80);
+        assert_eq!(HEADER_OFFSET_CHROM_ENTRIES, 88);
+        assert_eq!(HEADER_LEN_CHROM_ENTRIES, 96);
+        assert_eq!(HEADER_OFFSET_CHROM_ARRAYREFS, 104);
+        assert_eq!(HEADER_LEN_CHROM_ARRAYREFS, 112);
+        assert_eq!(HEADER_OFFSET_SPEC_META, 120);
+        assert_eq!(HEADER_LEN_SPEC_META, 128);
+        assert_eq!(HEADER_OFFSET_CHROM_META, 136);
+        assert_eq!(HEADER_LEN_CHROM_META, 144);
+        assert_eq!(HEADER_OFFSET_GLOBAL_META, 152);
+        assert_eq!(HEADER_LEN_GLOBAL_META, 160);
+        assert_eq!(HEADER_OFFSET_PACKED_SPECTRA, 168);
+        assert_eq!(HEADER_LEN_PACKED_SPECTRA, 176);
+        assert_eq!(HEADER_OFFSET_PACKED_CHROMS, 184);
+        assert_eq!(HEADER_LEN_PACKED_CHROMS, 192);
+        assert_eq!(HEADER_SPECTRUM_BLOCK_COUNT, 200);
+        assert_eq!(HEADER_CHROM_BLOCK_COUNT, 208);
+        assert_eq!(HEADER_SPECTRUM_COUNT, 216);
+        assert_eq!(HEADER_CHROM_COUNT, 224);
+        assert_eq!(HEADER_SPEC_META_ROW_COUNT, 232);
+        assert_eq!(HEADER_SPEC_META_NUMERIC_COUNT, 240);
+        assert_eq!(HEADER_SPEC_META_STRING_COUNT, 248);
+        assert_eq!(HEADER_CHROM_META_ROW_COUNT, 256);
+        assert_eq!(HEADER_CHROM_META_NUMERIC_COUNT, 264);
+        assert_eq!(HEADER_CHROM_META_STRING_COUNT, 272);
+        assert_eq!(HEADER_GLOBAL_META_ROW_COUNT, 280);
+        assert_eq!(HEADER_GLOBAL_META_NUMERIC_COUNT, 288);
+        assert_eq!(HEADER_GLOBAL_META_STRING_COUNT, 296);
+        assert_eq!(HEADER_SPEC_ARRAY_TYPE_COUNT, 304);
+        assert_eq!(HEADER_CHROM_ARRAY_TYPE_COUNT, 312);
+        assert_eq!(HEADER_SPEC_META_UNCOMPRESSED_SIZE, 320);
+        assert_eq!(HEADER_CHROM_META_UNCOMPRESSED_SIZE, 328);
+        assert_eq!(HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, 336);
+        assert_eq!(HEADER_TOTAL_FILE_SIZE, 344);
+        assert_eq!(HEADER_META_GROUP_SIZE, 352);
+        assert_eq!(HEADER_SPEC_META_GROUP_COUNT, 360);
+        assert_eq!(HEADER_CHROM_META_GROUP_COUNT, 368);
+        assert_eq!(HEADER_SPEC_META_CRC32, 1008);
+        assert_eq!(HEADER_CHROM_META_CRC32, 1012);
+        assert_eq!(HEADER_GLOBAL_META_CRC32, 1016);
+        assert_eq!(HEADER_CRC32, 1020);
+    }
 }

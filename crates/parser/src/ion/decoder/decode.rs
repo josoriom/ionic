@@ -17,6 +17,7 @@ use crate::{
     encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
     ion::{
         IonError, IonResult,
+        meta_groups::MetaTotals,
         attr_meta::{
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
@@ -258,6 +259,12 @@ impl<'a> Decoder<'a> {
             header.spec_meta_group_count,
             header.meta_group_size,
             header.spectrum_count,
+            MetaTotals {
+                rows: header.spec_meta_count,
+                numeric: header.spec_meta_numeric_count,
+                string: header.spec_meta_string_count,
+                uncompressed: header.spec_meta_uncompressed_bytes,
+            },
             header.compression_codec,
             config.verify_checksums,
             config.decompression_budget,
@@ -273,6 +280,12 @@ impl<'a> Decoder<'a> {
             header.chrom_meta_group_count,
             header.meta_group_size,
             header.chrom_count,
+            MetaTotals {
+                rows: header.chrom_meta_count,
+                numeric: header.chrom_meta_numeric_count,
+                string: header.chrom_meta_string_count,
+                uncompressed: header.chrom_meta_uncompressed_bytes,
+            },
             header.compression_codec,
             config.verify_checksums,
             config.decompression_budget,

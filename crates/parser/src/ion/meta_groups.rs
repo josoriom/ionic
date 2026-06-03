@@ -30,6 +30,13 @@ impl MetaGroupEntry {
     }
 }
 
+pub(crate) struct MetaTotals {
+    pub(crate) rows: u64,
+    pub(crate) numeric: u64,
+    pub(crate) string: u64,
+    pub(crate) uncompressed: u64,
+}
+
 pub(crate) fn group_count_for(item_count: u64, group_size: u32) -> u64 {
     let group_size = group_size as u64;
     if group_size == 0 || item_count == 0 {

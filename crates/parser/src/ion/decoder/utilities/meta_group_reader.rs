@@ -12,8 +12,8 @@ use crate::{
     ion::{
         IonError, IonResult,
         meta_groups::{
-            META_GROUP_ENTRY_SIZE, META_GROUP_HEADER_SIZE, MetaGroupEntry, group_count_for,
-            group_of_item, item_range_of_group, read_group_header,
+            META_GROUP_ENTRY_SIZE, META_GROUP_HEADER_SIZE, MetaGroupEntry, MetaTotals,
+            group_count_for, group_of_item, item_range_of_group, read_group_header,
         },
     },
 };
@@ -23,10 +23,27 @@ pub(crate) struct MetaGroupReader<'a> {
     directory: Vec<MetaGroupEntry>,
     group_size: u32,
     item_count: u64,
+    totals: MetaTotals,
+    payload_end: usize,
     compression_codec: u8,
     verify_checksums: bool,
     budget: DecompressionBudget,
     cache: GroupCache,
+}
+
+#[derive(Default)]
+struct MetaCounts {
+    rows: u64,
+    numeric: u64,
+    string: u64,
+}
+
+impl MetaCounts {
+    fn add(&mut self, rows: u32, numeric: u32, string: u32) {
+        self.rows += rows as u64;
+        self.numeric += numeric as u64;
+        self.string += string as u64;
+    }
 }
 
 struct CachedGroup {
@@ -48,6 +65,7 @@ impl<'a> MetaGroupReader<'a> {
         group_count: u64,
         group_size: u32,
         item_count: u64,
+        totals: MetaTotals,
         compression_codec: u8,
         verify_checksums: bool,
         budget: DecompressionBudget,
@@ -62,11 +80,25 @@ impl<'a> MetaGroupReader<'a> {
             ));
         }
         let directory = read_directory(section, group_count)?;
+        let payload_end = section.len() - directory.len() * META_GROUP_ENTRY_SIZE;
+        let mut uncompressed_sum: u64 = 0;
+        for entry in &directory {
+            uncompressed_sum = uncompressed_sum
+                .checked_add(entry.uncompressed_size)
+                .ok_or_else(|| IonError::from("metadata groups: uncompressed total overflows"))?;
+        }
+        if uncompressed_sum != totals.uncompressed {
+            return Err(IonError::from(
+                "metadata groups: uncompressed total does not match header",
+            ));
+        }
         Ok(Self {
             section,
             directory,
             group_size,
             item_count,
+            totals,
+            payload_end,
             compression_codec,
             verify_checksums,
             budget,
@@ -81,11 +113,27 @@ impl<'a> MetaGroupReader<'a> {
 
     pub(crate) fn read_all(&self) -> IonResult<Vec<Metadatum>> {
         let mut rows = Vec::new();
+        let mut seen = MetaCounts::default();
         for group_index in 0..self.directory.len() as u64 {
             let bytes = self.decode_group(group_index)?;
+            let (meta_count, numeric_count, string_count) = read_group_header(&bytes)?;
+            seen.add(meta_count, numeric_count, string_count);
             rows.extend(self.parse_group(&bytes, group_index)?);
         }
+        self.check_totals(&seen)?;
         Ok(rows)
+    }
+
+    fn check_totals(&self, seen: &MetaCounts) -> IonResult<()> {
+        if seen.rows != self.totals.rows
+            || seen.numeric != self.totals.numeric
+            || seen.string != self.totals.string
+        {
+            return Err(IonError::from(
+                "metadata groups: row totals do not match header",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn read_item(&mut self, item_index: u64) -> IonResult<Vec<Metadatum>> {
@@ -179,6 +227,11 @@ impl<'a> MetaGroupReader<'a> {
         let end = start
             .checked_add(size)
             .ok_or_else(|| IonError::from("metadata groups: payload overflows"))?;
+        if end > self.payload_end {
+            return Err(IonError::from(
+                "metadata groups: payload overlaps the directory",
+            ));
+        }
         self.section
             .get(start..end)
             .ok_or_else(|| IonError::from("metadata groups: payload out of bounds"))
@@ -232,6 +285,16 @@ mod tests {
     use super::MetaGroupReader;
     use crate::ion::DecompressionBudget;
     use crate::ion::format::CODEC_NONE;
+    use crate::ion::meta_groups::MetaTotals;
+
+    fn no_totals() -> MetaTotals {
+        MetaTotals {
+            rows: 0,
+            numeric: 0,
+            string: 0,
+            uncompressed: 0,
+        }
+    }
 
     fn new_reader(group_count: u64, group_size: u32, item_count: u64) -> crate::ion::IonResult<()> {
         MetaGroupReader::new(
@@ -239,6 +302,7 @@ mod tests {
             group_count,
             group_size,
             item_count,
+            no_totals(),
             CODEC_NONE,
             false,
             DecompressionBudget::default(),

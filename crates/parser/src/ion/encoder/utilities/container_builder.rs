@@ -8,6 +8,7 @@ use crate::ion::packing::PackingId;
 use crate::ion::{IonError, IonResult};
 
 pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
+const DEFAULT_MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,11 +329,14 @@ pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
     block_packing_id: PackingId,
     store: BlockStore,
     pending: Vec<PendingBlock>,
+    pending_bytes: usize,
+    payload_bytes: u64,
+    max_pending_bytes: usize,
     compressor: CompressionMode<C>,
     par_min_blocks: usize,
 }
 
-impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
+impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
     pub(crate) fn new(
         output: &'output mut dyn EncoderOutput,
         max_block_uncompressed_size: usize,
@@ -344,6 +348,9 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
             block_packing_id,
             store: BlockStore::new(max_block_uncompressed_size),
             pending: Vec::new(),
+            pending_bytes: 0,
+            payload_bytes: 0,
+            max_pending_bytes: DEFAULT_MAX_PENDING_BYTES,
             compressor,
             par_min_blocks: 4,
         }
@@ -425,12 +432,17 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         if active_block.accumulated_data.is_empty() {
             return Ok(());
         }
+        let data_len = active_block.accumulated_data.len();
         self.pending.push(PendingBlock {
             block_id: active_block.block_id,
             stride,
             data: active_block.accumulated_data,
             is_dedicated: active_block.is_dedicated,
         });
+        self.pending_bytes += data_len;
+        if self.pending_bytes >= self.max_pending_bytes {
+            self.flush_pending()?;
+        }
         Ok(())
     }
 
@@ -486,10 +498,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
     }
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    fn finish_par(&self, blocks: Vec<PendingBlock>) -> IonResult<Vec<ReadyBlock>>
-    where
-        C: Send,
-    {
+    fn finish_par(&self, blocks: Vec<PendingBlock>) -> IonResult<Vec<ReadyBlock>> {
         match &self.compressor {
             CompressionMode::Raw => blocks
                 .into_par_iter()
@@ -525,17 +534,19 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         self.par_min_blocks = value;
     }
 
-    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)>
-    where
-        C: Send,
-    {
-        for stride in Stride::all_variants() {
-            self.seal_open_block_for_stride(stride)?;
-        }
+    #[cfg(test)]
+    fn set_max_pending_bytes(&mut self, value: usize) {
+        self.max_pending_bytes = value;
+    }
 
-        let all_pending = std::mem::take(&mut self.pending);
+    fn flush_pending(&mut self) -> IonResult<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(&mut self.pending);
+        self.pending_bytes = 0;
         let (dedicated, shared): (Vec<_>, Vec<_>) =
-            all_pending.into_iter().partition(|b| b.is_dedicated);
+            batch.into_iter().partition(|b| b.is_dedicated);
 
         let dedicated_ready = self.finish_seq(dedicated)?;
 
@@ -553,20 +564,27 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
 
         let ready = merge_sorted_by_block_id(dedicated_ready, shared_ready);
 
-        let mut payload_bytes = 0u64;
         for block in ready {
             self.output.write_bytes(&block.bytes)?;
             self.store.seal(
                 block.block_id,
                 BlockDirEntry {
-                    payload_offset: payload_bytes,
+                    payload_offset: self.payload_bytes,
                     payload_size: block.bytes.len() as u64,
                     uncompressed_len_bytes: block.raw_len,
                     checksum: block.checksum,
                 },
             )?;
-            payload_bytes += block.bytes.len() as u64;
+            self.payload_bytes += block.bytes.len() as u64;
         }
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)> {
+        for stride in Stride::all_variants() {
+            self.seal_open_block_for_stride(stride)?;
+        }
+        self.flush_pending()?;
 
         let block_count = self.store.block_count();
         let mut directory_bytes =
@@ -574,7 +592,7 @@ impl<'output, C: BlockCompressor> ContainerBuilder<'output, C> {
         self.store.write_directory(&mut directory_bytes);
         self.output.write_bytes(&directory_bytes)?;
 
-        let total_bytes_written = payload_bytes + directory_bytes.len() as u64;
+        let total_bytes_written = self.payload_bytes + directory_bytes.len() as u64;
         Ok((block_count, total_bytes_written))
     }
 }
@@ -1183,5 +1201,38 @@ mod tests {
 
         assert_eq!(seq_res, par_res);
         assert_eq!(seq_out.0, par_out.0);
+    }
+
+    #[test]
+    fn batched_flush_keeps_directory_offsets_correct() {
+        let item_count = 7usize;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            8,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder.set_max_pending_bytes(16);
+
+        for i in 0..item_count {
+            builder
+                .add_item_to_box(8, 8, |buf| {
+                    buf.extend_from_slice(&[i as u8; 8]);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let (block_count, _total) = builder.finish().unwrap();
+        assert_eq!(block_count as usize, item_count);
+
+        let raw = output.0;
+        let directory_start = raw.len() - item_count * BLOCK_DIRECTORY_ENTRY_SIZE;
+        for i in 0..item_count {
+            let at = directory_start + i * BLOCK_DIRECTORY_ENTRY_SIZE;
+            let offset = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap()) as usize;
+            let size = u64::from_le_bytes(raw[at + 8..at + 16].try_into().unwrap()) as usize;
+            assert_eq!(&raw[offset..offset + size], &[i as u8; 8]);
+        }
     }
 }
