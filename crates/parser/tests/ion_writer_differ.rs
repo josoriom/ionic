@@ -7,6 +7,7 @@ use ionic::{
         DecoderConfig, Ion,
         encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
         encoder::ion_writer::write_mzml_to_ion,
+        encoder::utilities::SectionChunkMode,
     },
     mzml::parse_mzml::parse_mzml,
 };
@@ -44,6 +45,7 @@ fn config_for_level(compression_level: u8) -> EncodingConfig {
         force_f32: false,
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
+        section_chunk: SectionChunkMode::Memory,
     }
 }
 

@@ -42,7 +42,7 @@ pub(crate) fn parse_chromatogram_list<R: BufRead>(
     Ok(list)
 }
 
-fn parse_chromatogram<R: BufRead>(
+pub(crate) fn parse_chromatogram<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<Chromatogram, ParseError> {

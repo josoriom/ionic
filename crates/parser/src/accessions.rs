@@ -28,6 +28,9 @@ pub(crate) const ION_MOBILITY_ARRAY: u32 = 1_002_893;
 pub(crate) const MEAN_ION_MOBILITY_ARRAY: u32 = 1_002_816;
 pub(crate) const RAW_ION_MOBILITY_ARRAY: u32 = 1_003_007;
 pub(crate) const RAW_ION_MOBILITY_DRIFT_TIME_ARRAY: u32 = 1_003_153;
+pub(crate) const POSITION_X: u32 = 1_000_050;
+pub(crate) const POSITION_Y: u32 = 1_000_051;
+pub(crate) const POSITION_Z: u32 = 1_000_052;
 
 pub(crate) const ACC_MS_LEVEL: &str = "MS:1000511";
 

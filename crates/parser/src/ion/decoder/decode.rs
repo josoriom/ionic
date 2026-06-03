@@ -2,22 +2,22 @@
 
 use std::{
     collections::HashMap,
-    fs::File,
     ops::{Deref, DerefMut},
-    path::Path,
     sync::Arc,
 };
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use memmap2::Mmap;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use std::{fs::File, path::Path};
 
 use crate::{
     accessions::format_accession,
     encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
     ion::{
         IonError, IonResult,
-        meta_groups::MetaTotals,
         attr_meta::{
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
@@ -28,6 +28,7 @@ use crate::{
             FILE_DTYPE_I64,
         },
         filter_summary::{ChromatogramSummary, SpectrumSummary},
+        meta_groups::MetaTotals,
         packing::PackingId,
         utilities::{
             MetaGroupReader,
@@ -140,6 +141,7 @@ pub struct Decoder<'a> {
 #[allow(dead_code)]
 enum IonBacking {
     Bytes(Arc<[u8]>),
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     Map(Mmap),
 }
 
@@ -160,6 +162,7 @@ impl OwnedIon {
         })
     }
 
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     pub fn open(path: &Path, config: DecoderConfig) -> IonResult<Self> {
         let file = File::open(path).map_err(|err| IonError::from(err.to_string()))?;
         // SAFETY: don't touch the file (modify/truncate) while OwnedIon is alive.
@@ -593,6 +596,7 @@ impl<'a> Ion<'a> {
         OwnedIon::open_bytes(bytes, config)
     }
 
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     pub fn open_file(path: &Path, config: DecoderConfig) -> IonResult<OwnedIon> {
         OwnedIon::open(path, config)
     }
@@ -1292,6 +1296,9 @@ fn parse_spec_summary(bytes: &[u8]) -> SpectrumSummary {
         total_ion_current: f64::from_le_bytes(bytes[32..40].try_into().unwrap()),
         ms_level: bytes[40],
         polarity: bytes[41],
+        position_x: u32::from_le_bytes(bytes[42..46].try_into().unwrap()),
+        position_y: u32::from_le_bytes(bytes[46..50].try_into().unwrap()),
+        position_z: u32::from_le_bytes(bytes[50..54].try_into().unwrap()),
     }
 }
 
@@ -1508,6 +1515,8 @@ fn attach_binaries<E: BinaryArrayOwner>(
 ) -> IonResult<()> {
     let mut refs = Vec::new();
     let mut blocks = HashMap::new();
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    let _ = parallel;
 
     for index in 0..entries.len() {
         let Some(item_refs) = read_array_refs_at(bytes, entry_base, aref_base, index) else {
@@ -1791,6 +1800,7 @@ fn parse_run_source_file_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ion::encoder::utilities::SectionChunkMode;
 
     #[test]
     fn owned_ion_ion_field_declared_before_backing() {
@@ -2135,6 +2145,7 @@ mod tests {
                 force_f32: false,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
+                section_chunk: SectionChunkMode::Memory,
             },
             &mut encoded,
         )
@@ -2250,6 +2261,7 @@ mod tests {
                 force_f32: false,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
+                section_chunk: SectionChunkMode::Memory,
             },
             &mut encoded,
         )
@@ -2360,6 +2372,7 @@ mod tests {
                 force_f32: false,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: false,
+                section_chunk: SectionChunkMode::Memory,
             },
             &mut encoded,
         )

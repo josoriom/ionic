@@ -2,10 +2,11 @@ use crate::{
     accessions::{
         FLOAT_32BIT, FLOAT_64BIT, HIGHEST_ION_MOBILITY, HIGHEST_OBSERVED_MZ,
         HIGHEST_OBSERVED_WAVELENGTH, INTENSITY_ARRAY, LOWEST_ION_MOBILITY, LOWEST_OBSERVED_MZ,
-        LOWEST_OBSERVED_WAVELENGTH, NEGATIVE_SCAN, POSITIVE_SCAN,
+        LOWEST_OBSERVED_WAVELENGTH, NEGATIVE_SCAN, POSITION_X, POSITION_Y, POSITION_Z,
+        POSITIVE_SCAN,
     },
     encoder::utilities::{
-        encoder_output::EncoderOutput,
+        encoder_output::{EncoderOutput, SectionChunkMode},
         le_writers::{
             write_f32_le, write_f32_slice_le, write_f64_le, write_f64_slice_le, write_i16_slice_le,
             write_i32_slice_le, write_i64_slice_le, write_u16_slice_le,
@@ -41,32 +42,6 @@ const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
 const POLARITY_NEGATIVE: u8 = 2;
 
-impl SpectrumSummary {
-    #[cfg(test)]
-    fn unknown() -> Self {
-        Self {
-            rt_seconds: f64::NAN,
-            base_peak_mz: f64::NAN,
-            selected_ion_mz: f64::NAN,
-            base_peak_int: f64::NAN,
-            total_ion_current: f64::NAN,
-            ms_level: 0,
-            polarity: POLARITY_UNKNOWN,
-        }
-    }
-
-    fn write_into(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.rt_seconds.to_le_bytes());
-        buf.extend_from_slice(&self.base_peak_mz.to_le_bytes());
-        buf.extend_from_slice(&self.selected_ion_mz.to_le_bytes());
-        buf.extend_from_slice(&self.base_peak_int.to_le_bytes());
-        buf.extend_from_slice(&self.total_ion_current.to_le_bytes());
-        buf.push(self.ms_level);
-        buf.push(self.polarity);
-        buf.extend_from_slice(&[0u8; 86]);
-    }
-}
-
 impl ChromatogramSummary {
     fn unknown() -> Self {
         Self {
@@ -79,21 +54,11 @@ impl ChromatogramSummary {
             polarity: POLARITY_UNKNOWN,
         }
     }
-
-    fn write_into(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.lowest_mz.to_le_bytes());
-        buf.extend_from_slice(&self.highest_mz.to_le_bytes());
-        buf.extend_from_slice(&self.lowest_wavelength.to_le_bytes());
-        buf.extend_from_slice(&self.highest_wavelength.to_le_bytes());
-        buf.extend_from_slice(&self.lowest_ion_mobility.to_le_bytes());
-        buf.extend_from_slice(&self.highest_ion_mobility.to_le_bytes());
-        buf.push(self.polarity);
-        buf.extend_from_slice(&[0u8; 79]);
-    }
 }
 
 pub(crate) fn spec_summary_from_spectrum(spectrum: &Spectrum) -> SpectrumSummary {
     let summary = summary_from_spectrum(spectrum);
+    let (position_x, position_y, position_z) = get_spectrum_position(spectrum);
     SpectrumSummary {
         rt_seconds: summary.rt * 60.0,
         base_peak_mz: summary.base_peak_mz,
@@ -102,7 +67,47 @@ pub(crate) fn spec_summary_from_spectrum(spectrum: &Spectrum) -> SpectrumSummary
         total_ion_current: summary.total_ion_current,
         ms_level: summary.ms_level,
         polarity: summary.polarity,
+        position_x,
+        position_y,
+        position_z,
     }
+}
+
+fn get_spectrum_position(spectrum: &Spectrum) -> (u32, u32, u32) {
+    let mut x = 0;
+    let mut y = 0;
+    let mut z = 0;
+    let scan_list = spectrum.scan_list.as_ref().or_else(|| {
+        spectrum
+            .spectrum_description
+            .as_ref()
+            .and_then(|description| description.scan_list.as_ref())
+    });
+    let Some(scan_list) = scan_list else {
+        return (x, y, z);
+    };
+    for scan in &scan_list.scans {
+        for param in &scan.cv_params {
+            let Some(accession) = param.accession.as_deref() else {
+                continue;
+            };
+            if !accession.starts_with("IMS:") {
+                continue;
+            }
+            let value = param
+                .value
+                .as_deref()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            match parse_accession_tail_raw(Some(accession)) {
+                POSITION_X => x = value,
+                POSITION_Y => y = value,
+                POSITION_Z => z = value,
+                _ => {}
+            }
+        }
+    }
+    (x, y, z)
 }
 
 #[inline]
@@ -152,23 +157,34 @@ pub(crate) fn extract_chrom_summary(chrom: &Chromatogram) -> ChromatogramSummary
     summary
 }
 
-
 pub fn encode(
     mzml: &MzML,
     compression_level: u8,
     force_f32: bool,
     output: &mut dyn EncoderOutput,
 ) -> IonResult<()> {
-    if compression_level > 22 {
-        return Err(format!("compression_level must be 0–22, got {compression_level}").into());
-    }
+    allow_compression_level(compression_level)?;
     let config = EncodingConfig {
         compression_level,
         force_f32,
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: true,
+        section_chunk: SectionChunkMode::Memory,
     };
     crate::ion::encoder::ion_writer::write_mzml_to_ion(mzml, config, output)
+}
+
+pub(crate) fn allow_compression_level(compression_level: u8) -> IonResult<()> {
+    if compression_level > 22 {
+        return Err(format!("compression_level must be 0-22, got {compression_level}").into());
+    }
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    if compression_level != 0 {
+        return Err(IonError::from(
+            "zstd compression is not available in browser wasm",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -177,6 +193,7 @@ pub struct EncodingConfig {
     pub force_f32: bool,
     pub uncompressed_block_size: usize,
     pub parallel: bool,
+    pub section_chunk: SectionChunkMode,
 }
 
 impl EncodingConfig {
@@ -196,13 +213,13 @@ impl EncodingConfig {
         }
     }
 
-    pub(crate) fn compression_mode(self) -> CompressionMode<DefaultCompressor> {
+    pub(crate) fn compression_mode(self) -> IonResult<CompressionMode<DefaultCompressor>> {
         if self.compression_is_enabled() {
-            CompressionMode::Compressed(
-                DefaultCompressor::new(self.compression_level as i32).unwrap(),
-            )
+            Ok(CompressionMode::Compressed(DefaultCompressor::new(
+                self.compression_level as i32,
+            )?))
         } else {
-            CompressionMode::Raw
+            Ok(CompressionMode::Raw)
         }
     }
 
@@ -222,7 +239,6 @@ impl EncodingConfig {
         }
     }
 }
-
 
 #[derive(Copy, Clone)]
 enum ArrayData<'a> {
@@ -473,7 +489,6 @@ pub(crate) fn encode_single_array(
     }))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,7 +515,11 @@ mod tests {
         let mzml = MzML::default();
         let mut buf = Vec::new();
         encode(&mzml, 0, false, &mut buf).unwrap();
-        let total = u64::from_le_bytes(buf[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8].try_into().unwrap());
+        let total = u64::from_le_bytes(
+            buf[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(total, buf.len() as u64);
     }
 
@@ -509,7 +528,11 @@ mod tests {
         let mzml = MzML::default();
         let mut buf = Vec::new();
         encode(&mzml, 0, false, &mut buf).unwrap();
-        let size = u64::from_le_bytes(buf[HEADER_TARGET_BLOCK_SIZE..HEADER_TARGET_BLOCK_SIZE + 8].try_into().unwrap());
+        let size = u64::from_le_bytes(
+            buf[HEADER_TARGET_BLOCK_SIZE..HEADER_TARGET_BLOCK_SIZE + 8]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(size, TARGET_BLOCK_UNCOMPRESSED_BYTES as u64);
     }
 
@@ -527,8 +550,16 @@ mod tests {
         let mzml = MzML::default();
         let mut buf = Vec::new();
         encode(&mzml, 0, false, &mut buf).unwrap();
-        let spec_blocks = u64::from_le_bytes(buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 8].try_into().unwrap());
-        let chrom_blocks = u64::from_le_bytes(buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 8].try_into().unwrap());
+        let spec_blocks = u64::from_le_bytes(
+            buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 8]
+                .try_into()
+                .unwrap(),
+        );
+        let chrom_blocks = u64::from_le_bytes(
+            buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 8]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(spec_blocks, 0);
         assert_eq!(chrom_blocks, 0);
     }
@@ -558,13 +589,19 @@ mod tests {
     #[test]
     fn resolve_array_dtype_force_f32_overrides_f64_data() {
         let bda = BinaryDataArray::default();
-        assert_eq!(resolve_array_dtype(&bda, ArrayData::F64(&[1.0f64]), true), FILE_DTYPE_F32);
+        assert_eq!(
+            resolve_array_dtype(&bda, ArrayData::F64(&[1.0f64]), true),
+            FILE_DTYPE_F32
+        );
     }
 
     #[test]
     fn resolve_array_dtype_integer_types_unchanged_by_force_f32() {
         let bda = BinaryDataArray::default();
-        assert_eq!(resolve_array_dtype(&bda, ArrayData::I32(&[1i32]), true), FILE_DTYPE_I32);
+        assert_eq!(
+            resolve_array_dtype(&bda, ArrayData::I32(&[1i32]), true),
+            FILE_DTYPE_I32
+        );
     }
 
     #[test]
@@ -584,6 +621,7 @@ mod tests {
             force_f32: false,
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
+            section_chunk: SectionChunkMode::Memory,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -598,6 +636,7 @@ mod tests {
             force_f32: false,
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
+            section_chunk: SectionChunkMode::Memory,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);

@@ -1,5 +1,6 @@
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
 use crate::encoder::utilities::encoder_output::EncoderOutput;
@@ -57,17 +58,23 @@ impl Stride {
 
 pub(crate) trait BlockCompressor {
     fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize>;
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     fn fork(&self) -> IonResult<Self>
     where
         Self: Sized;
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize);
 }
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub(crate) struct DefaultCompressor {
     level: i32,
     inner: ZstdCompressor<'static>,
 }
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+pub(crate) struct DefaultCompressor;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl DefaultCompressor {
     pub(crate) fn new(compression_level: i32) -> IonResult<Self> {
         Ok(Self {
@@ -78,6 +85,16 @@ impl DefaultCompressor {
     }
 }
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+impl DefaultCompressor {
+    pub(crate) fn new(_compression_level: i32) -> IonResult<Self> {
+        Err(IonError::from(
+            "zstd compression is not available in browser wasm",
+        ))
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl BlockCompressor for DefaultCompressor {
     fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize> {
         output.clear();
@@ -89,6 +106,19 @@ impl BlockCompressor for DefaultCompressor {
 
     fn fork(&self) -> IonResult<Self> {
         Self::new(self.level)
+    }
+
+    fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
+        shuffle_with_tail(input, output, element_stride);
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+impl BlockCompressor for DefaultCompressor {
+    fn compress(&mut self, _input: &[u8], _output: &mut Vec<u8>) -> IonResult<usize> {
+        Err(IonError::from(
+            "zstd compression is not available in browser wasm",
+        ))
     }
 
     fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
@@ -545,8 +575,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         }
         let batch = std::mem::take(&mut self.pending);
         self.pending_bytes = 0;
-        let (dedicated, shared): (Vec<_>, Vec<_>) =
-            batch.into_iter().partition(|b| b.is_dedicated);
+        let (dedicated, shared): (Vec<_>, Vec<_>) = batch.into_iter().partition(|b| b.is_dedicated);
 
         let dedicated_ready = self.finish_seq(dedicated)?;
 

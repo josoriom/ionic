@@ -46,7 +46,7 @@ pub(crate) fn parse_spectrum_list<R: BufRead>(
     Ok(list)
 }
 
-fn parse_spectrum<R: BufRead>(
+pub(crate) fn parse_spectrum<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<Spectrum, ParseError> {

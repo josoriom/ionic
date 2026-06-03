@@ -1,4 +1,5 @@
 use crate::ion::utilities::EmitAttributes;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
     decoder::decode::MetadatumValue,
     encoder::utilities::le_writers::{write_f64_slice_le, write_u32_slice_le},
     ion::{
+        IonResult,
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_CV_FULL_NAME, ACC_ATTR_CV_URI, ACC_ATTR_CV_VERSION,
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
@@ -28,9 +30,8 @@ use crate::{
     },
 };
 
-use crate::ion::meta_groups::{
-    METADATA_GROUP_SIZE, MetaGroupEntry, group_count_for, item_range_of_group, write_group_header,
-};
+use super::encoder_output::SectionChunk;
+use crate::ion::meta_groups::{META_GROUP_ENTRY_SIZE, MetaGroupEntry, write_group_header};
 
 const USER_PARAM_NAME_VALUE_SEPARATOR: char = '\0';
 
@@ -50,20 +51,6 @@ impl MetaCollector {
         self.ctx.alloc()
     }
 
-    pub(crate) fn collect_item_list_meta<T, L>(
-        &mut self,
-        items: &[T],
-        list_node_id: u32,
-        list_schema: Option<&L>,
-        policy: ArrayPolicy,
-    ) -> PackedMeta
-    where
-        T: MzmlListItem,
-        L: EmitAttributes,
-    {
-        pack_item_list_meta(items, list_node_id, list_schema, &mut self.ctx, policy)
-    }
-
     pub(crate) fn collect_global_meta(&mut self, mzml: &MzML) -> (PackedMeta, GlobalCounts) {
         pack_global_meta(mzml, &mut self.ctx)
     }
@@ -75,8 +62,9 @@ impl MetaCollector {
         list_node_id: u32,
         list_schema: Option<&L>,
         policy: ArrayPolicy,
-        sink: &mut dyn MetaSink,
-    ) where
+        metadata_writer: &mut dyn MetadataWriter,
+    ) -> IonResult<()>
+    where
         T: MzmlListItem,
         L: crate::ion::utilities::EmitAttributes,
     {
@@ -110,7 +98,7 @@ impl MetaCollector {
             item.flatten_children(&mut writer, item_id, &mut self.ctx, policy);
         }
         buffer.normalize_attr_cv_values();
-        sink.add_item(&buffer);
+        metadata_writer.write_metadata_item(&buffer)
     }
 }
 
@@ -161,46 +149,10 @@ pub(crate) struct GlobalCounts {
     pub(crate) n_cvs: u32,
 }
 
-pub(crate) struct CompressedMetaSections {
-    pub(crate) spectrum_bytes: Vec<u8>,
-    pub(crate) chromatogram_bytes: Vec<u8>,
-    pub(crate) global_bytes: Vec<u8>,
-    pub(crate) spectrum_group_count: u64,
-    pub(crate) chromatogram_group_count: u64,
-    pub(crate) group_size: u32,
-    pub(crate) spectrum_uncompressed_size: u64,
-    pub(crate) chromatogram_uncompressed_size: u64,
-    pub(crate) global_uncompressed_size: u64,
-}
-
-impl CompressedMetaSections {
-    pub(crate) fn build(
-        spectrum_meta: &PackedMeta,
-        chrom_meta: &PackedMeta,
-        global_meta: &PackedMeta,
-        counts: &GlobalCounts,
-        level: u8,
-    ) -> Self {
-        let group_size = METADATA_GROUP_SIZE;
-        let spectrum = build_grouped_section(spectrum_meta, group_size, level);
-        let chromatogram = build_grouped_section(chrom_meta, group_size, level);
-        let raw_g = serialize_global_meta_with_counts(counts, global_meta);
-        Self {
-            spectrum_uncompressed_size: spectrum.uncompressed_size,
-            chromatogram_uncompressed_size: chromatogram.uncompressed_size,
-            global_uncompressed_size: raw_g.len() as u64,
-            spectrum_bytes: spectrum.bytes,
-            chromatogram_bytes: chromatogram.bytes,
-            global_bytes: compress_bytes_if_enabled(raw_g, level),
-            spectrum_group_count: spectrum.group_count,
-            chromatogram_group_count: chromatogram.group_count,
-            group_size,
-        }
-    }
-}
-
 pub(crate) struct GroupedSection {
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) section: SectionChunk,
+    pub(crate) byte_len: u64,
+    pub(crate) crc32: u32,
     pub(crate) group_count: u64,
     pub(crate) uncompressed_size: u64,
     pub(crate) row_count: u64,
@@ -208,55 +160,13 @@ pub(crate) struct GroupedSection {
     pub(crate) string_count: u64,
 }
 
-fn build_grouped_section(meta: &PackedMeta, group_size: u32, level: u8) -> GroupedSection {
-    let item_count = (meta.index_offsets.len() - 1) as u64;
-    let group_count = group_count_for(item_count, group_size);
-
-    let mut payloads = Vec::new();
-    let mut directory = Vec::with_capacity(group_count as usize);
-    let mut uncompressed_size = 0u64;
-
-    for group_index in 0..group_count {
-        let (item_start, item_end) = item_range_of_group(group_index, group_size, item_count);
-        let raw = serialize_group(meta, item_start as usize, item_end as usize);
-        let raw_size = raw.len() as u64;
-        uncompressed_size += raw_size;
-        let payload_offset = payloads.len() as u64;
-        let compressed = compress_bytes_if_enabled(raw, level);
-        directory.push(MetaGroupEntry {
-            payload_offset,
-            payload_size: compressed.len() as u64,
-            uncompressed_size: raw_size,
-            checksum: crc32fast::hash(&compressed),
-        });
-        payloads.extend_from_slice(&compressed);
-    }
-
-    let row_count = meta.ref_codes.len() as u64;
-    let numeric_count = meta.numeric_values.len() as u64;
-    let string_count = meta.string_offsets.len() as u64;
-
-    let mut bytes = payloads;
-    for entry in &directory {
-        entry.write_into(&mut bytes);
-    }
-    GroupedSection {
-        bytes,
-        group_count,
-        uncompressed_size,
-        row_count,
-        numeric_count,
-        string_count,
-    }
-}
-
-#[allow(dead_code)]
 pub(crate) struct MetaGrouper {
     group_size: u32,
     level: u8,
     builder: PackedMetaBuilder,
     items_in_group: u32,
-    payloads: Vec<u8>,
+    payloads: SectionChunk,
+    crc: crc32fast::Hasher,
     directory: Vec<MetaGroupEntry>,
     uncompressed_size: u64,
     group_count: u64,
@@ -266,13 +176,14 @@ pub(crate) struct MetaGrouper {
 }
 
 impl MetaGrouper {
-    pub(crate) fn new(group_size: u32, level: u8) -> Self {
+    pub(crate) fn new(group_size: u32, level: u8, payloads: SectionChunk) -> Self {
         Self {
             group_size,
             level,
             builder: PackedMetaBuilder::new(),
             items_in_group: 0,
-            payloads: Vec::new(),
+            payloads,
+            crc: crc32fast::Hasher::new(),
             directory: Vec::new(),
             uncompressed_size: 0,
             group_count: 0,
@@ -282,9 +193,9 @@ impl MetaGrouper {
         }
     }
 
-    fn seal_group(&mut self) {
+    fn seal_group(&mut self) -> IonResult<()> {
         if self.items_in_group == 0 {
-            return;
+            return Ok(());
         }
         let meta = std::mem::replace(&mut self.builder, PackedMetaBuilder::new()).build();
         self.row_count += meta.ref_codes.len() as u64;
@@ -293,7 +204,7 @@ impl MetaGrouper {
         let raw = serialize_group(&meta, 0, self.items_in_group as usize);
         let raw_size = raw.len() as u64;
         self.uncompressed_size += raw_size;
-        let payload_offset = self.payloads.len() as u64;
+        let payload_offset = self.payloads.len();
         let compressed = compress_bytes_if_enabled(raw, self.level);
         self.directory.push(MetaGroupEntry {
             payload_offset,
@@ -301,35 +212,44 @@ impl MetaGrouper {
             uncompressed_size: raw_size,
             checksum: crc32fast::hash(&compressed),
         });
-        self.payloads.extend_from_slice(&compressed);
+        self.crc.update(&compressed);
+        self.payloads.write(&compressed)?;
         self.group_count += 1;
         self.items_in_group = 0;
+        Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> GroupedSection {
-        self.seal_group();
-        let mut bytes = std::mem::take(&mut self.payloads);
+    pub(crate) fn finish(mut self) -> IonResult<GroupedSection> {
+        self.seal_group()?;
+        let mut directory_bytes = Vec::with_capacity(self.directory.len() * META_GROUP_ENTRY_SIZE);
         for entry in &self.directory {
-            entry.write_into(&mut bytes);
+            entry.write_into(&mut directory_bytes);
         }
-        GroupedSection {
-            bytes,
+        self.crc.update(&directory_bytes);
+        self.payloads.write(&directory_bytes)?;
+        let byte_len = self.payloads.len();
+        let crc32 = self.crc.finalize();
+        Ok(GroupedSection {
+            section: self.payloads,
+            byte_len,
+            crc32,
             group_count: self.group_count,
             uncompressed_size: self.uncompressed_size,
             row_count: self.row_count,
             numeric_count: self.numeric_count,
             string_count: self.string_count,
-        }
+        })
     }
 }
 
-impl MetaSink for MetaGrouper {
-    fn add_item(&mut self, buffer: &MetaParamBuffer) {
+impl MetadataWriter for MetaGrouper {
+    fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()> {
         self.builder.flush_buffer(buffer);
         self.items_in_group += 1;
         if self.items_in_group == self.group_size {
-            self.seal_group();
+            self.seal_group()?;
         }
+        Ok(())
     }
 }
 
@@ -509,10 +429,6 @@ impl MetaParamBuffer {
         Self {
             rows: Vec::with_capacity(64),
         }
-    }
-
-    fn clear(&mut self) {
-        self.rows.clear();
     }
 
     fn push(&mut self, tag: TagId, id: u32, parent_id: u32, cv_param: CvParam) {
@@ -920,12 +836,6 @@ fn write_packed_meta(buf: &mut Vec<u8>, m: &PackedMeta) {
     buf.extend_from_slice(&m.string_bytes);
 }
 
-fn serialize_packed_meta(m: &PackedMeta) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(packed_meta_byte_size(m));
-    write_packed_meta(&mut buf, m);
-    buf
-}
-
 pub(crate) fn serialize_global_meta_with_counts(counts: &GlobalCounts, m: &PackedMeta) -> Vec<u8> {
     let mut buf = Vec::with_capacity(32 + packed_meta_byte_size(m));
     for n in [
@@ -946,6 +856,7 @@ pub(crate) fn serialize_global_meta_with_counts(counts: &GlobalCounts, m: &Packe
     buf
 }
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub(crate) fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
     if level == 0 {
         bytes
@@ -954,27 +865,23 @@ pub(crate) fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
     }
 }
 
-pub(crate) trait MetaSink {
-    fn add_item(&mut self, buffer: &MetaParamBuffer);
-}
-
-impl MetaSink for PackedMetaBuilder {
-    fn add_item(&mut self, buffer: &MetaParamBuffer) {
-        self.flush_buffer(buffer);
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+pub(crate) fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
+    if level == 0 {
+        bytes
+    } else {
+        panic!("zstd compression is not available in browser wasm")
     }
 }
 
-fn drive_item_meta<F: FnMut(&mut MetaParamWriter<'_>, usize)>(
-    item_count: usize,
-    sink: &mut dyn MetaSink,
-    mut fill: F,
-) {
-    let mut buffer = MetaParamBuffer::new();
-    for i in 0..item_count {
-        buffer.clear();
-        fill(&mut buffer.as_writer(), i);
-        buffer.normalize_attr_cv_values();
-        sink.add_item(&buffer);
+pub(crate) trait MetadataWriter {
+    fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()>;
+}
+
+impl MetadataWriter for PackedMetaBuilder {
+    fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()> {
+        self.flush_buffer(buffer);
+        Ok(())
     }
 }
 
@@ -1062,59 +969,6 @@ impl MzmlListItem for Chromatogram {
     ) {
         flatten_chromatogram_children(writer, self, id, ctx, policy);
     }
-}
-
-fn pack_item_list_meta<T, L>(
-    items: &[T],
-    list_node_id: u32,
-    list_schema: Option<&L>,
-    ctx: &mut TraversalCtx,
-    policy: ArrayPolicy,
-) -> PackedMeta
-where
-    T: MzmlListItem,
-    L: EmitAttributes,
-{
-    let mut builder = PackedMetaBuilder::new();
-    drive_item_list_meta(items, list_node_id, list_schema, ctx, policy, &mut builder);
-    builder.build()
-}
-
-pub(crate) fn drive_item_list_meta<T, L>(
-    items: &[T],
-    list_node_id: u32,
-    list_schema: Option<&L>,
-    ctx: &mut TraversalCtx,
-    policy: ArrayPolicy,
-    sink: &mut dyn MetaSink,
-) where
-    T: MzmlListItem,
-    L: EmitAttributes,
-{
-    drive_item_meta(items.len(), sink, |writer, i| {
-        let item = &items[i];
-        if i == 0
-            && list_node_id != 0
-            && let Some(schema) = list_schema
-        {
-            writer.touch(T::list_tag(), list_node_id, 0);
-            writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
-        }
-        let item_id = ctx.alloc();
-        writer.push_schema_attrs(T::item_tag(), item_id, list_node_id, item);
-        if !item.has_explicit_index() {
-            writer.push_optional_u32_attr(
-                T::item_tag(),
-                item_id,
-                list_node_id,
-                ACC_ATTR_INDEX,
-                Some(i as u32),
-            );
-        }
-        writer.push_ref_group_params(item_id, item.group_refs(), ctx);
-        writer.push_cv_and_user_params(item_id, list_node_id, item.cv_params(), item.user_params());
-        item.flatten_children(writer, item_id, ctx, policy);
-    })
 }
 
 fn flatten_spectrum_children(
@@ -1840,7 +1694,6 @@ fn append_cv_list_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mzml::structs::SpectrumList;
 
     #[test]
     fn value_pool_empty_value_gives_kind_2() {
@@ -1892,14 +1745,6 @@ mod tests {
         buffer.push(TagId::CvParam, 1, 0, empty_cv_param());
         assert_eq!(buffer.rows.len(), 1);
         assert_eq!(buffer.rows[0].id, 1);
-    }
-
-    #[test]
-    fn meta_param_buffer_clear_empties_rows() {
-        let mut buffer = MetaParamBuffer::new();
-        buffer.push(TagId::CvParam, 1, 0, empty_cv_param());
-        buffer.clear();
-        assert!(buffer.rows.is_empty());
     }
 
     #[test]
@@ -2031,50 +1876,6 @@ mod tests {
     }
 
     #[test]
-    fn collector_spectrum_meta_on_empty_list_produces_empty_packed_meta() {
-        let mut collector = MetaCollector::new();
-        let spectra: &[Spectrum] = &[];
-        let policy = ArrayPolicy {
-            x_array_accession: MZ_ARRAY,
-            y_array_accession: INTENSITY_ARRAY,
-            force_f32: false,
-        };
-        let meta =
-            collector.collect_item_list_meta::<Spectrum, SpectrumList>(spectra, 0, None, policy);
-        assert_eq!(meta.index_offsets, vec![0]);
-        assert!(meta.ids.is_empty());
-    }
-
-    #[test]
-    fn serialize_packed_meta_roundtrip_size() {
-        let meta = PackedMetaBuilder::new().build();
-        let bytes = serialize_packed_meta(&meta);
-        assert_eq!(bytes.len(), packed_meta_byte_size(&meta));
-    }
-
-    #[test]
-    fn compressed_meta_sections_level_zero_preserves_bytes() {
-        let meta = PackedMetaBuilder::new().build();
-        let counts = GlobalCounts {
-            n_file_description: 0,
-            n_run: 1,
-            n_ref_param_groups: 0,
-            n_samples: 0,
-            n_instrument_configs: 0,
-            n_software: 0,
-            n_data_processing: 0,
-            n_acquisition_settings: 0,
-            n_cvs: 0,
-        };
-        let compressed = CompressedMetaSections::build(&meta, &meta, &meta, &counts, 0);
-        assert_eq!(compressed.group_size, METADATA_GROUP_SIZE);
-        assert_eq!(compressed.spectrum_group_count, 0);
-        assert!(compressed.spectrum_bytes.is_empty());
-        let raw_global = serialize_global_meta_with_counts(&counts, &meta);
-        assert_eq!(compressed.global_bytes, raw_global);
-    }
-
-    #[test]
     fn grouped_metadata_keeps_values_local_to_each_group() {
         use crate::decoder::decode::MetadatumValue;
         use crate::ion::DecompressionBudget;
@@ -2082,30 +1883,11 @@ mod tests {
         use crate::ion::meta_groups::MetaTotals;
         use crate::ion::utilities::MetaGroupReader;
 
-        let make_cv = |value: &str| CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000285".to_string()),
-            name: String::new(),
-            value: Some(value.to_string()),
-            unit_cv_ref: None,
-            unit_name: None,
-            unit_accession: None,
-        };
-
-        let mut builder = PackedMetaBuilder::new();
-        builder.push_row(TagId::CvParam as u8, 1, 0, &make_cv("10.5"));
-        builder.end_item();
-        builder.push_row(TagId::CvParam as u8, 2, 0, &make_cv("20.5"));
-        builder.end_item();
-        builder.push_row(TagId::CvParam as u8, 3, 0, &make_cv("30.5"));
-        builder.end_item();
-        let meta = builder.build();
-
-        let grouped = build_grouped_section(&meta, 1, 0);
+        let grouped = three_item_grouped();
         assert_eq!(grouped.group_count, 3);
 
         let mut reader = MetaGroupReader::new(
-            &grouped.bytes,
+            grouped_bytes(&grouped),
             grouped.group_count,
             1,
             3,
@@ -2151,14 +1933,18 @@ mod tests {
             unit_name: None,
             unit_accession: None,
         };
-        let mut builder = PackedMetaBuilder::new();
-        builder.push_row(TagId::CvParam as u8, 1, 0, &make_cv("10.5"));
-        builder.end_item();
-        builder.push_row(TagId::CvParam as u8, 2, 0, &make_cv("20.5"));
-        builder.end_item();
-        builder.push_row(TagId::CvParam as u8, 3, 0, &make_cv("30.5"));
-        builder.end_item();
-        build_grouped_section(&builder.build(), 1, 0)
+        let mut grouper = MetaGrouper::new(1, 0, SectionChunk::memory(0));
+        for (index, value) in ["10.5", "20.5", "30.5"].iter().enumerate() {
+            let mut buffer = MetaParamBuffer::new();
+            buffer.push(TagId::CvParam, (index + 1) as u32, 0, make_cv(value));
+            buffer.normalize_attr_cv_values();
+            grouper.write_metadata_item(&buffer).unwrap();
+        }
+        grouper.finish().unwrap()
+    }
+
+    fn grouped_bytes(grouped: &GroupedSection) -> &[u8] {
+        grouped.section.as_slice().unwrap()
     }
 
     #[test]
@@ -2170,7 +1956,7 @@ mod tests {
 
         let grouped = three_item_grouped();
         let result = MetaGroupReader::new(
-            &grouped.bytes,
+            grouped_bytes(&grouped),
             grouped.group_count,
             1,
             3,
@@ -2197,7 +1983,7 @@ mod tests {
 
         let grouped = three_item_grouped();
         let reader = MetaGroupReader::new(
-            &grouped.bytes,
+            grouped_bytes(&grouped),
             grouped.group_count,
             1,
             3,
@@ -2224,7 +2010,7 @@ mod tests {
         use crate::ion::utilities::MetaGroupReader;
 
         let grouped = three_item_grouped();
-        let mut bytes = grouped.bytes.clone();
+        let mut bytes = grouped_bytes(&grouped).to_vec();
         let directory_start = bytes.len() - grouped.group_count as usize * META_GROUP_ENTRY_SIZE;
         bytes[directory_start..directory_start + 8]
             .copy_from_slice(&(directory_start as u64).to_le_bytes());
@@ -2247,55 +2033,6 @@ mod tests {
         )
         .unwrap();
         assert!(reader.read_item(0).is_err());
-    }
-
-    #[test]
-    fn meta_grouper_matches_build_grouped_section() {
-        use crate::mzml::structs::SpectrumList;
-
-        let cv = |accession: &str, value: &str| CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some(accession.to_string()),
-            name: String::new(),
-            value: Some(value.to_string()),
-            unit_cv_ref: None,
-            unit_name: None,
-            unit_accession: None,
-        };
-        let spectrum = |id: &str, tic: &str| Spectrum {
-            id: id.to_string(),
-            cv_params: vec![cv("MS:1000285", tic), cv("MS:1000511", "label")],
-            ..Default::default()
-        };
-        let spectra = vec![
-            spectrum("s0", "10.0"),
-            spectrum("s1", "20.0"),
-            spectrum("s2", "30.0"),
-            spectrum("s3", "40.0"),
-            spectrum("s4", "50.0"),
-        ];
-        let policy = ArrayPolicy {
-            x_array_accession: MZ_ARRAY,
-            y_array_accession: INTENSITY_ARRAY,
-            force_f32: false,
-        };
-        let group_size = 2;
-        let level = 0;
-
-        let mut ctx_a = TraversalCtx::new();
-        let mut builder = PackedMetaBuilder::new();
-        drive_item_list_meta(&spectra, 0, None::<&SpectrumList>, &mut ctx_a, policy, &mut builder);
-        let batch = build_grouped_section(&builder.build(), group_size, level);
-
-        let mut ctx_b = TraversalCtx::new();
-        let mut grouper = MetaGrouper::new(group_size, level);
-        drive_item_list_meta(&spectra, 0, None::<&SpectrumList>, &mut ctx_b, policy, &mut grouper);
-        let incremental = grouper.finish();
-
-        assert_eq!(batch.group_count, 3);
-        assert_eq!(batch.group_count, incremental.group_count);
-        assert_eq!(batch.uncompressed_size, incremental.uncompressed_size);
-        assert_eq!(batch.bytes, incremental.bytes);
     }
 
     #[test]

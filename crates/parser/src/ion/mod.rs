@@ -13,7 +13,10 @@ pub use decoder::utilities::decompression_budget::{
 };
 pub use decoder::utilities::parse_header::{HEADER_FORMAT_VERSION_OFFSET, get_version_from_header};
 pub mod encoder;
-pub use encoder::{encode::encode, utilities::FileEncoderOutput};
+pub use encoder::encode::encode;
+pub use encoder::utilities::EncoderOutput;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub use encoder::utilities::{FileEncoderOutput, TempFile};
 pub mod attr_meta;
 pub mod error;
 pub use error::{IonError, IonResult};

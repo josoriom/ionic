@@ -42,8 +42,7 @@ fn streaming_mode_roundtrip_via_tempfile() {
             panic!("failed to create FileEncoderOutput: {e}");
         });
 
-    encode(&mzml, 3, false, &mut file_output)
-        .expect("streaming encode should succeed");
+    encode(&mzml, 3, false, &mut file_output).expect("streaming encode should succeed");
     drop(file_output);
 
     let bytes = fs::read(&temp_path).expect("should read temp file");

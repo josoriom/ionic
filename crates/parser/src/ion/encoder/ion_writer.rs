@@ -1,11 +1,15 @@
+use std::borrow::Borrow;
+
 use crate::{
     accessions::{MZ_ARRAY, TIME_ARRAY},
+    encoder::file_reader::FileReader,
     encoder::utilities::{
-        FileHeader,
+        FileHeader, SectionChunk,
         encoder_output::EncoderOutput,
+        make_chunk,
         meta_collector::{
-            ArrayPolicy, MetaCollector, MetaGrouper, compress_bytes_if_enabled,
-            serialize_global_meta_with_counts,
+            ArrayPolicy, GroupedSection, MetaCollector, MetaGrouper, MzmlListItem,
+            compress_bytes_if_enabled, serialize_global_meta_with_counts,
         },
         tables::{ArrayRefTable, IndexTable, SummaryTable, write_aligned},
     },
@@ -13,13 +17,14 @@ use crate::{
         IonResult,
         encoder::{
             encode::{
-                CHROM_SUMMARY_SIZE, EncodingConfig, SPEC_SUMMARY_SIZE, encode_single_array,
-                extract_chrom_summary, spec_summary_from_spectrum,
+                CHROM_SUMMARY_SIZE, EncodingConfig, SPEC_SUMMARY_SIZE, allow_compression_level,
+                encode_single_array, extract_chrom_summary, spec_summary_from_spectrum,
             },
             utilities::{ContainerBuilder, DefaultCompressor},
         },
         format::{FILE_TRAILER, HEADER_SIZE},
         meta_groups::METADATA_GROUP_SIZE,
+        utilities::EmitAttributes,
     },
     mzml::structs::{BinaryDataArrayList, Chromatogram, MzML, Spectrum},
 };
@@ -34,6 +39,9 @@ fn spec_summary_bytes(spec: &Spectrum) -> [u8; SPEC_SUMMARY_SIZE] {
     buf[32..40].copy_from_slice(&s.total_ion_current.to_le_bytes());
     buf[40] = s.ms_level;
     buf[41] = s.polarity;
+    buf[42..46].copy_from_slice(&s.position_x.to_le_bytes());
+    buf[46..50].copy_from_slice(&s.position_y.to_le_bytes());
+    buf[50..54].copy_from_slice(&s.position_z.to_le_bytes());
     buf
 }
 
@@ -82,12 +90,12 @@ where
                 aref.dtype,
                 aref.array_filter,
                 aref.encoded_len,
-            );
+            )?;
             *cursor += 1;
             aref_count += 1;
         }
     }
-    index.push(aref_start, aref_count);
+    index.push(aref_start, aref_count)?;
     Ok(())
 }
 
@@ -107,44 +115,197 @@ impl HasArrayList for Chromatogram {
     }
 }
 
+struct ItemStream {
+    summary: SummaryTable,
+    index: IndexTable,
+    arefs: ArrayRefTable,
+    grouper: MetaGrouper,
+    count: usize,
+    aref_cursor: u64,
+    seen: Vec<u32>,
+    container_offset: u64,
+    block_count: u64,
+    container_total: u64,
+}
+
+struct StreamParts {
+    grouped: GroupedSection,
+    summary: SectionChunk,
+    index: SectionChunk,
+    arefs: SectionChunk,
+    count: usize,
+    type_count: usize,
+    container_offset: u64,
+    block_count: u64,
+    container_total: u64,
+}
+
+impl ItemStream {
+    fn new(
+        tag: &str,
+        summary_hint: usize,
+        summary_size: usize,
+        table_hint: usize,
+        config: EncodingConfig,
+    ) -> IonResult<Self> {
+        let mode = config.section_chunk;
+        Ok(Self {
+            summary: SummaryTable::new(make_chunk(
+                mode,
+                &format!("{tag}-summary"),
+                summary_hint * summary_size,
+            )?),
+            index: IndexTable::new(make_chunk(mode, &format!("{tag}-index"), table_hint * 16)?),
+            arefs: ArrayRefTable::new(make_chunk(
+                mode,
+                &format!("{tag}-arrayrefs"),
+                table_hint * 64,
+            )?),
+            grouper: MetaGrouper::new(
+                METADATA_GROUP_SIZE,
+                config.compression_level,
+                make_chunk(mode, &format!("{tag}-meta"), 0)?,
+            ),
+            count: 0,
+            aref_cursor: 0,
+            seen: Vec::with_capacity(8),
+            container_offset: 0,
+            block_count: 0,
+            container_total: 0,
+        })
+    }
+
+    fn add<T, L>(
+        &mut self,
+        item: &T,
+        config: EncodingConfig,
+        policy: ArrayPolicy,
+        list_id: u32,
+        list_schema: Option<&L>,
+        collector: &mut MetaCollector,
+        container: &mut ContainerBuilder<'_, DefaultCompressor>,
+        summary: &[u8],
+    ) -> IonResult<()>
+    where
+        T: HasArrayList + MzmlListItem,
+        L: EmitAttributes,
+    {
+        encode_arrays_for(
+            item,
+            config,
+            policy,
+            container,
+            &mut self.index,
+            &mut self.arefs,
+            &mut self.aref_cursor,
+            &mut self.seen,
+        )?;
+        self.summary.push(summary)?;
+        collector.add_item(
+            item,
+            self.count,
+            list_id,
+            list_schema,
+            policy,
+            &mut self.grouper,
+        )?;
+        self.count += 1;
+        Ok(())
+    }
+
+    fn finish(self) -> IonResult<StreamParts> {
+        Ok(StreamParts {
+            grouped: self.grouper.finish()?,
+            summary: self.summary.finish(),
+            index: self.index.finish(),
+            arefs: self.arefs.finish(),
+            count: self.count,
+            type_count: self.seen.len(),
+            container_offset: self.container_offset,
+            block_count: self.block_count,
+            container_total: self.container_total,
+        })
+    }
+}
+
+fn write_chunk(output: &mut dyn EncoderOutput, section: SectionChunk) -> IonResult<(u64, u64)> {
+    let byte_len = section.len();
+    let offset = section.copy_into(output)?;
+    Ok((offset, byte_len))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_list<T, L, B, I>(
+    output: &mut dyn EncoderOutput,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    list_id: u32,
+    list_schema: Option<&L>,
+    collector: &mut MetaCollector,
+    stream: &mut ItemStream,
+    items: I,
+    summary_of: fn(&T) -> [u8; SPEC_SUMMARY_SIZE],
+) -> IonResult<()>
+where
+    T: HasArrayList + MzmlListItem,
+    L: EmitAttributes,
+    B: Borrow<T>,
+    I: Iterator<Item = IonResult<B>>,
+{
+    stream.container_offset = write_aligned(output, &[])?;
+    let compressor = config.compression_mode()?;
+    let builder = ContainerBuilder::new(
+        output,
+        config.uncompressed_block_size,
+        compressor,
+        config.block_packing_id(),
+    );
+    let mut container = if config.parallel {
+        builder
+    } else {
+        builder.force_sequential()
+    };
+
+    for item in items {
+        let item = item?;
+        let item = item.borrow();
+        let summary = summary_of(item);
+        stream.add(
+            item,
+            config,
+            policy,
+            list_id,
+            list_schema,
+            collector,
+            &mut container,
+            &summary,
+        )?;
+    }
+
+    let (block_count, total) = container.finish()?;
+    stream.block_count = block_count as u64;
+    stream.container_total = total;
+    Ok(())
+}
+
 pub struct IonWriter<'out> {
     output: &'out mut dyn EncoderOutput,
     config: EncodingConfig,
     collector: MetaCollector,
     spec_list_id: u32,
     chrom_list_id: u32,
-    spec_grouper: MetaGrouper,
-    chrom_grouper: MetaGrouper,
-    spec_summary: SummaryTable,
-    chrom_summary: SummaryTable,
-    spec_index: IndexTable,
-    chrom_index: IndexTable,
-    spec_arefs: ArrayRefTable,
-    chrom_arefs: ArrayRefTable,
-    spec_count: usize,
-    chrom_count: usize,
-    spec_aref_cursor: u64,
-    chrom_aref_cursor: u64,
-    spec_seen: Vec<u32>,
-    chrom_seen: Vec<u32>,
-    spec_container_offset: u64,
-    spec_block_count: u64,
-    spec_container_total: u64,
-    chrom_container_offset: u64,
-    chrom_block_count: u64,
-    chrom_container_total: u64,
+    spec_stream: ItemStream,
+    chrom_stream: ItemStream,
 }
 
 impl<'out> IonWriter<'out> {
     pub fn begin(output: &'out mut dyn EncoderOutput, config: EncodingConfig) -> IonResult<Self> {
+        allow_compression_level(config.compression_level)?;
         output.write_bytes(&[0u8; HEADER_SIZE])?;
 
         let mut collector = MetaCollector::new();
         let spec_list_id = collector.alloc();
         let chrom_list_id = collector.alloc();
-
-        let group_size = METADATA_GROUP_SIZE;
-        let level = config.compression_level;
 
         Ok(Self {
             output,
@@ -152,26 +313,8 @@ impl<'out> IonWriter<'out> {
             collector,
             spec_list_id,
             chrom_list_id,
-            spec_grouper: MetaGrouper::new(group_size, level),
-            chrom_grouper: MetaGrouper::new(group_size, level),
-            spec_summary: SummaryTable::new(256, SPEC_SUMMARY_SIZE),
-            chrom_summary: SummaryTable::new(32, CHROM_SUMMARY_SIZE),
-            spec_index: IndexTable::new(256),
-            chrom_index: IndexTable::new(32),
-            spec_arefs: ArrayRefTable::new(256),
-            chrom_arefs: ArrayRefTable::new(32),
-            spec_count: 0,
-            chrom_count: 0,
-            spec_aref_cursor: 0,
-            chrom_aref_cursor: 0,
-            spec_seen: Vec::with_capacity(8),
-            chrom_seen: Vec::with_capacity(8),
-            spec_container_offset: 0,
-            spec_block_count: 0,
-            spec_container_total: 0,
-            chrom_container_offset: 0,
-            chrom_block_count: 0,
-            chrom_container_total: 0,
+            spec_stream: ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, config)?,
+            chrom_stream: ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, config)?,
         })
     }
 
@@ -180,111 +323,68 @@ impl<'out> IonWriter<'out> {
             .run
             .spectrum_list
             .as_ref()
-            .map_or(&[][..], |sl| &sl.spectra);
+            .map_or(&[][..], |list| &list.spectra);
         let chroms = mzml
             .run
             .chromatogram_list
             .as_ref()
-            .map_or(&[][..], |cl| &cl.chromatograms);
+            .map_or(&[][..], |list| &list.chromatograms);
 
-        let spec_policy = self.config.array_policy(MZ_ARRAY);
-        let chrom_policy = self.config.array_policy(TIME_ARRAY);
-
-        let spec_list_id = self.spec_list_id;
-        let chrom_list_id = self.chrom_list_id;
-
-        let spec_container_offset = write_aligned(self.output, &[])?;
-        self.spec_container_offset = spec_container_offset;
-
-        {
-            let compressor = self.config.compression_mode();
-            let builder = ContainerBuilder::new(
-                self.output,
-                self.config.uncompressed_block_size,
-                compressor,
-                self.config.block_packing_id(),
-            );
-            let mut spec_container = if self.config.parallel {
-                builder
-            } else {
-                builder.force_sequential()
-            };
-
-            let spec_list_schema = mzml.run.spectrum_list.as_ref();
-            for (i, spec) in spectra.iter().enumerate() {
-                encode_arrays_for(
-                    spec,
-                    self.config,
-                    spec_policy,
-                    &mut spec_container,
-                    &mut self.spec_index,
-                    &mut self.spec_arefs,
-                    &mut self.spec_aref_cursor,
-                    &mut self.spec_seen,
-                )?;
-                self.spec_summary.push(&spec_summary_bytes(spec));
-                self.collector.add_item(
-                    spec,
-                    i,
-                    spec_list_id,
-                    spec_list_schema,
-                    spec_policy,
-                    &mut self.spec_grouper,
-                );
-                self.spec_count += 1;
-            }
-
-            let (block_count, total) = spec_container.finish()?;
-            self.spec_block_count = block_count as u64;
-            self.spec_container_total = total;
-        }
-        let chrom_container_offset = write_aligned(self.output, &[])?;
-        self.chrom_container_offset = chrom_container_offset;
-
-        {
-            let compressor = self.config.compression_mode();
-            let builder = ContainerBuilder::new(
-                self.output,
-                self.config.uncompressed_block_size,
-                compressor,
-                self.config.block_packing_id(),
-            );
-            let mut chrom_container = if self.config.parallel {
-                builder
-            } else {
-                builder.force_sequential()
-            };
-
-            let chrom_list_schema = mzml.run.chromatogram_list.as_ref();
-            for (i, chrom) in chroms.iter().enumerate() {
-                encode_arrays_for(
-                    chrom,
-                    self.config,
-                    chrom_policy,
-                    &mut chrom_container,
-                    &mut self.chrom_index,
-                    &mut self.chrom_arefs,
-                    &mut self.chrom_aref_cursor,
-                    &mut self.chrom_seen,
-                )?;
-                self.chrom_summary.push(&chrom_summary_bytes(chrom));
-                self.collector.add_item(
-                    chrom,
-                    i,
-                    chrom_list_id,
-                    chrom_list_schema,
-                    chrom_policy,
-                    &mut self.chrom_grouper,
-                );
-                self.chrom_count += 1;
-            }
-
-            let (block_count, total) = chrom_container.finish()?;
-            self.chrom_block_count = block_count as u64;
-            self.chrom_container_total = total;
-        }
+        write_list(
+            self.output,
+            self.config,
+            self.config.array_policy(MZ_ARRAY),
+            self.spec_list_id,
+            mzml.run.spectrum_list.as_ref(),
+            &mut self.collector,
+            &mut self.spec_stream,
+            spectra.iter().map(Ok),
+            spec_summary_bytes,
+        )?;
+        write_list(
+            self.output,
+            self.config,
+            self.config.array_policy(TIME_ARRAY),
+            self.chrom_list_id,
+            mzml.run.chromatogram_list.as_ref(),
+            &mut self.collector,
+            &mut self.chrom_stream,
+            chroms.iter().map(Ok),
+            chrom_summary_bytes,
+        )?;
 
         self.finish_inner(mzml)
+    }
+
+    pub fn write_reader(&mut self, reader: &mut dyn FileReader) -> IonResult<()> {
+        let metadata = reader.get_metadata()?;
+        write_list(
+            self.output,
+            self.config,
+            self.config.array_policy(MZ_ARRAY),
+            self.spec_list_id,
+            metadata.run.spectrum_list.as_ref(),
+            &mut self.collector,
+            &mut self.spec_stream,
+            std::iter::from_fn(|| reader.next_spectrum().transpose()),
+            spec_summary_bytes,
+        )?;
+
+        let metadata = reader.get_metadata()?;
+        write_list(
+            self.output,
+            self.config,
+            self.config.array_policy(TIME_ARRAY),
+            self.chrom_list_id,
+            metadata.run.chromatogram_list.as_ref(),
+            &mut self.collector,
+            &mut self.chrom_stream,
+            std::iter::from_fn(|| reader.next_chromatogram().transpose()),
+            chrom_summary_bytes,
+        )?;
+
+        let metadata = reader.get_metadata()?;
+        self.finish_inner(&metadata)
     }
 
     fn finish_inner(&mut self, mzml: &MzML) -> IonResult<()> {
@@ -293,36 +393,38 @@ impl<'out> IonWriter<'out> {
         let global_uncompressed = raw_global.len() as u64;
         let global_bytes = compress_bytes_if_enabled(raw_global, self.config.compression_level);
 
-        let spec_grouped = std::mem::replace(
-            &mut self.spec_grouper,
-            MetaGrouper::new(METADATA_GROUP_SIZE, self.config.compression_level),
+        let spec = std::mem::replace(
+            &mut self.spec_stream,
+            ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, self.config)?,
         )
-        .finish();
-        let chrom_grouped = std::mem::replace(
-            &mut self.chrom_grouper,
-            MetaGrouper::new(METADATA_GROUP_SIZE, self.config.compression_level),
+        .finish()?;
+        let chrom = std::mem::replace(
+            &mut self.chrom_stream,
+            ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, self.config)?,
         )
-        .finish();
+        .finish()?;
 
-        let spec_summary_bytes_vec = std::mem::take(&mut self.spec_summary).finish();
-        let chrom_summary_bytes_vec = std::mem::take(&mut self.chrom_summary).finish();
-        let spec_index_bytes = std::mem::take(&mut self.spec_index).finish();
-        let chrom_index_bytes = std::mem::take(&mut self.chrom_index).finish();
-        let spec_aref_bytes = std::mem::take(&mut self.spec_arefs).finish();
-        let chrom_aref_bytes = std::mem::take(&mut self.chrom_arefs).finish();
-
-        let spec_meta_crc32 = crc32fast::hash(&spec_grouped.bytes);
-        let chrom_meta_crc32 = crc32fast::hash(&chrom_grouped.bytes);
+        let spec_meta_crc32 = spec.grouped.crc32;
+        let chrom_meta_crc32 = chrom.grouped.crc32;
         let global_meta_crc32 = crc32fast::hash(&global_bytes);
 
-        let off_spec_summary = write_aligned(self.output, &spec_summary_bytes_vec)?;
-        let off_spec_entries = write_aligned(self.output, &spec_index_bytes)?;
-        let off_spec_arrayrefs = write_aligned(self.output, &spec_aref_bytes)?;
-        let off_chrom_summary = write_aligned(self.output, &chrom_summary_bytes_vec)?;
-        let off_chrom_entries = write_aligned(self.output, &chrom_index_bytes)?;
-        let off_chrom_arrayrefs = write_aligned(self.output, &chrom_aref_bytes)?;
-        let off_spec_meta = write_aligned(self.output, &spec_grouped.bytes)?;
-        let off_chrom_meta = write_aligned(self.output, &chrom_grouped.bytes)?;
+        let spec_summary_len = spec.summary.len();
+        let spec_index_len = spec.index.len();
+        let spec_aref_len = spec.arefs.len();
+        let chrom_summary_len = chrom.summary.len();
+        let chrom_index_len = chrom.index.len();
+        let chrom_aref_len = chrom.arefs.len();
+        let spec_meta_len = spec.grouped.byte_len;
+        let chrom_meta_len = chrom.grouped.byte_len;
+
+        let off_spec_summary = write_chunk(self.output, spec.summary)?.0;
+        let off_spec_entries = write_chunk(self.output, spec.index)?.0;
+        let off_spec_arrayrefs = write_chunk(self.output, spec.arefs)?.0;
+        let off_chrom_summary = write_chunk(self.output, chrom.summary)?.0;
+        let off_chrom_entries = write_chunk(self.output, chrom.index)?.0;
+        let off_chrom_arrayrefs = write_chunk(self.output, chrom.arefs)?.0;
+        let off_spec_meta = write_chunk(self.output, spec.grouped.section)?.0;
+        let off_chrom_meta = write_chunk(self.output, chrom.grouped.section)?.0;
         let off_global_meta = write_aligned(self.output, &global_bytes)?;
 
         self.output.write_bytes(&FILE_TRAILER)?;
@@ -335,53 +437,53 @@ impl<'out> IonWriter<'out> {
             target_block_size: self.config.uncompressed_block_size as u64,
 
             offset_spec_entries: off_spec_entries,
-            len_spec_entries: spec_index_bytes.len() as u64,
+            len_spec_entries: spec_index_len,
             offset_spec_arrayrefs: off_spec_arrayrefs,
-            len_spec_arrayrefs: spec_aref_bytes.len() as u64,
+            len_spec_arrayrefs: spec_aref_len,
             offset_chrom_entries: off_chrom_entries,
-            len_chrom_entries: chrom_index_bytes.len() as u64,
+            len_chrom_entries: chrom_index_len,
             offset_chrom_arrayrefs: off_chrom_arrayrefs,
-            len_chrom_arrayrefs: chrom_aref_bytes.len() as u64,
+            len_chrom_arrayrefs: chrom_aref_len,
             offset_spec_meta: off_spec_meta,
-            len_spec_meta: spec_grouped.bytes.len() as u64,
+            len_spec_meta: spec_meta_len,
             offset_chrom_meta: off_chrom_meta,
-            len_chrom_meta: chrom_grouped.bytes.len() as u64,
+            len_chrom_meta: chrom_meta_len,
             offset_global_meta: off_global_meta,
             len_global_meta: global_bytes.len() as u64,
-            offset_packed_spectra: self.spec_container_offset,
-            len_packed_spectra: self.spec_container_total,
-            offset_packed_chroms: self.chrom_container_offset,
-            len_packed_chroms: self.chrom_container_total,
+            offset_packed_spectra: spec.container_offset,
+            len_packed_spectra: spec.container_total,
+            offset_packed_chroms: chrom.container_offset,
+            len_packed_chroms: chrom.container_total,
 
-            spectrum_block_count: self.spec_block_count,
-            chrom_block_count: self.chrom_block_count,
-            spectrum_count: self.spec_count as u64,
-            chrom_count: self.chrom_count as u64,
+            spectrum_block_count: spec.block_count,
+            chrom_block_count: chrom.block_count,
+            spectrum_count: spec.count as u64,
+            chrom_count: chrom.count as u64,
 
-            spec_meta_row_count: spec_grouped.row_count,
-            spec_meta_numeric_count: spec_grouped.numeric_count,
-            spec_meta_string_count: spec_grouped.string_count,
-            chrom_meta_row_count: chrom_grouped.row_count,
-            chrom_meta_numeric_count: chrom_grouped.numeric_count,
-            chrom_meta_string_count: chrom_grouped.string_count,
+            spec_meta_row_count: spec.grouped.row_count,
+            spec_meta_numeric_count: spec.grouped.numeric_count,
+            spec_meta_string_count: spec.grouped.string_count,
+            chrom_meta_row_count: chrom.grouped.row_count,
+            chrom_meta_numeric_count: chrom.grouped.numeric_count,
+            chrom_meta_string_count: chrom.grouped.string_count,
             global_meta_row_count: global_meta.ref_codes.len() as u64,
             global_meta_numeric_count: global_meta.numeric_values.len() as u64,
             global_meta_string_count: global_meta.string_offsets.len() as u64,
-            spec_array_type_count: self.spec_seen.len() as u64,
-            chrom_array_type_count: self.chrom_seen.len() as u64,
+            spec_array_type_count: spec.type_count as u64,
+            chrom_array_type_count: chrom.type_count as u64,
 
-            spec_meta_uncompressed_size: spec_grouped.uncompressed_size,
-            chrom_meta_uncompressed_size: chrom_grouped.uncompressed_size,
+            spec_meta_uncompressed_size: spec.grouped.uncompressed_size,
+            chrom_meta_uncompressed_size: chrom.grouped.uncompressed_size,
             global_meta_uncompressed_size: global_uncompressed,
 
             meta_group_size: METADATA_GROUP_SIZE,
-            spec_meta_group_count: spec_grouped.group_count,
-            chrom_meta_group_count: chrom_grouped.group_count,
+            spec_meta_group_count: spec.grouped.group_count,
+            chrom_meta_group_count: chrom.grouped.group_count,
 
             off_spec_summary,
-            len_spec_summary: spec_summary_bytes_vec.len() as u64,
+            len_spec_summary: spec_summary_len,
             off_chrom_summary,
-            len_chrom_summary: chrom_summary_bytes_vec.len() as u64,
+            len_chrom_summary: chrom_summary_len,
 
             total_file_size,
 
@@ -399,17 +501,15 @@ impl<'out> IonWriter<'out> {
     }
 }
 
+pub fn stream_to_ion(reader: &mut dyn FileReader, writer: &mut IonWriter<'_>) -> IonResult<()> {
+    writer.write_reader(reader)
+}
+
 pub fn write_mzml_to_ion(
     mzml: &MzML,
     config: EncodingConfig,
     output: &mut dyn EncoderOutput,
 ) -> IonResult<()> {
-    if config.compression_level > 22 {
-        return Err(format!(
-            "compression_level must be 0–22, got {}",
-            config.compression_level
-        )
-        .into());
-    }
+    allow_compression_level(config.compression_level)?;
     IonWriter::begin(output, config)?.write_mzml(mzml)
 }

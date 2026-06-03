@@ -11,6 +11,7 @@ use std::{
 
 use clap::{
     ArgAction, ArgGroup, Args, ColorChoice, CommandFactory, FromArgMatches, Parser, Subcommand,
+    ValueEnum,
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
 use mimalloc::MiMalloc;
@@ -20,14 +21,15 @@ use serde::Serialize;
 
 use ionic::{
     ion::{
-        DecoderConfig, FileEncoderOutput, Ion,
+        DecoderConfig, FileEncoderOutput, Ion, TempFile,
         encoder::{
             encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
-            ion_writer::write_mzml_to_ion,
+            ion_writer::{IonWriter, stream_to_ion},
+            utilities::SectionChunkMode,
         },
         format::{CURRENT_VERSION, FILE_TRAILER, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION},
     },
-    mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
+    mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 
 mod utilities;
@@ -151,8 +153,26 @@ struct ConvertArgs {
     #[arg(long = "many-files", default_value_t = false, action = ArgAction::SetTrue)]
     many_files: bool,
 
+    #[arg(long = "section-chunk", value_enum, default_value_t = SectionChunkArg::Memory)]
+    section_chunk: SectionChunkArg,
+
     #[command(flatten)]
     which: ConvertWhich,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SectionChunkArg {
+    Memory,
+    Disk,
+}
+
+impl SectionChunkArg {
+    fn mode(self) -> SectionChunkMode {
+        match self {
+            Self::Memory => SectionChunkMode::Memory,
+            Self::Disk => SectionChunkMode::Disk,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -334,6 +354,27 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     Err(format!(
         "unsupported file extension: {ext:?} (expected .mzML or .ion/.b32)"
     ))
+}
+
+fn write_mzml_as_ion(
+    input_path: &Path,
+    output_path: &Path,
+    config: EncodingConfig,
+) -> Result<(), String> {
+    let temp_output = TempFile::new(output_path).map_err(|error| error.to_string())?;
+    let mut input_reader = MzmlReader::open(input_path).map_err(|error| error.to_string())?;
+    {
+        let mut output_file =
+            FileEncoderOutput::open_path(temp_output.path()).map_err(|error| error.to_string())?;
+        let mut ion_writer =
+            IonWriter::begin(&mut output_file, config).map_err(|error| error.to_string())?;
+        stream_to_ion(&mut input_reader, &mut ion_writer).map_err(|error| error.to_string())?;
+        drop(ion_writer);
+        output_file.flush().map_err(|error| error.to_string())?;
+    }
+    temp_output
+        .move_to(output_path)
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -613,68 +654,18 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
             let t0 = Instant::now();
 
-            let bytes = match fs::read(in_path) {
-                Ok(v) => v,
-                Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: read failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-
-            let mzml = match parse_mzml(&bytes) {
-                Ok(v) => v,
-                Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: parse_mzml failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-
-            let in_mb = bytes.len() as f64 / MB;
-            drop(bytes);
-
-            let out_path_str = out_path.to_string_lossy();
-            let mut file_output = match FileEncoderOutput::open_for_writing(out_path_str.as_ref()) {
-                Ok(f) => f,
-                Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(&out_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: open file failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
+            let in_mb = fs::metadata(in_path)
+                .map(|m| m.len() as f64 / MB)
+                .unwrap_or(0.0);
 
             let config = EncodingConfig {
                 compression_level: cmd.compression_level,
                 force_f32: f32_compress,
                 uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
                 parallel: matches!(encoding, Encoding::Parallel),
+                section_chunk: cmd.section_chunk.mode(),
             };
-            if let Err(e) = write_mzml_to_ion(&mzml, config, &mut file_output) {
+            if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {
                 had_failed.store(true, Ordering::Relaxed);
                 failed.fetch_add(1, Ordering::Relaxed);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -687,9 +678,6 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 let _ = stderr().flush();
                 return;
             }
-
-            drop(mzml);
-            drop(file_output);
 
             let out_mb = fs::metadata(&out_path)
                 .map(|m| m.len() as f64 / MB)

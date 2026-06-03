@@ -1,5 +1,8 @@
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+use std::io::Read;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::mem::MaybeUninit;
-
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::zstd_safe;
 
 use crate::{
@@ -91,6 +94,7 @@ pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult
 }
 
 #[inline]
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub(crate) fn decompress_zstd(
     comp: &[u8],
     expected: usize,
@@ -125,6 +129,37 @@ pub(crate) fn decompress_zstd(
 }
 
 #[inline]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+pub(crate) fn decompress_zstd(
+    comp: &[u8],
+    expected: usize,
+    budget: DecompressionBudget,
+) -> IonResult<Vec<u8>> {
+    if expected == 0 {
+        return Ok(Vec::new());
+    }
+
+    budget.validate(comp.len(), expected)?;
+
+    let mut decoder = ruzstd::StreamingDecoder::new(comp)
+        .map_err(|err| IonError::from(format!("zstd decode failed: {err:?}")))?;
+    let mut out = Vec::with_capacity(expected);
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|err| IonError::from(format!("zstd decode failed: {err}")))?;
+
+    if out.len() != expected {
+        return Err(format!(
+            "zstd: bad decoded size (got={}, expected={expected})",
+            out.len()
+        )
+        .into());
+    }
+
+    Ok(out)
+}
+
+#[inline]
 pub(crate) fn decompress_zstd_allow_aligned_padding(
     input: &[u8],
     expected: usize,
@@ -134,7 +169,8 @@ pub(crate) fn decompress_zstd_allow_aligned_padding(
         return Ok(Vec::new());
     }
 
-    if let Ok(n) = zstd::zstd_safe::find_frame_compressed_size(input)
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    if let Ok(n) = zstd_safe::find_frame_compressed_size(input)
         && n > 0
         && n <= input.len()
         && let Ok(v) = decompress_zstd(&input[..n], expected, budget)

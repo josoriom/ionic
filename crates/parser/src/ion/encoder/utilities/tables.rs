@@ -1,71 +1,55 @@
-use crate::encoder::utilities::le_writers::{write_u32_le, write_u64_le};
 use crate::ion::IonResult;
-use crate::ion::encoder::utilities::encoder_output::EncoderOutput;
+use crate::ion::encoder::utilities::encoder_output::{EncoderOutput, SectionChunk};
 
 pub(crate) struct SummaryTable {
-    bytes: Vec<u8>,
+    section_chunk: SectionChunk,
 }
 
 impl SummaryTable {
-    pub(crate) fn new(item_count_hint: usize, record_size: usize) -> Self {
-        Self {
-            bytes: Vec::with_capacity(item_count_hint * record_size),
-        }
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
     }
 
-    pub(crate) fn push(&mut self, record: &[u8]) {
-        self.bytes.extend_from_slice(record);
+    pub(crate) fn push(&mut self, record: &[u8]) -> IonResult<()> {
+        self.section_chunk.write(record)
     }
 
-    pub(crate) fn finish(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
-impl Default for SummaryTable {
-    fn default() -> Self {
-        Self { bytes: Vec::new() }
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
     }
 }
 
 pub(crate) struct IndexTable {
-    bytes: Vec<u8>,
+    section_chunk: SectionChunk,
 }
 
 impl IndexTable {
-    pub(crate) fn new(item_count_hint: usize) -> Self {
-        Self {
-            bytes: Vec::with_capacity(item_count_hint * 16),
-        }
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
     }
 
-    pub(crate) fn push(&mut self, first_aref: u64, aref_count: u64) {
-        write_u64_le(&mut self.bytes, first_aref);
-        write_u64_le(&mut self.bytes, aref_count);
+    pub(crate) fn push(&mut self, first_aref: u64, aref_count: u64) -> IonResult<()> {
+        let mut record = [0u8; 16];
+        record[0..8].copy_from_slice(&first_aref.to_le_bytes());
+        record[8..16].copy_from_slice(&aref_count.to_le_bytes());
+        self.section_chunk.write(&record)
     }
 
-    pub(crate) fn finish(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
-impl Default for IndexTable {
-    fn default() -> Self {
-        Self { bytes: Vec::new() }
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
     }
 }
 
 pub(crate) struct ArrayRefTable {
-    bytes: Vec<u8>,
+    section_chunk: SectionChunk,
 }
 
 impl ArrayRefTable {
-    pub(crate) fn new(item_count_hint: usize) -> Self {
-        Self {
-            bytes: Vec::with_capacity(item_count_hint * 2 * 32),
-        }
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn push(
         &mut self,
         element_offset: u64,
@@ -75,25 +59,20 @@ impl ArrayRefTable {
         dtype: u8,
         array_filter: u8,
         encoded_len: u32,
-    ) {
-        write_u64_le(&mut self.bytes, element_offset);
-        write_u64_le(&mut self.bytes, element_count);
-        write_u32_le(&mut self.bytes, block_id);
-        write_u32_le(&mut self.bytes, array_accession);
-        self.bytes.push(dtype);
-        self.bytes.push(array_filter);
-        write_u32_le(&mut self.bytes, encoded_len);
-        self.bytes.extend_from_slice(&[0u8; 2]);
+    ) -> IonResult<()> {
+        let mut record = [0u8; 32];
+        record[0..8].copy_from_slice(&element_offset.to_le_bytes());
+        record[8..16].copy_from_slice(&element_count.to_le_bytes());
+        record[16..20].copy_from_slice(&block_id.to_le_bytes());
+        record[20..24].copy_from_slice(&array_accession.to_le_bytes());
+        record[24] = dtype;
+        record[25] = array_filter;
+        record[26..30].copy_from_slice(&encoded_len.to_le_bytes());
+        self.section_chunk.write(&record)
     }
 
-    pub(crate) fn finish(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
-impl Default for ArrayRefTable {
-    fn default() -> Self {
-        Self { bytes: Vec::new() }
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
     }
 }
 

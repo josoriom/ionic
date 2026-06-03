@@ -9,6 +9,9 @@ pub struct SpectrumSummary {
     pub total_ion_current: f64,
     pub ms_level: u8,
     pub polarity: u8,
+    pub position_x: u32,
+    pub position_y: u32,
+    pub position_z: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
