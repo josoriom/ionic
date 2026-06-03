@@ -17,7 +17,7 @@ pub(crate) use parse_precursor_list::parse_precursor_list;
 pub(crate) mod parse_product_list;
 pub(crate) use parse_product_list::parse_product_list;
 pub(crate) mod parse_spectrum_list;
-pub(crate) use parse_spectrum_list::parse_spectrum_list;
+pub(crate) use parse_spectrum_list::{parse_spectrum, parse_spectrum_list};
 pub(crate) mod parse_chromatogram_list;
 pub(crate) use parse_chromatogram_list::parse_chromatogram_list;
 pub(crate) mod assign_attributes;

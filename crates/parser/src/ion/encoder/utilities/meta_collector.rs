@@ -1912,6 +1912,66 @@ mod tests {
     }
 
     #[test]
+    fn grouped_metadata_keeps_values_local_to_each_group() {
+        use crate::decoder::decode::MetadatumValue;
+        use crate::ion::DecompressionBudget;
+        use crate::ion::format::CODEC_NONE;
+        use crate::ion::utilities::MetaGroupReader;
+
+        let make_cv = |value: &str| CvParam {
+            cv_ref: Some("MS".to_string()),
+            accession: Some("MS:1000285".to_string()),
+            name: String::new(),
+            value: Some(value.to_string()),
+            unit_cv_ref: None,
+            unit_name: None,
+            unit_accession: None,
+        };
+
+        let mut builder = PackedMetaBuilder::new();
+        builder.push_row(TagId::CvParam as u8, 1, 0, &make_cv("10.5"));
+        builder.end_item();
+        builder.push_row(TagId::CvParam as u8, 2, 0, &make_cv("20.5"));
+        builder.end_item();
+        builder.push_row(TagId::CvParam as u8, 3, 0, &make_cv("30.5"));
+        builder.end_item();
+        let meta = builder.build();
+
+        let grouped = build_grouped_section(&meta, 1, 0);
+        assert_eq!(grouped.group_count, 3);
+
+        let mut reader = MetaGroupReader::new(
+            &grouped.bytes,
+            grouped.group_count,
+            1,
+            3,
+            CODEC_NONE,
+            true,
+            DecompressionBudget::default(),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+
+        let all = reader.read_all().unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].item_index, 0);
+        assert_eq!(all[1].item_index, 1);
+        assert_eq!(all[2].item_index, 2);
+        assert_eq!(all[0].value, MetadatumValue::Number(10.5));
+        assert_eq!(all[1].value, MetadatumValue::Number(20.5));
+        assert_eq!(all[2].value, MetadatumValue::Number(30.5));
+
+        let second = reader.read_item(1).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].item_index, 1);
+        assert_eq!(second[0].value, MetadatumValue::Number(20.5));
+
+        let third = reader.read_item(2).unwrap();
+        assert_eq!(third.len(), 1);
+        assert_eq!(third[0].value, MetadatumValue::Number(30.5));
+    }
+
+    #[test]
     fn array_policy_identifies_xy_arrays() {
         let policy = ArrayPolicy {
             x_array_accession: MZ_ARRAY,

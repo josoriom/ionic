@@ -204,7 +204,7 @@ impl FileHeader {
 
         patch_u64_at(buf, HEADER_TOTAL_FILE_SIZE, self.total_file_size);
 
-        patch_u32_at(buf, HEADER_META_GROUP_SIZE, self.meta_group_size);
+        patch_u64_at(buf, HEADER_META_GROUP_SIZE, self.meta_group_size as u64);
         patch_u64_at(
             buf,
             HEADER_SPEC_META_GROUP_COUNT,

@@ -39,7 +39,7 @@ use crate::{
             parse_global_metadata::parse_global_metadata,
             parse_header::{Header, parse_header},
             parse_instrument_list, parse_referenceable_param_group_list, parse_sample_list,
-            parse_scan_settings_list, parse_software_list, parse_spectrum_list,
+            parse_scan_settings_list, parse_software_list, parse_spectrum, parse_spectrum_list,
             spectrum_source::{
                 ScanSource, ScanSummary, f16_bits_to_f64, load_scan_from_spectra,
                 summary_from_spectra, summary_from_spectrum,
@@ -57,14 +57,14 @@ const DEFAULT_MAX_CACHED_BYTES: usize = 256 * 1024 * 1024;
 const INLINE_ARRAY_REF_CAP: usize = 8;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum MetadatumValue {
+pub enum MetadatumValue {
     Number(f64),
     Text(String),
     Empty,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Metadatum {
+pub struct Metadatum {
     pub(crate) item_index: u32,
     pub(crate) id: u32,
     pub(crate) parent_id: u32,
@@ -128,11 +128,12 @@ pub struct Decoder<'a> {
     header: Header,
     spec_container: ContainerView<'a, DefaultProcessor>,
     chrom_container: Option<ContainerView<'a, DefaultProcessor>>,
+    spec_meta_reader: MetaGroupReader<'a>,
+    chrom_meta_reader: MetaGroupReader<'a>,
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
     parallel: bool,
     decompression_budget: DecompressionBudget,
-    verify_checksums: bool,
 }
 
 #[allow(dead_code)]
@@ -247,16 +248,48 @@ impl<'a> Decoder<'a> {
             None
         };
 
+        let spec_meta_reader = MetaGroupReader::new(
+            slice_at(
+                bytes,
+                header.off_spec_meta,
+                header.len_spec_meta,
+                "spec_meta",
+            )?,
+            header.spec_meta_group_count,
+            header.meta_group_size,
+            header.spectrum_count,
+            header.compression_codec,
+            config.verify_checksums,
+            config.decompression_budget,
+            config.max_cached_bytes,
+        )?;
+        let chrom_meta_reader = MetaGroupReader::new(
+            slice_at(
+                bytes,
+                header.off_chrom_meta,
+                header.len_chrom_meta,
+                "chrom_meta",
+            )?,
+            header.chrom_meta_group_count,
+            header.meta_group_size,
+            header.chrom_count,
+            header.compression_codec,
+            config.verify_checksums,
+            config.decompression_budget,
+            config.max_cached_bytes,
+        )?;
+
         Ok(Self {
             bytes,
             header,
             spec_container,
             chrom_container,
+            spec_meta_reader,
+            chrom_meta_reader,
             mz_buf: Vec::new(),
             int_buf: Vec::new(),
             parallel: config.parallel,
             decompression_budget: config.decompression_budget,
-            verify_checksums: config.verify_checksums,
         })
     }
 
@@ -425,45 +458,19 @@ impl<'a> Decoder<'a> {
     }
 
     pub(crate) fn spectrum_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        self.spectrum_meta_reader()?.read_all()
+        self.spec_meta_reader.read_all()
     }
 
     pub(crate) fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        self.chromatogram_meta_reader()?.read_all()
+        self.chrom_meta_reader.read_all()
     }
 
-    fn spectrum_meta_reader(&self) -> IonResult<MetaGroupReader<'a>> {
-        MetaGroupReader::new(
-            slice_at(
-                self.bytes,
-                self.header.off_spec_meta,
-                self.header.len_spec_meta,
-                "spec_meta",
-            )?,
-            self.header.spec_meta_group_count,
-            self.header.meta_group_size,
-            self.header.spectrum_count,
-            self.header.compression_codec,
-            self.verify_checksums,
-            self.decompression_budget,
-        )
+    pub fn spectrum_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
+        self.spec_meta_reader.read_item(index as u64)
     }
 
-    fn chromatogram_meta_reader(&self) -> IonResult<MetaGroupReader<'a>> {
-        MetaGroupReader::new(
-            slice_at(
-                self.bytes,
-                self.header.off_chrom_meta,
-                self.header.len_chrom_meta,
-                "chrom_meta",
-            )?,
-            self.header.chrom_meta_group_count,
-            self.header.meta_group_size,
-            self.header.chrom_count,
-            self.header.compression_codec,
-            self.verify_checksums,
-            self.decompression_budget,
-        )
+    pub fn chromatogram_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
+        self.chrom_meta_reader.read_item(index as u64)
     }
 
     pub fn to_mzml_metadata_only(&self) -> IonResult<MzML> {
@@ -478,14 +485,10 @@ impl<'a> Decoder<'a> {
         if index >= self.header.spectrum_count as usize {
             return Ok(None);
         }
-        let mut mzml = MzmlConverter::metadata_only(self)?;
-        let Some(list) = mzml.run.spectrum_list.as_mut() else {
+        let rows = self.spec_meta_reader.read_item(index as u64)?;
+        let Some(mut spectrum) = build_one_spectrum(&rows, index) else {
             return Ok(None);
         };
-        if index >= list.spectra.len() {
-            return Ok(None);
-        }
-        let mut spectrum = std::mem::take(&mut list.spectra[index]);
 
         if let Some(arefs) = read_array_refs_at(
             self.bytes,
@@ -513,24 +516,43 @@ impl<'a> Decoder<'a> {
     }
 }
 
+fn build_one_spectrum(rows: &[Metadatum], fallback_index: usize) -> Option<Spectrum> {
+    let children_lookup = ChildrenLookup::new(rows);
+    let spectrum_id = children_lookup.all_ids(TagId::Spectrum).first().copied()?;
+    let mut owner_rows = OwnerRows::with_capacity(rows.len());
+    for row in rows {
+        owner_rows.insert(row.id, row);
+    }
+    let policy = DefaultMetadataPolicy;
+    let mut param_buffer = Vec::new();
+    Some(parse_spectrum(
+        &owner_rows,
+        &children_lookup,
+        spectrum_id,
+        fallback_index as u32,
+        &policy,
+        &mut param_buffer,
+    ))
+}
+
 #[allow(clippy::large_enum_variant)]
 enum IonBackend<'a> {
     Decoder(Decoder<'a>),
-    Materialized,
+    Data,
 }
 
 impl<'a> IonBackend<'a> {
     fn as_decoder(&self) -> Option<&Decoder<'a>> {
         match self {
             Self::Decoder(d) => Some(d),
-            Self::Materialized => None,
+            Self::Data => None,
         }
     }
 
     fn as_decoder_mut(&mut self) -> Option<&mut Decoder<'a>> {
         match self {
             Self::Decoder(d) => Some(d),
-            Self::Materialized => None,
+            Self::Data => None,
         }
     }
 }
@@ -563,7 +585,7 @@ impl<'a> Ion<'a> {
     }
 
     pub fn from_mzml(mzml: MzML) -> Self {
-        let mut ion = Self::empty(IonBackend::Materialized);
+        let mut ion = Self::empty(IonBackend::Data);
         ion.set_from_mzml(mzml);
         ion
     }
@@ -631,7 +653,7 @@ impl<'a> Ion<'a> {
     pub fn load_metadata(&mut self) -> IonResult<()> {
         let mzml = match &mut self.backend {
             IonBackend::Decoder(decoder) => Some(decoder.to_mzml_metadata_only()?),
-            IonBackend::Materialized => None,
+            IonBackend::Data => None,
         };
         if let Some(mzml) = mzml {
             self.set_from_mzml(mzml);
@@ -749,11 +771,29 @@ impl<'a> Ion<'a> {
     pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
         match &mut self.backend {
             IonBackend::Decoder(d) => d.spectrum_at(index),
-            IonBackend::Materialized => Ok(self
+            IonBackend::Data => Ok(self
                 .run
                 .spectrum_list
                 .as_ref()
                 .and_then(|l| l.spectra.get(index).cloned())),
+        }
+    }
+
+    pub fn spectrum_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
+        match &mut self.backend {
+            IonBackend::Decoder(d) => d.spectrum_metadata_at(index),
+            IonBackend::Data => Err(IonError::from(
+                "metadata rows are only available on a file-backed Ion (use Ion::open)",
+            )),
+        }
+    }
+
+    pub fn chromatogram_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
+        match &mut self.backend {
+            IonBackend::Decoder(d) => d.chromatogram_metadata_at(index),
+            IonBackend::Data => Err(IonError::from(
+                "metadata rows are only available on a file-backed Ion (use Ion::open)",
+            )),
         }
     }
 }
@@ -892,7 +932,7 @@ impl<'a> ScanSource for Ion<'a> {
     fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.for_each_summary(callback),
-            IonBackend::Materialized => {
+            IonBackend::Data => {
                 if let Some(list) = self.run.spectrum_list.as_ref() {
                     summary_from_spectra(&list.spectra, callback);
                 }
@@ -903,7 +943,7 @@ impl<'a> ScanSource for Ion<'a> {
     fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.load_scan(index, mz, intensity),
-            IonBackend::Materialized => {
+            IonBackend::Data => {
                 let spectra = self
                     .run
                     .spectrum_list
@@ -924,7 +964,7 @@ impl<'a> ScanSource for Ion<'a> {
             IonBackend::Decoder(decoder) => {
                 decoder.for_each_in_range(rt_min, rt_max, ms_level, callback);
             }
-            IonBackend::Materialized => {
+            IonBackend::Data => {
                 let spectra = self
                     .run
                     .spectrum_list
@@ -1762,6 +1802,51 @@ mod tests {
     }
 
     const BYTES: &[u8] = include_bytes!("../../../data/ion/test.ion");
+
+    #[test]
+    fn spectrum_at_lazy_matches_full_conversion() {
+        let mut decoder = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
+        let full = decoder.to_mzml().unwrap();
+        let full_spectra = full.run.spectrum_list.expect("spectrum list").spectra;
+        for index in 0..full_spectra.len() {
+            let lazy = decoder
+                .spectrum_at(index)
+                .unwrap()
+                .expect("spectrum present");
+            assert_eq!(
+                format!("{lazy:?}"),
+                format!("{:?}", full_spectra[index]),
+                "spectrum {index} differs between lazy and full paths"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_at_matches_filtered_full_read() {
+        let mut decoder = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
+
+        let all_spectra = decoder.spectrum_metadata().unwrap();
+        for index in 0..decoder.spectrum_count() as usize {
+            let one = decoder.spectrum_metadata_at(index).unwrap();
+            let expected: Vec<_> = all_spectra
+                .iter()
+                .filter(|row| row.item_index as usize == index)
+                .cloned()
+                .collect();
+            assert_eq!(format!("{one:?}"), format!("{expected:?}"));
+        }
+
+        let all_chroms = decoder.chromatogram_metadata().unwrap();
+        for index in 0..decoder.chromatogram_count() as usize {
+            let one = decoder.chromatogram_metadata_at(index).unwrap();
+            let expected: Vec<_> = all_chroms
+                .iter()
+                .filter(|row| row.item_index as usize == index)
+                .cloned()
+                .collect();
+            assert_eq!(format!("{one:?}"), format!("{expected:?}"));
+        }
+    }
 
     #[test]
     fn open_parses_header() {

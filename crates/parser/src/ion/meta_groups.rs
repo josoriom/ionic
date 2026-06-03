@@ -38,6 +38,10 @@ pub(crate) fn group_count_for(item_count: u64, group_size: u32) -> u64 {
     item_count.div_ceil(group_size)
 }
 
+pub(crate) fn group_of_item(item_index: u64, group_size: u32) -> u64 {
+    item_index / group_size as u64
+}
+
 pub(crate) fn item_range_of_group(
     group_index: u64,
     group_size: u32,
@@ -90,6 +94,14 @@ mod tests {
         assert_eq!(item_range_of_group(0, 8192, 20000), (0, 8192));
         assert_eq!(item_range_of_group(1, 8192, 20000), (8192, 16384));
         assert_eq!(item_range_of_group(2, 8192, 20000), (16384, 20000));
+    }
+
+    #[test]
+    fn item_lands_in_its_group() {
+        assert_eq!(group_of_item(0, 8192), 0);
+        assert_eq!(group_of_item(8191, 8192), 0);
+        assert_eq!(group_of_item(8192, 8192), 1);
+        assert_eq!(group_of_item(20000, 8192), 2);
     }
 
     #[test]

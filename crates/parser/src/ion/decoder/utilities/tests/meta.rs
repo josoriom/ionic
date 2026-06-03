@@ -24,6 +24,7 @@ pub(super) fn spectra_metadata(path: &str) -> Vec<Metadatum> {
         header.compression_codec,
         true,
         DecompressionBudget::default(),
+        64 * 1024 * 1024,
     )
     .expect("build spectra metadata reader")
     .read_all()
@@ -43,6 +44,7 @@ pub(super) fn chromatograms_metadata(path: &str) -> Vec<Metadatum> {
         header.compression_codec,
         true,
         DecompressionBudget::default(),
+        64 * 1024 * 1024,
     )
     .expect("build chromatograms metadata reader")
     .read_all()

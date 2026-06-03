@@ -71,7 +71,7 @@ pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
 }
 
 #[inline]
-fn parse_spectrum<'a, P: MetadataPolicy>(
+pub(crate) fn parse_spectrum<'a, P: MetadataPolicy>(
     owner_rows: &'a OwnerRows<'a>,
     children_lookup: &ChildrenLookup,
     spectrum_id: u32,

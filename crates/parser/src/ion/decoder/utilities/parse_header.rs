@@ -213,9 +213,13 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         <[u8; 8]>::try_from(&h[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8]).unwrap(),
     );
 
-    let meta_group_size = u32::from_le_bytes(
-        <[u8; 4]>::try_from(&h[HEADER_META_GROUP_SIZE..HEADER_META_GROUP_SIZE + 4]).unwrap(),
+    let meta_group_size_stored = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_META_GROUP_SIZE..HEADER_META_GROUP_SIZE + 8]).unwrap(),
     );
+    if meta_group_size_stored > u32::MAX as u64 {
+        return Err("header: meta_group_size exceeds u32 range".into());
+    }
+    let meta_group_size = meta_group_size_stored as u32;
     let spec_meta_group_count = u64::from_le_bytes(
         <[u8; 8]>::try_from(&h[HEADER_SPEC_META_GROUP_COUNT..HEADER_SPEC_META_GROUP_COUNT + 8])
             .unwrap(),
