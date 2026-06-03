@@ -1,5 +1,5 @@
 pub mod encode;
-pub use encode::{WritingMode, encode};
+pub use encode::encode;
 pub mod utilities;
 pub use utilities::FileEncoderOutput;
 pub mod ion_writer;

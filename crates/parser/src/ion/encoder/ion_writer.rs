@@ -24,10 +24,6 @@ use crate::{
     mzml::structs::{BinaryDataArrayList, Chromatogram, MzML, Spectrum},
 };
 
-const POLARITY_UNKNOWN: u8 = 0;
-const POLARITY_POSITIVE: u8 = 1;
-const POLARITY_NEGATIVE: u8 = 2;
-
 fn spec_summary_bytes(spec: &Spectrum) -> [u8; SPEC_SUMMARY_SIZE] {
     let s = spec_summary_from_spectrum(spec);
     let mut buf = [0u8; SPEC_SUMMARY_SIZE];
@@ -111,16 +107,6 @@ impl HasArrayList for Chromatogram {
     }
 }
 
-struct SpecContainer<'out> {
-    container: ContainerBuilder<'out, DefaultCompressor>,
-    offset: u64,
-}
-
-struct ChromContainer<'out> {
-    container: ContainerBuilder<'out, DefaultCompressor>,
-    offset: u64,
-}
-
 pub struct IonWriter<'out> {
     output: &'out mut dyn EncoderOutput,
     config: EncodingConfig,
@@ -144,7 +130,6 @@ pub struct IonWriter<'out> {
     spec_container_offset: u64,
     spec_block_count: u64,
     spec_container_total: u64,
-    spec_sealed: bool,
     chrom_container_offset: u64,
     chrom_block_count: u64,
     chrom_container_total: u64,
@@ -184,7 +169,6 @@ impl<'out> IonWriter<'out> {
             spec_container_offset: 0,
             spec_block_count: 0,
             spec_container_total: 0,
-            spec_sealed: false,
             chrom_container_offset: 0,
             chrom_block_count: 0,
             chrom_container_total: 0,
@@ -254,8 +238,6 @@ impl<'out> IonWriter<'out> {
             self.spec_block_count = block_count as u64;
             self.spec_container_total = total;
         }
-        self.spec_sealed = true;
-
         let chrom_container_offset = write_aligned(self.output, &[])?;
         self.chrom_container_offset = chrom_container_offset;
 

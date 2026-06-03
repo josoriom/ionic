@@ -2048,13 +2048,13 @@ mod tests {
 
     #[test]
     fn mixed_normal_and_oversized_spectra_preserve_order_and_data() {
-        use crate::ion::encoder::encode::Encoder;
-        use crate::{
-            ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
-            mzml::structs::{
-                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
-                SpectrumList,
-            },
+        use crate::ion::encoder::{
+            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            ion_writer::write_mzml_to_ion,
+        };
+        use crate::mzml::structs::{
+            BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+            SpectrumList,
         };
 
         fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
@@ -2128,17 +2128,16 @@ mod tests {
         };
 
         let mut encoded = Vec::new();
-        Encoder::new(
-            &mut encoded,
+        write_mzml_to_ion(
+            &mzml_in,
             EncodingConfig {
                 compression_level: 3,
                 force_f32: false,
-                writing_mode: WritingMode::Memory,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
             },
+            &mut encoded,
         )
-        .encode(&mzml_in)
         .unwrap();
 
         let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
@@ -2191,13 +2190,13 @@ mod tests {
 
     #[test]
     fn oversized_array_roundtrips_with_compression_and_parallel() {
-        use crate::ion::encoder::encode::Encoder;
-        use crate::{
-            ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
-            mzml::structs::{
-                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
-                SpectrumList,
-            },
+        use crate::ion::encoder::{
+            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            ion_writer::write_mzml_to_ion,
+        };
+        use crate::mzml::structs::{
+            BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+            SpectrumList,
         };
 
         let n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
@@ -2244,17 +2243,16 @@ mod tests {
         };
 
         let mut encoded = Vec::new();
-        Encoder::new(
-            &mut encoded,
+        write_mzml_to_ion(
+            &mzml_in,
             EncodingConfig {
                 compression_level: 3,
                 force_f32: false,
-                writing_mode: WritingMode::Memory,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
             },
+            &mut encoded,
         )
-        .encode(&mzml_in)
         .unwrap();
 
         let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
@@ -2302,13 +2300,13 @@ mod tests {
 
     #[test]
     fn oversized_array_roundtrips_through_encode_decode() {
-        use crate::ion::encoder::encode::Encoder;
-        use crate::{
-            ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES, WritingMode},
-            mzml::structs::{
-                BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
-                SpectrumList,
-            },
+        use crate::ion::encoder::{
+            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            ion_writer::write_mzml_to_ion,
+        };
+        use crate::mzml::structs::{
+            BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+            SpectrumList,
         };
 
         let n = (TARGET_BLOCK_UNCOMPRESSED_BYTES / 8) * 2;
@@ -2355,17 +2353,16 @@ mod tests {
         };
 
         let mut encoded = Vec::new();
-        Encoder::new(
-            &mut encoded,
+        write_mzml_to_ion(
+            &mzml_in,
             EncodingConfig {
                 compression_level: 0,
                 force_f32: false,
-                writing_mode: WritingMode::Memory,
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: false,
             },
+            &mut encoded,
         )
-        .encode(&mzml_in)
         .unwrap();
 
         let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();

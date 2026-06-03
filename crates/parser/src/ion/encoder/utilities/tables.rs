@@ -1,6 +1,6 @@
-use crate::encoder::utilities::le_writers::{write_u64_le, write_u32_le};
-use crate::ion::encoder::utilities::encoder_output::EncoderOutput;
+use crate::encoder::utilities::le_writers::{write_u32_le, write_u64_le};
 use crate::ion::IonResult;
+use crate::ion::encoder::utilities::encoder_output::EncoderOutput;
 
 pub(crate) struct SummaryTable {
     bytes: Vec<u8>,
@@ -57,14 +57,12 @@ impl Default for IndexTable {
 
 pub(crate) struct ArrayRefTable {
     bytes: Vec<u8>,
-    count: u64,
 }
 
 impl ArrayRefTable {
     pub(crate) fn new(item_count_hint: usize) -> Self {
         Self {
             bytes: Vec::with_capacity(item_count_hint * 2 * 32),
-            count: 0,
         }
     }
 
@@ -86,11 +84,6 @@ impl ArrayRefTable {
         self.bytes.push(array_filter);
         write_u32_le(&mut self.bytes, encoded_len);
         self.bytes.extend_from_slice(&[0u8; 2]);
-        self.count += 1;
-    }
-
-    pub(crate) fn count(&self) -> u64 {
-        self.count
     }
 
     pub(crate) fn finish(self) -> Vec<u8> {
@@ -100,10 +93,7 @@ impl ArrayRefTable {
 
 impl Default for ArrayRefTable {
     fn default() -> Self {
-        Self {
-            bytes: Vec::new(),
-            count: 0,
-        }
+        Self { bytes: Vec::new() }
     }
 }
 

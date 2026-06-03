@@ -2,13 +2,13 @@ use crate::{
     accessions::{
         FLOAT_32BIT, FLOAT_64BIT, HIGHEST_ION_MOBILITY, HIGHEST_OBSERVED_MZ,
         HIGHEST_OBSERVED_WAVELENGTH, INTENSITY_ARRAY, LOWEST_ION_MOBILITY, LOWEST_OBSERVED_MZ,
-        LOWEST_OBSERVED_WAVELENGTH, MZ_ARRAY, NEGATIVE_SCAN, POSITIVE_SCAN, TIME_ARRAY,
+        LOWEST_OBSERVED_WAVELENGTH, NEGATIVE_SCAN, POSITIVE_SCAN,
     },
     encoder::utilities::{
         encoder_output::EncoderOutput,
         le_writers::{
             write_f32_le, write_f32_slice_le, write_f64_le, write_f64_slice_le, write_i16_slice_le,
-            write_i32_slice_le, write_i64_slice_le, write_u16_slice_le, write_u32_le, write_u64_le,
+            write_i32_slice_le, write_i64_slice_le, write_u16_slice_le,
         },
         meta_collector::{
             ArrayPolicy, array_type_accession_from_binary_data_array, parse_accession_tail_raw,
@@ -26,7 +26,7 @@ use crate::{
         BinaryData, BinaryDataArray, Chromatogram, CvParam, MzML, NumericType, Spectrum,
     },
 };
-pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1 * 1024 * 1024;
+pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
@@ -40,12 +40,6 @@ pub(crate) const FILE_DTYPE_I64: u8 = Dtype::I64 as u8;
 const POLARITY_UNKNOWN: u8 = 0;
 const POLARITY_POSITIVE: u8 = 1;
 const POLARITY_NEGATIVE: u8 = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WritingMode {
-    Memory,
-    Streaming,
-}
 
 impl SpectrumSummary {
     #[cfg(test)]
@@ -159,26 +153,10 @@ pub(crate) fn extract_chrom_summary(chrom: &Chromatogram) -> ChromatogramSummary
 }
 
 
-pub struct Encoder<'o> {
-    output: &'o mut dyn EncoderOutput,
-    config: EncodingConfig,
-}
-
-impl<'o> Encoder<'o> {
-    pub fn new(output: &'o mut dyn EncoderOutput, config: EncodingConfig) -> Self {
-        Self { output, config }
-    }
-
-    pub fn encode(&mut self, mzml: &MzML) -> IonResult<()> {
-        crate::ion::encoder::ion_writer::write_mzml_to_ion(mzml, self.config, self.output)
-    }
-}
-
 pub fn encode(
     mzml: &MzML,
     compression_level: u8,
     force_f32: bool,
-    _writing_mode: WritingMode,
     output: &mut dyn EncoderOutput,
 ) -> IonResult<()> {
     if compression_level > 22 {
@@ -187,7 +165,6 @@ pub fn encode(
     let config = EncodingConfig {
         compression_level,
         force_f32,
-        writing_mode: WritingMode::Streaming,
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: true,
     };
@@ -198,7 +175,6 @@ pub fn encode(
 pub struct EncodingConfig {
     pub compression_level: u8,
     pub force_f32: bool,
-    pub writing_mode: WritingMode,
     pub uncompressed_block_size: usize,
     pub parallel: bool,
 }
@@ -393,37 +369,6 @@ fn write_array_data(buf: &mut Vec<u8>, data: ArrayData<'_>, dtype: u8) {
     }
 }
 
-pub(crate) fn write_aligned_section(output: &mut dyn EncoderOutput, bytes: &[u8]) -> IonResult<u64> {
-    static PAD: [u8; 7] = [0u8; 7];
-    let pos = output.current_byte_position()?;
-    let aligned = (pos + 7) & !7;
-    if aligned > pos {
-        output.write_bytes(&PAD[..(aligned - pos) as usize])?;
-    }
-    output.write_bytes(bytes)?;
-    Ok(aligned)
-}
-
-pub(crate) fn write_arrayref_entry(
-    buf: &mut Vec<u8>,
-    element_offset: u64,
-    element_count: u64,
-    block_id: u32,
-    array_accession: u32,
-    dtype: u8,
-    array_filter: u8,
-    encoded_len: u32,
-) {
-    write_u64_le(buf, element_offset);
-    write_u64_le(buf, element_count);
-    write_u32_le(buf, block_id);
-    write_u32_le(buf, array_accession);
-    buf.push(dtype);
-    buf.push(array_filter);
-    write_u32_le(buf, encoded_len);
-    buf.extend_from_slice(&[0u8; 2]);
-}
-
 pub(crate) struct EncodedArrayRef {
     pub(crate) element_offset: u64,
     pub(crate) element_count: u64,
@@ -539,28 +484,12 @@ mod tests {
             HEADER_TOTAL_FILE_SIZE,
         },
     };
-    use crate::encoder::utilities::{FileHeader, encoder_output::EncoderOutput};
-    use crate::ion::format::CODEC_NONE;
-
-    #[test]
-    fn encoder_and_free_fn_produce_same_output() {
-        let mzml = MzML::default();
-        let mut via_struct = Vec::new();
-        let mut via_free_fn = Vec::new();
-        Encoder::new(&mut via_struct, EncodingConfig {
-            compression_level: 0, force_f32: false,
-            writing_mode: WritingMode::Streaming,
-            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES, parallel: false,
-        }).encode(&mzml).unwrap();
-        encode(&mzml, 0, false, WritingMode::Memory, &mut via_free_fn).unwrap();
-        assert_eq!(via_struct, via_free_fn);
-    }
 
     #[test]
     fn encode_starts_with_magic_and_ends_with_trailer() {
         let mzml = MzML::default();
         let mut buf = Vec::new();
-        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+        encode(&mzml, 0, false, &mut buf).unwrap();
         assert!(buf.len() >= HEADER_SIZE + FILE_TRAILER.len());
         assert_eq!(&buf[..FILE_SIGNATURE.len()], &FILE_SIGNATURE);
         assert_eq!(&buf[buf.len() - FILE_TRAILER.len()..], &FILE_TRAILER);
@@ -570,7 +499,7 @@ mod tests {
     fn encode_total_file_size_is_correct() {
         let mzml = MzML::default();
         let mut buf = Vec::new();
-        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+        encode(&mzml, 0, false, &mut buf).unwrap();
         let total = u64::from_le_bytes(buf[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8].try_into().unwrap());
         assert_eq!(total, buf.len() as u64);
     }
@@ -579,7 +508,7 @@ mod tests {
     fn encode_header_target_block_size_matches_default() {
         let mzml = MzML::default();
         let mut buf = Vec::new();
-        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+        encode(&mzml, 0, false, &mut buf).unwrap();
         let size = u64::from_le_bytes(buf[HEADER_TARGET_BLOCK_SIZE..HEADER_TARGET_BLOCK_SIZE + 8].try_into().unwrap());
         assert_eq!(size, TARGET_BLOCK_UNCOMPRESSED_BYTES as u64);
     }
@@ -588,7 +517,7 @@ mod tests {
     fn encode_header_crc32_is_valid() {
         let mzml = MzML::default();
         let mut buf = Vec::new();
-        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+        encode(&mzml, 0, false, &mut buf).unwrap();
         let stored = u32::from_le_bytes(buf[1020..1024].try_into().unwrap());
         assert_eq!(stored, crc32fast::hash(&buf[0..1020]));
     }
@@ -597,29 +526,11 @@ mod tests {
     fn encode_header_block_counts_are_zero_for_empty_mzml() {
         let mzml = MzML::default();
         let mut buf = Vec::new();
-        encode(&mzml, 0, false, WritingMode::Memory, &mut buf).unwrap();
+        encode(&mzml, 0, false, &mut buf).unwrap();
         let spec_blocks = u64::from_le_bytes(buf[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 8].try_into().unwrap());
         let chrom_blocks = u64::from_le_bytes(buf[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 8].try_into().unwrap());
         assert_eq!(spec_blocks, 0);
         assert_eq!(chrom_blocks, 0);
-    }
-
-    #[test]
-    fn write_aligned_section_pads_to_8_bytes() {
-        let mut output: Vec<u8> = vec![0u8; 3];
-        let start = write_aligned_section(&mut output, &[0xAAu8; 4]).unwrap();
-        assert_eq!(start, 8);
-        assert_eq!(output.len(), 12);
-        assert_eq!(&output[3..8], &[0u8; 5]);
-        assert_eq!(&output[8..12], &[0xAAu8; 4]);
-    }
-
-    #[test]
-    fn write_aligned_section_no_padding_when_already_aligned() {
-        let mut output: Vec<u8> = vec![0u8; 8];
-        let start = write_aligned_section(&mut output, &[0xBBu8; 4]).unwrap();
-        assert_eq!(start, 8);
-        assert_eq!(output.len(), 12);
     }
 
     #[test]
@@ -669,9 +580,10 @@ mod tests {
     #[test]
     fn encoder_config_compression_disabled_at_level_zero() {
         let config = EncodingConfig {
-            compression_level: 0, force_f32: false,
-            writing_mode: WritingMode::Streaming,
-            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES, parallel: true,
+            compression_level: 0,
+            force_f32: false,
+            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -682,9 +594,10 @@ mod tests {
     #[test]
     fn encoder_config_compression_enabled_at_nonzero_level() {
         let config = EncodingConfig {
-            compression_level: 3, force_f32: false,
-            writing_mode: WritingMode::Streaming,
-            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES, parallel: true,
+            compression_level: 3,
+            force_f32: false,
+            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);

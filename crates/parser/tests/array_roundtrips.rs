@@ -3,7 +3,7 @@ mod common;
 use common::binary_ext::BinaryDataExt;
 use common::helpers::{build_mzml, make_spectrum_f64, mzml_with_single_array};
 use common::{decode_ion, encode_to_ion, first_spectrum_binary, roundtrip};
-use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
+use ionic::ion::{Decoder, DecoderConfig, encode};
 use ionic::mzml::structs::*;
 use proptest::prelude::*;
 
@@ -161,7 +161,7 @@ fn roundtrip_at_compression_levels() {
 
     for level in [0, 3, 10, 22] {
         let mut buf = Vec::new();
-        encode(&mzml, level, false, WritingMode::Memory, &mut buf)
+        encode(&mzml, level, false, &mut buf)
             .unwrap_or_else(|e| panic!("encode at level {level} failed: {e}"));
         let mut decoder = Decoder::open(&buf, DecoderConfig::default())
             .unwrap_or_else(|e| panic!("decoder open at level {level} failed: {e}"));
@@ -183,7 +183,7 @@ fn roundtrip_force_f32_downcasts() {
     let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
 
     let mut buf = Vec::new();
-    encode(&mzml, 0, true, WritingMode::Memory, &mut buf).expect("encode with force_f32");
+    encode(&mzml, 0, true, &mut buf).expect("encode with force_f32");
     let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
