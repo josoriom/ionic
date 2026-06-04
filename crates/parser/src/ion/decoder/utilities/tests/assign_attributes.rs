@@ -66,7 +66,6 @@ fn assign_attrs_spectrum_emits_all_fields() {
     assert_has_attr_tail(&out, ACC_ATTR_DATA_PROCESSING_REF);
     assert_has_attr_tail(&out, ACC_ATTR_SOURCE_FILE_REF);
     assert_has_attr_tail(&out, ACC_ATTR_SPOT_ID);
-    assert_has_attr_tail(&out, ACC_ATTR_MS_LEVEL);
 
     assert_text(&out, ACC_ATTR_ID, "scan=1");
     assert_num(&out, ACC_ATTR_INDEX, 0.0);
@@ -79,9 +78,9 @@ fn assign_attrs_spectrum_emits_all_fields() {
     assert_text(&out, ACC_ATTR_DATA_PROCESSING_REF, "dp1");
     assert_text(&out, ACC_ATTR_SOURCE_FILE_REF, "sf1");
     assert_text(&out, ACC_ATTR_SPOT_ID, "spotA");
-    assert_num(&out, ACC_ATTR_MS_LEVEL, 2.0);
 
     assert_missing_attr_tail(&out, ACC_ATTR_SCAN_NUMBER);
+    assert_missing_attr_tail(&out, ACC_ATTR_MS_LEVEL);
 }
 
 #[test]

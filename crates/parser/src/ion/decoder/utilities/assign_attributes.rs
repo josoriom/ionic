@@ -3,7 +3,7 @@ use crate::ion::attr_meta::{
     ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
     ACC_ATTR_DEFAULT_ARRAY_LENGTH, ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_ENCODED_LENGTH,
     ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_ID, ACC_ATTR_INDEX,
-    ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_MS_LEVEL, ACC_ATTR_NATIVE_ID,
+    ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_NATIVE_ID,
     ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF, ACC_ATTR_SPOT_ID,
     AccessionTail, CV_REF_ATTR,
 };
@@ -136,7 +136,6 @@ impl EmitAttributes for Spectrum {
         sink.push_required_str(ACC_ATTR_ID, &self.id);
         sink.push_opt_u32(ACC_ATTR_INDEX, self.index);
         sink.push_opt_u32(ACC_ATTR_SCAN_NUMBER, self.scan_number);
-        sink.push_opt_u32(ACC_ATTR_MS_LEVEL, self.ms_level);
         sink.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
         sink.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
         sink.push_opt_str(

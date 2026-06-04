@@ -145,7 +145,39 @@ pub(crate) fn parse_spectrum<R: BufRead>(
             _ => Ok(false),
         }
     })?;
+    normalize_ms_level(&mut spectrum);
     Ok(spectrum)
+}
+
+fn has_ms_level_param(spectrum: &Spectrum) -> bool {
+    let in_spectrum = spectrum
+        .cv_params
+        .iter()
+        .any(|param| param.accession.as_deref() == Some(ACC_MS_LEVEL));
+    let in_description = spectrum.spectrum_description.as_ref().is_some_and(|desc| {
+        desc.cv_params
+            .iter()
+            .any(|param| param.accession.as_deref() == Some(ACC_MS_LEVEL))
+    });
+    in_spectrum || in_description
+}
+
+fn normalize_ms_level(spectrum: &mut Spectrum) {
+    let Some(level) = spectrum.ms_level else {
+        return;
+    };
+    if has_ms_level_param(spectrum) {
+        return;
+    }
+    spectrum.cv_params.push(CvParam {
+        cv_ref: Some("MS".to_owned()),
+        accession: Some(ACC_MS_LEVEL.to_owned()),
+        name: "ms level".to_owned(),
+        value: Some(level.to_string()),
+        unit_cv_ref: None,
+        unit_name: None,
+        unit_accession: None,
+    });
 }
 
 fn parse_spectrum_description<R: BufRead>(
