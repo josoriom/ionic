@@ -1694,6 +1694,7 @@ fn append_cv_list_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn value_pool_empty_value_gives_kind_2() {
@@ -1887,7 +1888,7 @@ mod tests {
         assert_eq!(grouped.group_count, 3);
 
         let mut reader = MetaGroupReader::new(
-            grouped_bytes(&grouped),
+            Arc::from(grouped_bytes(&grouped)),
             grouped.group_count,
             1,
             3,
@@ -1956,7 +1957,7 @@ mod tests {
 
         let grouped = three_item_grouped();
         let result = MetaGroupReader::new(
-            grouped_bytes(&grouped),
+            Arc::from(grouped_bytes(&grouped)),
             grouped.group_count,
             1,
             3,
@@ -1983,7 +1984,7 @@ mod tests {
 
         let grouped = three_item_grouped();
         let reader = MetaGroupReader::new(
-            grouped_bytes(&grouped),
+            Arc::from(grouped_bytes(&grouped)),
             grouped.group_count,
             1,
             3,
@@ -2016,7 +2017,7 @@ mod tests {
             .copy_from_slice(&(directory_start as u64).to_le_bytes());
 
         let mut reader = MetaGroupReader::new(
-            &bytes,
+            Arc::from(bytes.as_slice()),
             grouped.group_count,
             1,
             3,

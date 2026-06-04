@@ -1,5 +1,3 @@
-#![deny(clippy::undocumented_unsafe_blocks)]
-
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -7,11 +5,13 @@ use std::{
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use memmap2::Mmap;
+use std::path::Path;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use std::{fs::File, path::Path};
+use crate::ion::decoder::utilities::byte_source::MmapSource;
 
 use crate::{
     accessions::format_accession,
@@ -23,6 +23,7 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
+        decoder::utilities::byte_source::{ByteSource, SliceSource},
         encoder::encode::{
             FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
             FILE_DTYPE_I64,
@@ -125,120 +126,70 @@ impl Default for DecoderConfig {
     }
 }
 
-pub struct Decoder<'a> {
-    bytes: &'a [u8],
+pub struct Decoder {
     header: Header,
-    spec_container: ContainerView<'a, DefaultProcessor>,
-    chrom_container: Option<ContainerView<'a, DefaultProcessor>>,
-    spec_meta_reader: MetaGroupReader<'a>,
-    chrom_meta_reader: MetaGroupReader<'a>,
+    spec_summary_buf: Arc<[u8]>,
+    chrom_summary_buf: Arc<[u8]>,
+    spec_entries_buf: Arc<[u8]>,
+    spec_arrayrefs_buf: Arc<[u8]>,
+    chrom_entries_buf: Arc<[u8]>,
+    chrom_arrayrefs_buf: Arc<[u8]>,
+    global_meta_buf: Arc<[u8]>,
+    spec_container: ContainerView<DefaultProcessor>,
+    chrom_container: Option<ContainerView<DefaultProcessor>>,
+    spec_meta_reader: MetaGroupReader,
+    chrom_meta_reader: MetaGroupReader,
     mz_buf: Vec<f64>,
     int_buf: Vec<f64>,
     parallel: bool,
     decompression_budget: DecompressionBudget,
 }
 
-#[allow(dead_code)]
-enum IonBacking {
-    Bytes(Arc<[u8]>),
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    Map(Mmap),
-}
-
-pub struct OwnedIon {
-    ion: Ion<'static>,
-    _backing: IonBacking,
-}
-
-impl OwnedIon {
-    pub fn open_bytes(data: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
-        let raw = data.as_ref();
-        // SAFETY: 'static is a lie. _backing owns the bytes; drops after ion.
-        let bytes: &'static [u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr(), raw.len()) };
-        let ion = Ion::open(bytes, config)?;
-        Ok(Self {
-            ion,
-            _backing: IonBacking::Bytes(data),
-        })
+impl Decoder {
+    pub fn open(bytes: &[u8], config: DecoderConfig) -> IonResult<Self> {
+        let file_bytes: Arc<[u8]> = Arc::from(bytes);
+        Self::open_arc(file_bytes, config)
     }
 
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    pub fn open(path: &Path, config: DecoderConfig) -> IonResult<Self> {
-        let file = File::open(path).map_err(|err| IonError::from(err.to_string()))?;
-        // SAFETY: don't touch the file (modify/truncate) while OwnedIon is alive.
-        let map = unsafe { Mmap::map(&file) }.map_err(|err| IonError::from(err.to_string()))?;
-        let raw = map.as_ref();
-        // SAFETY: same as open_bytes, _backing holds the Mmap.
-        let bytes: &'static [u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr(), raw.len()) };
-        let ion = Ion::open(bytes, config)?;
-        Ok(Self {
-            ion,
-            _backing: IonBacking::Map(map),
-        })
+    pub fn open_arc(file_bytes: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
+        let source = Arc::new(SliceSource::new(file_bytes)) as Arc<dyn ByteSource>;
+        Self::open_with_source(source, config)
     }
 
-    #[inline]
-    pub fn format_version(&self) -> Option<u16> {
-        self.ion.format_version()
-    }
-}
-
-impl Deref for OwnedIon {
-    type Target = Ion<'static>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ion
-    }
-}
-
-impl DerefMut for OwnedIon {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ion
-    }
-}
-
-impl<'a> Decoder<'a> {
-    pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
-        let header = parse_header(bytes)?;
+    pub fn open_with_source(source: Arc<dyn ByteSource>, config: DecoderConfig) -> IonResult<Self> {
+        let header_buf = source.read(0, 1024)?;
+        let header = parse_header(&header_buf)?;
         let block_packing_id = PackingId::from_byte(header.default_array_filter)?;
 
-        let spec_container = {
-            let off = usize::try_from(header.off_spec_container)
-                .map_err(|_| IonError::from("spectrum container out of bounds"))?;
-            let len = usize::try_from(header.len_spec_container)
-                .map_err(|_| IonError::from("spectrum container out of bounds"))?;
-            let end = off
-                .checked_add(len)
-                .ok_or_else(|| IonError::from("spectrum container out of bounds"))?;
-            let cb = bytes
-                .get(off..end)
-                .ok_or_else(|| IonError::from("spectrum container out of bounds"))?;
-            ContainerView::with_max_cached_bytes(
-                cb,
-                header.spec_block_count,
-                header.compression_level,
-                block_packing_id,
-                config.verify_checksums,
-                "spec",
-                DefaultProcessor,
-                config.max_cached_bytes,
-                config.decompression_budget,
-            )?
-        };
+        let spec_summary_buf = source.read(header.off_spec_summary, header.len_spec_summary)?;
+        let chrom_summary_buf = source.read(header.off_chrom_summary, header.len_chrom_summary)?;
+        let spec_entries_buf = source.read(header.off_spec_entries, header.len_spec_entries)?;
+        let spec_arrayrefs_buf =
+            source.read(header.off_spec_arrayrefs, header.len_spec_arrayrefs)?;
+        let chrom_entries_buf = source.read(header.off_chrom_entries, header.len_chrom_entries)?;
+        let chrom_arrayrefs_buf =
+            source.read(header.off_chrom_arrayrefs, header.len_chrom_arrayrefs)?;
+        let global_meta_buf = source.read(header.off_global_meta, header.len_global_meta)?;
+
+        let spec_container = ContainerView::new(
+            source.clone(),
+            header.off_spec_container,
+            header.len_spec_container,
+            header.spec_block_count,
+            header.compression_level,
+            block_packing_id,
+            config.verify_checksums,
+            "spec",
+            DefaultProcessor,
+            config.max_cached_bytes,
+            config.decompression_budget,
+        )?;
 
         let chrom_container = if header.chrom_block_count > 0 && header.len_chrom_container > 0 {
-            let off = usize::try_from(header.off_chrom_container)
-                .map_err(|_| IonError::from("chrom container out of bounds"))?;
-            let len = usize::try_from(header.len_chrom_container)
-                .map_err(|_| IonError::from("chrom container out of bounds"))?;
-            let end = off
-                .checked_add(len)
-                .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
-            let container_bytes = bytes
-                .get(off..end)
-                .ok_or_else(|| IonError::from("chrom container out of bounds"))?;
-            Some(ContainerView::with_max_cached_bytes(
-                container_bytes,
+            Some(ContainerView::new(
+                source.clone(),
+                header.off_chrom_container,
+                header.len_chrom_container,
                 header.chrom_block_count,
                 header.compression_level,
                 block_packing_id,
@@ -253,12 +204,7 @@ impl<'a> Decoder<'a> {
         };
 
         let spec_meta_reader = MetaGroupReader::new(
-            slice_at(
-                bytes,
-                header.off_spec_meta,
-                header.len_spec_meta,
-                "spec_meta",
-            )?,
+            Arc::from(source.read(header.off_spec_meta, header.len_spec_meta)?),
             header.spec_meta_group_count,
             header.meta_group_size,
             header.spectrum_count,
@@ -273,13 +219,9 @@ impl<'a> Decoder<'a> {
             config.decompression_budget,
             config.max_cached_bytes,
         )?;
+
         let chrom_meta_reader = MetaGroupReader::new(
-            slice_at(
-                bytes,
-                header.off_chrom_meta,
-                header.len_chrom_meta,
-                "chrom_meta",
-            )?,
+            Arc::from(source.read(header.off_chrom_meta, header.len_chrom_meta)?),
             header.chrom_meta_group_count,
             header.meta_group_size,
             header.chrom_count,
@@ -296,8 +238,14 @@ impl<'a> Decoder<'a> {
         )?;
 
         Ok(Self {
-            bytes,
             header,
+            spec_summary_buf: Arc::from(spec_summary_buf),
+            chrom_summary_buf: Arc::from(chrom_summary_buf),
+            spec_entries_buf: Arc::from(spec_entries_buf),
+            spec_arrayrefs_buf: Arc::from(spec_arrayrefs_buf),
+            chrom_entries_buf: Arc::from(chrom_entries_buf),
+            chrom_arrayrefs_buf: Arc::from(chrom_arrayrefs_buf),
+            global_meta_buf: Arc::from(global_meta_buf),
             spec_container,
             chrom_container,
             spec_meta_reader,
@@ -326,8 +274,8 @@ impl<'a> Decoder<'a> {
 
     pub fn spec_summary(&self, index: usize) -> Option<SpectrumSummary> {
         let b = slice_summary(
-            &self.bytes,
-            self.header.off_spec_summary,
+            &self.spec_summary_buf,
+            0,
             index,
             SPEC_SUMMARY_SIZE,
             self.header.spectrum_count,
@@ -336,8 +284,6 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn spec_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
-        let off = usize::try_from(self.header.off_spec_summary)
-            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
         let len = usize::try_from(self.header.len_spec_summary)
             .map_err(|_| IonError::from("spec summary: out of bounds"))?;
         let count = usize::try_from(self.header.spectrum_count)
@@ -347,14 +293,8 @@ impl<'a> Decoder<'a> {
                 format!("spec summary: len={len} != count={count} × {SPEC_SUMMARY_SIZE}").into(),
             );
         }
-        let end = off
-            .checked_add(len)
-            .ok_or_else(|| IonError::from("spec summary: out of bounds"))?;
-        let section = self
-            .bytes
-            .get(off..end)
-            .ok_or_else(|| IonError::from("spec summary: out of bounds"))?;
-        Ok(section
+        Ok(self
+            .spec_summary_buf
             .chunks_exact(SPEC_SUMMARY_SIZE)
             .map(parse_spec_summary)
             .collect())
@@ -362,8 +302,8 @@ impl<'a> Decoder<'a> {
 
     pub fn chrom_summary(&self, index: usize) -> Option<ChromatogramSummary> {
         let b = slice_summary(
-            &self.bytes,
-            self.header.off_chrom_summary,
+            &self.chrom_summary_buf,
+            0,
             index,
             CHROM_SUMMARY_SIZE,
             self.header.chrom_count,
@@ -372,8 +312,6 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn chrom_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
-        let off = usize::try_from(self.header.off_chrom_summary)
-            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
         let len = usize::try_from(self.header.len_chrom_summary)
             .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
         let count = usize::try_from(self.header.chrom_count)
@@ -384,14 +322,8 @@ impl<'a> Decoder<'a> {
             )
             .into());
         }
-        let end = off
-            .checked_add(len)
-            .ok_or_else(|| IonError::from("chrom summary: out of bounds"))?;
-        let section = self
-            .bytes
-            .get(off..end)
-            .ok_or_else(|| IonError::from("chrom summary: out of bounds"))?;
-        Ok(section
+        Ok(self
+            .chrom_summary_buf
             .chunks_exact(CHROM_SUMMARY_SIZE)
             .map(parse_chrom_summary)
             .collect())
@@ -401,26 +333,16 @@ impl<'a> Decoder<'a> {
         if index >= self.header.spectrum_count as usize {
             return None;
         }
-        read_array_refs_at(
-            self.bytes,
-            self.header.off_spec_entries as usize,
-            self.header.off_spec_arrayrefs as usize,
-            index,
-        )
-        .map(ArrayRefs::into_vec)
+        read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_arrayrefs_buf, index)
+            .map(ArrayRefs::into_vec)
     }
 
     pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
         if index >= self.header.chrom_count as usize {
             return None;
         }
-        read_array_refs_at(
-            self.bytes,
-            self.header.off_chrom_entries as usize,
-            self.header.off_chrom_arrayrefs as usize,
-            index,
-        )
-        .map(ArrayRefs::into_vec)
+        read_array_refs_from_buffers(&self.chrom_entries_buf, &self.chrom_arrayrefs_buf, index)
+            .map(ArrayRefs::into_vec)
     }
 
     pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
@@ -457,12 +379,7 @@ impl<'a> Decoder<'a> {
 
     pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
         parse_global_metadata(
-            slice_at(
-                self.bytes,
-                self.header.off_global_meta,
-                self.header.len_global_meta,
-                "global",
-            )?,
+            &self.global_meta_buf,
             0,
             self.header.global_meta_count,
             self.header.global_meta_numeric_count,
@@ -506,12 +423,9 @@ impl<'a> Decoder<'a> {
             return Ok(None);
         };
 
-        if let Some(arefs) = read_array_refs_at(
-            self.bytes,
-            self.header.off_spec_entries as usize,
-            self.header.off_spec_arrayrefs as usize,
-            index,
-        ) {
+        if let Some(arefs) =
+            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_arrayrefs_buf, index)
+        {
             let bd_list = spectrum
                 .binary_data_array_list
                 .get_or_insert_with(BinaryDataArrayList::default);
@@ -552,20 +466,20 @@ fn build_one_spectrum(rows: &[Metadatum], fallback_index: usize) -> Option<Spect
 }
 
 #[allow(clippy::large_enum_variant)]
-enum IonBackend<'a> {
-    Decoder(Decoder<'a>),
+enum IonBackend {
+    Decoder(Decoder),
     Data,
 }
 
-impl<'a> IonBackend<'a> {
-    fn as_decoder(&self) -> Option<&Decoder<'a>> {
+impl IonBackend {
+    fn as_decoder(&self) -> Option<&Decoder> {
         match self {
             Self::Decoder(d) => Some(d),
             Self::Data => None,
         }
     }
 
-    fn as_decoder_mut(&mut self) -> Option<&mut Decoder<'a>> {
+    fn as_decoder_mut(&mut self) -> Option<&mut Decoder> {
         match self {
             Self::Decoder(d) => Some(d),
             Self::Data => None,
@@ -573,7 +487,7 @@ impl<'a> IonBackend<'a> {
     }
 }
 
-pub struct Ion<'a> {
+pub struct Ion {
     pub cv_list: Option<CvList>,
     pub file_description: Option<FileDescription>,
     pub referenceable_param_group_list: Option<ReferenceableParamGroupList>,
@@ -583,12 +497,22 @@ pub struct Ion<'a> {
     pub data_processing_list: Option<DataProcessingList>,
     pub scan_settings_list: Option<ScanSettingsList>,
     pub run: Run,
-    backend: IonBackend<'a>,
+    backend: IonBackend,
 }
 
-impl<'a> Ion<'a> {
-    pub fn open(bytes: &'a [u8], config: DecoderConfig) -> IonResult<Self> {
+impl Ion {
+    pub fn open(bytes: &[u8], config: DecoderConfig) -> IonResult<Self> {
         let decoder = Decoder::open(bytes, config)?;
+        Ok(Self::empty(IonBackend::Decoder(decoder)))
+    }
+
+    pub fn open_arc(data: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
+        let decoder = Decoder::open_arc(data, config)?;
+        Ok(Self::empty(IonBackend::Decoder(decoder)))
+    }
+
+    pub fn open_with_source(source: Arc<dyn ByteSource>, config: DecoderConfig) -> IonResult<Self> {
+        let decoder = Decoder::open_with_source(source, config)?;
         Ok(Self::empty(IonBackend::Decoder(decoder)))
     }
 
@@ -608,7 +532,7 @@ impl<'a> Ion<'a> {
     }
 
     #[inline]
-    fn empty(backend: IonBackend<'a>) -> Self {
+    fn empty(backend: IonBackend) -> Self {
         Self {
             cv_list: None,
             file_description: None,
@@ -815,23 +739,47 @@ impl<'a> Ion<'a> {
     }
 }
 
-impl ScanSource for Decoder<'_> {
+pub struct OwnedIon(Ion);
+
+impl OwnedIon {
+    pub fn open_bytes(data: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
+        Ion::open_arc(data, config).map(OwnedIon)
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    pub fn open(path: &Path, config: DecoderConfig) -> IonResult<Self> {
+        let file = std::fs::File::open(path).map_err(|e| IonError::from(e.to_string()))?;
+        let map = unsafe { memmap2::Mmap::map(&file).map_err(|e| IonError::from(e.to_string()))? };
+        let source = Arc::new(MmapSource::new(map)) as Arc<dyn ByteSource>;
+        Ion::open_with_source(source, config).map(OwnedIon)
+    }
+
+    pub fn format_version(&self) -> Option<u16> {
+        self.0.format_version()
+    }
+}
+
+impl Deref for OwnedIon {
+    type Target = Ion;
+
+    fn deref(&self) -> &Ion {
+        &self.0
+    }
+}
+
+impl DerefMut for OwnedIon {
+    fn deref_mut(&mut self) -> &mut Ion {
+        &mut self.0
+    }
+}
+
+impl ScanSource for Decoder {
     fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
-        let Some(summary_bytes) =
-            usize::try_from(self.header.off_spec_summary)
-                .ok()
-                .and_then(|off| {
-                    usize::try_from(self.header.len_spec_summary)
-                        .ok()
-                        .and_then(|len| {
-                            off.checked_add(len)
-                                .and_then(|end| self.bytes.get(off..end))
-                        })
-                })
-        else {
-            return;
-        };
-        for (index, chunk) in summary_bytes.chunks_exact(SPEC_SUMMARY_SIZE).enumerate() {
+        for (index, chunk) in self
+            .spec_summary_buf
+            .chunks_exact(SPEC_SUMMARY_SIZE)
+            .enumerate()
+        {
             let summary = parse_spec_summary(chunk);
             callback(
                 index,
@@ -856,20 +804,8 @@ impl ScanSource for Decoder<'_> {
         if index >= count {
             return false;
         }
-        let Some(all_entries) = count.checked_mul(INDEX_ENTRY_BYTES).and_then(|total| {
-            usize::try_from(self.header.off_spec_entries)
-                .ok()
-                .and_then(|off| {
-                    off.checked_add(total)
-                        .and_then(|end| self.bytes.get(off..end))
-                })
-        }) else {
-            return false;
-        };
-        let array_ref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
-            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
-            Err(_) => return false,
-        };
+        let all_entries = self.spec_entries_buf.as_ref();
+        let array_ref_bytes = self.spec_arrayrefs_buf.as_ref();
         let entry_start = index * INDEX_ENTRY_BYTES;
         let Some(entry) = all_entries.get(entry_start..entry_start + INDEX_ENTRY_BYTES) else {
             return false;
@@ -891,40 +827,13 @@ impl ScanSource for Decoder<'_> {
         Self: Sized,
         F: FnMut(&ScanSummary, &[f64], &[f64]),
     {
-        let Some(summary_bytes) =
-            self.header
-                .len_spec_summary
-                .try_into()
-                .ok()
-                .and_then(|len: usize| {
-                    usize::try_from(self.header.off_spec_summary)
-                        .ok()
-                        .and_then(|off| {
-                            off.checked_add(len)
-                                .and_then(|end| self.bytes.get(off..end))
-                        })
-                })
-        else {
-            return;
-        };
-        let count = match usize::try_from(self.header.spectrum_count) {
+        let summary_bytes = self.spec_summary_buf.as_ref();
+        let _count = match usize::try_from(self.header.spectrum_count) {
             Ok(count) => count,
             Err(_) => return,
         };
-        let Some(entry_bytes) = count.checked_mul(INDEX_ENTRY_BYTES).and_then(|len| {
-            usize::try_from(self.header.off_spec_entries)
-                .ok()
-                .and_then(|off| {
-                    off.checked_add(len)
-                        .and_then(|end| self.bytes.get(off..end))
-                })
-        }) else {
-            return;
-        };
-        let array_ref_bytes = match usize::try_from(self.header.off_spec_arrayrefs) {
-            Ok(off) => self.bytes.get(off..).unwrap_or(&[]),
-            Err(_) => return,
-        };
+        let entry_bytes = self.spec_entries_buf.as_ref();
+        let array_ref_bytes = self.spec_arrayrefs_buf.as_ref();
         let (container, mz_buf, int_buf) = (
             &mut self.spec_container as &mut dyn ContainerAccess,
             &mut self.mz_buf,
@@ -945,7 +854,7 @@ impl ScanSource for Decoder<'_> {
     }
 }
 
-impl<'a> ScanSource for Ion<'a> {
+impl ScanSource for Ion {
     fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.for_each_summary(callback),
@@ -1008,17 +917,17 @@ impl<'a> ScanSource for Ion<'a> {
     }
 }
 
-struct MzmlConverter<'a, 'd> {
-    decoder: &'d mut Decoder<'a>,
+struct MzmlConverter<'d> {
+    decoder: &'d mut Decoder,
 }
 
-impl<'a, 'd> MzmlConverter<'a, 'd> {
+impl<'d> MzmlConverter<'d> {
     #[inline]
-    fn new(decoder: &'d mut Decoder<'a>) -> Self {
+    fn new(decoder: &'d mut Decoder) -> Self {
         Self { decoder }
     }
 
-    fn metadata_only(decoder: &Decoder<'a>) -> IonResult<MzML> {
+    fn metadata_only(decoder: &Decoder) -> IonResult<MzML> {
         let global_meta = decoder.global_metadata()?;
         let global_lookup = ChildrenLookup::new(&global_meta);
         let meta_refs: Vec<&Metadatum> = global_meta.iter().collect();
@@ -1098,9 +1007,8 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
 
         if let Some(spectrum_list) = mzml.run.spectrum_list.as_mut() {
             attach_binaries(
-                self.decoder.bytes,
-                self.decoder.header.off_spec_entries as usize,
-                self.decoder.header.off_spec_arrayrefs as usize,
+                self.decoder.spec_entries_buf.as_ref(),
+                self.decoder.spec_arrayrefs_buf.as_ref(),
                 &mut spectrum_list.spectra,
                 &self.decoder.spec_container,
                 "spec",
@@ -1113,9 +1021,8 @@ impl<'a, 'd> MzmlConverter<'a, 'd> {
             self.decoder.chrom_container.as_ref(),
         ) {
             attach_binaries(
-                self.decoder.bytes,
-                self.decoder.header.off_chrom_entries as usize,
-                self.decoder.header.off_chrom_arrayrefs as usize,
+                self.decoder.chrom_entries_buf.as_ref(),
+                self.decoder.chrom_arrayrefs_buf.as_ref(),
                 &mut chrom_list.chromatograms,
                 container,
                 "chrom",
@@ -1315,6 +1222,31 @@ fn parse_chrom_summary(bytes: &[u8]) -> ChromatogramSummary {
 }
 
 #[inline]
+fn read_array_refs_from_buffers(
+    entries_buf: &[u8],
+    arrayrefs_buf: &[u8],
+    index: usize,
+) -> Option<ArrayRefs> {
+    let entry_offset = index.checked_mul(INDEX_ENTRY_BYTES)?;
+    let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
+    let entry = entries_buf.get(entry_offset..entry_end)?;
+    let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
+    let ref_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
+    let max_refs = arrayrefs_buf.len() / ARRAY_REF_BYTES;
+    if ref_count > max_refs {
+        return None;
+    }
+    let mut refs = ArrayRefs::with_capacity(ref_count);
+    for offset in 0..ref_count {
+        let pos = ref_start
+            .checked_add(offset)?
+            .checked_mul(ARRAY_REF_BYTES)?;
+        let end = pos.checked_add(ARRAY_REF_BYTES)?;
+        refs.push(parse_array_ref(arrayrefs_buf.get(pos..end)?));
+    }
+    Some(refs)
+}
+
 fn read_array_refs_at(
     bytes: &[u8],
     entry_base: usize,
@@ -1505,11 +1437,10 @@ fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) -> I
 }
 
 fn attach_binaries<E: BinaryArrayOwner>(
-    bytes: &[u8],
-    entry_base: usize,
-    aref_base: usize,
+    entries_buf: &[u8],
+    arrayrefs_buf: &[u8],
     entries: &mut [E],
-    container: &ContainerView<'_, DefaultProcessor>,
+    container: &ContainerView<DefaultProcessor>,
     ctx: &'static str,
     parallel: bool,
 ) -> IonResult<()> {
@@ -1519,7 +1450,8 @@ fn attach_binaries<E: BinaryArrayOwner>(
     let _ = parallel;
 
     for index in 0..entries.len() {
-        let Some(item_refs) = read_array_refs_at(bytes, entry_base, aref_base, index) else {
+        let Some(item_refs) = read_array_refs_from_buffers(entries_buf, arrayrefs_buf, index)
+        else {
             continue;
         };
         if item_refs.is_empty() {
@@ -1802,28 +1734,6 @@ mod tests {
     use super::*;
     use crate::ion::encoder::utilities::SectionChunkMode;
 
-    #[test]
-    fn owned_ion_ion_field_declared_before_backing() {
-        let src = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/ion/decoder/decode.rs"
-        ));
-        let struct_start = src
-            .find("pub struct OwnedIon {")
-            .expect("OwnedIon struct missing");
-        let body_start = struct_start + "pub struct OwnedIon {".len();
-        let body_len = src[body_start..]
-            .find('}')
-            .expect("OwnedIon struct unclosed");
-        let body = &src[body_start..body_start + body_len];
-        let ion_pos = body.find("ion:").expect("ion field missing");
-        let backing_pos = body.find("_backing:").expect("_backing field missing");
-        assert!(
-            ion_pos < backing_pos,
-            "ion must precede _backing in OwnedIon"
-        );
-    }
-
     const BYTES: &[u8] = include_bytes!("../../../data/ion/test.ion");
 
     #[test]
@@ -2054,6 +1964,28 @@ mod tests {
                 .iter()
                 .any(|b| b.binary.is_some())
         );
+    }
+
+    #[test]
+    fn open_arc_gives_same_result_as_open() {
+        let bytes_arc: Arc<[u8]> = Arc::from(BYTES);
+        let mut d1 = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
+        let mut d2 = Decoder::open_arc(bytes_arc, DecoderConfig::default()).unwrap();
+        assert_eq!(d1.spectrum_count(), d2.spectrum_count());
+        let mzml1 = d1.to_mzml().unwrap();
+        let mzml2 = d2.to_mzml().unwrap();
+        assert_eq!(format!("{mzml1:?}"), format!("{mzml2:?}"));
+    }
+
+    #[test]
+    fn open_with_source_uses_provided_source() {
+        use crate::ion::decoder::utilities::byte_source::SliceSource;
+        let bytes_arc: Arc<[u8]> = Arc::from(BYTES);
+        let source = Arc::new(SliceSource::new(bytes_arc.clone())) as Arc<dyn ByteSource>;
+        let mut d = Decoder::open_with_source(source, DecoderConfig::default()).unwrap();
+        assert!(d.spectrum_count() > 0);
+        let mzml = d.to_mzml().unwrap();
+        assert!(mzml.run.spectrum_list.unwrap().spectra.len() > 0);
     }
 
     #[test]

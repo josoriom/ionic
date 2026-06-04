@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::ion::{
     DecompressionBudget,
@@ -18,7 +18,7 @@ pub(super) fn spectra_metadata(path: &str) -> Vec<Metadatum> {
     let start = header.off_spec_meta as usize;
     let end = start + header.len_spec_meta as usize;
     MetaGroupReader::new(
-        &bytes[start..end],
+        Arc::from(&bytes[start..end]),
         header.spec_meta_group_count,
         header.meta_group_size,
         header.spectrum_count,
@@ -44,7 +44,7 @@ pub(super) fn chromatograms_metadata(path: &str) -> Vec<Metadatum> {
     let start = header.off_chrom_meta as usize;
     let end = start + header.len_chrom_meta as usize;
     MetaGroupReader::new(
-        &bytes[start..end],
+        Arc::from(&bytes[start..end]),
         header.chrom_meta_group_count,
         header.meta_group_size,
         header.chrom_count,

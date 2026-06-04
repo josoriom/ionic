@@ -1,3 +1,4 @@
+pub mod byte_source;
 pub(crate) mod parse_header;
 #[allow(unused_imports)]
 pub(crate) use parse_header::parse_header;

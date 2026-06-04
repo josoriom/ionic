@@ -305,14 +305,16 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         header_crc32,
     };
 
-    let (passed, failures) = validate_file_integrity(bytes, &header);
-    if !passed {
-        return Err(format!(
-            "header: file integrity validation failed ({} check(s)):\n{}",
-            failures.len(),
-            failures.join("\n")
-        )
-        .into());
+    if bytes.len() > HEADER_SIZE {
+        let (passed, failures) = validate_file_integrity(bytes, &header);
+        if !passed {
+            return Err(format!(
+                "header: file integrity validation failed ({} check(s)):\n{}",
+                failures.len(),
+                failures.join("\n")
+            )
+            .into());
+        }
     }
 
     Ok(header)

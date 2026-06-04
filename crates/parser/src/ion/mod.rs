@@ -7,6 +7,9 @@ pub mod decoder;
 pub mod format;
 pub(crate) mod version_generated;
 pub use decoder::decode::{Decoder, DecoderConfig, Ion, OwnedIon};
+pub use decoder::utilities::byte_source::{ByteSource, SliceSource};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub use decoder::utilities::byte_source::MmapSource;
 pub(crate) use decoder::utilities;
 pub use decoder::utilities::decompression_budget::{
     DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionBudget,

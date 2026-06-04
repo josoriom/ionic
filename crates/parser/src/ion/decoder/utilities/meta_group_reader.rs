@@ -18,8 +18,8 @@ use crate::{
     },
 };
 
-pub(crate) struct MetaGroupReader<'a> {
-    section: &'a [u8],
+pub(crate) struct MetaGroupReader {
+    section: Arc<[u8]>,
     directory: Vec<MetaGroupEntry>,
     group_size: u32,
     item_count: u64,
@@ -58,10 +58,10 @@ struct GroupCache {
     max_bytes: usize,
 }
 
-impl<'a> MetaGroupReader<'a> {
+impl MetaGroupReader {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        section: &'a [u8],
+        section: Arc<[u8]>,
         group_count: u64,
         group_size: u32,
         item_count: u64,
@@ -79,7 +79,7 @@ impl<'a> MetaGroupReader<'a> {
                 "metadata groups: group count does not match item count",
             ));
         }
-        let directory = read_directory(section, group_count)?;
+        let directory = read_directory(&section, group_count)?;
         let payload_end = section.len() - directory.len() * META_GROUP_ENTRY_SIZE;
         let mut uncompressed_sum: u64 = 0;
         for entry in &directory {
@@ -141,24 +141,27 @@ impl<'a> MetaGroupReader<'a> {
             return Ok(Vec::new());
         }
         let group_index = group_of_item(item_index, self.group_size);
-        let rows = self.cached_rows(group_index)?;
+        let rows = self.get_cached_rows(group_index)?;
         let start = rows.partition_point(|row| (row.item_index as u64) < item_index);
         let end = rows.partition_point(|row| (row.item_index as u64) <= item_index);
         Ok(rows[start..end].to_vec())
     }
 
-    fn cached_rows(&mut self, group_index: u64) -> IonResult<Arc<[Metadatum]>> {
+    fn get_cached_rows(&mut self, group_index: u64) -> IonResult<Arc<[Metadatum]>> {
         if let Some(group) = self.cache.groups.get(&group_index) {
             return Ok(group.rows.clone());
         }
-        let bytes = self.decode_group(group_index)?;
-        let rows: Arc<[Metadatum]> = Arc::from(self.parse_group(&bytes, group_index)?);
+        let rows = {
+            let bytes = self.decode_group(group_index)?;
+            let result: Arc<[Metadatum]> = Arc::from(self.parse_group(&bytes, group_index)?);
+            result
+        };
         let footprint = group_footprint(&rows);
-        self.keep(group_index, rows.clone(), footprint);
+        self.store_in_cache(group_index, rows.clone(), footprint);
         Ok(rows)
     }
 
-    fn keep(&mut self, group_index: u64, rows: Arc<[Metadatum]>, footprint: usize) {
+    fn store_in_cache(&mut self, group_index: u64, rows: Arc<[Metadatum]>, footprint: usize) {
         debug_assert!(!self.cache.groups.contains_key(&group_index));
         self.cache.used_bytes += footprint;
         self.cache
@@ -174,12 +177,12 @@ impl<'a> MetaGroupReader<'a> {
         }
     }
 
-    fn decode_group(&self, group_index: u64) -> IonResult<Cow<'a, [u8]>> {
+    fn decode_group(&self, group_index: u64) -> IonResult<Cow<'_, [u8]>> {
         let entry = self
             .directory
             .get(group_index as usize)
             .ok_or_else(|| IonError::from("metadata groups: group index out of range"))?;
-        let payload = self.payload_of(entry)?;
+        let payload = self.get_payload(entry)?;
         if self.verify_checksums && crc32fast::hash(payload) != entry.checksum {
             return Err(IonError::from("metadata groups: group checksum mismatch"));
         }
@@ -219,7 +222,7 @@ impl<'a> MetaGroupReader<'a> {
         Ok(rows)
     }
 
-    fn payload_of(&self, entry: &MetaGroupEntry) -> IonResult<&'a [u8]> {
+    fn get_payload(&self, entry: &MetaGroupEntry) -> IonResult<&[u8]> {
         let start = usize::try_from(entry.payload_offset)
             .map_err(|_| IonError::from("metadata groups: payload offset out of range"))?;
         let size = usize::try_from(entry.payload_size)
@@ -286,6 +289,7 @@ mod tests {
     use crate::ion::DecompressionBudget;
     use crate::ion::format::CODEC_NONE;
     use crate::ion::meta_groups::MetaTotals;
+    use std::sync::Arc;
 
     fn no_totals() -> MetaTotals {
         MetaTotals {
@@ -298,7 +302,7 @@ mod tests {
 
     fn new_reader(group_count: u64, group_size: u32, item_count: u64) -> crate::ion::IonResult<()> {
         MetaGroupReader::new(
-            &[],
+            Arc::from(&[][..]),
             group_count,
             group_size,
             item_count,
