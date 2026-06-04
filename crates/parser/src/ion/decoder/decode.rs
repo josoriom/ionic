@@ -23,7 +23,9 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
-        decoder::utilities::byte_source::{ByteSource, SliceSource},
+        decoder::utilities::byte_source::{
+            ByteSource, Query, QueryCallbackSource, QueryValue, SliceSource,
+        },
         encoder::encode::{
             FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
             FILE_DTYPE_I64,
@@ -153,6 +155,14 @@ impl Decoder {
 
     pub fn open_arc(file_bytes: Arc<[u8]>, config: DecoderConfig) -> IonResult<Self> {
         let source = Arc::new(SliceSource::new(file_bytes)) as Arc<dyn ByteSource>;
+        Self::open_with_source(source, config)
+    }
+
+    pub fn open_with_query(
+        read: impl Fn(Query) -> IonResult<QueryValue> + Send + Sync + 'static,
+        config: DecoderConfig,
+    ) -> IonResult<Self> {
+        let source = Arc::new(QueryCallbackSource::new(read)) as Arc<dyn ByteSource>;
         Self::open_with_source(source, config)
     }
 
@@ -513,6 +523,14 @@ impl Ion {
 
     pub fn open_with_source(source: Arc<dyn ByteSource>, config: DecoderConfig) -> IonResult<Self> {
         let decoder = Decoder::open_with_source(source, config)?;
+        Ok(Self::empty(IonBackend::Decoder(decoder)))
+    }
+
+    pub fn open_with_query(
+        read: impl Fn(Query) -> IonResult<QueryValue> + Send + Sync + 'static,
+        config: DecoderConfig,
+    ) -> IonResult<Self> {
+        let decoder = Decoder::open_with_query(read, config)?;
         Ok(Self::empty(IonBackend::Decoder(decoder)))
     }
 
@@ -1985,6 +2003,23 @@ mod tests {
         let mut d = Decoder::open_with_source(source, DecoderConfig::default()).unwrap();
         assert!(d.spectrum_count() > 0);
         let mzml = d.to_mzml().unwrap();
+        assert!(mzml.run.spectrum_list.unwrap().spectra.len() > 0);
+    }
+
+    #[test]
+    fn open_with_query_uses_callback_source() {
+        let bytes_arc: Arc<[u8]> = Arc::from(BYTES);
+        let data = bytes_arc.clone();
+        let mut decoder = Decoder::open_with_query(
+            move |query| {
+                let bytes = slice_at(&data, query.offset(), query.length(), "test query")?;
+                Ok(QueryValue::new(bytes.to_vec()))
+            },
+            DecoderConfig::default(),
+        )
+        .unwrap();
+        assert!(decoder.spectrum_count() > 0);
+        let mzml = decoder.to_mzml().unwrap();
         assert!(mzml.run.spectrum_list.unwrap().spectra.len() > 0);
     }
 
