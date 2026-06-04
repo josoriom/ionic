@@ -6,12 +6,13 @@ pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
 pub mod decoder;
 pub mod format;
 pub(crate) mod version_generated;
-pub use decoder::decode::{Decoder, DecoderConfig, Ion, OwnedIon};
+pub use decoder::decode::{AsyncDecoder, Decoder, DecoderConfig, Ion, OwnedIon};
 pub(crate) use decoder::utilities;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub use decoder::utilities::byte_source::MmapSource;
 pub use decoder::utilities::byte_source::{
-    ByteSource, Query, QueryCallbackSource, QueryReader, QueryValue, SliceSource,
+    AsyncByteSource, AsyncQueryCallbackSource, AsyncQueryReader, ByteSource, Query,
+    QueryCallbackSource, QueryFuture, QueryReader, QueryValue, SliceSource,
 };
 pub use decoder::utilities::decompression_budget::{
     DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionBudget,

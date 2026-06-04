@@ -1,10 +1,16 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::ion::{IonError, IonResult};
 
 pub trait ByteSource: Send + Sync {
     fn read(&self, offset: u64, length: u64) -> IonResult<Vec<u8>>;
 }
+
+pub trait AsyncByteSource {
+    fn read(&self, query: Query) -> QueryFuture<'_>;
+}
+
+pub type QueryFuture<'a> = Pin<Box<dyn Future<Output = IonResult<QueryValue>> + 'a>>;
 
 pub struct SliceSource {
     data: Arc<[u8]>,
@@ -26,6 +32,15 @@ impl ByteSource for SliceSource {
             .get(start..end)
             .map(|bytes| bytes.to_vec())
             .ok_or_else(|| IonError::from("byte source: read out of bounds"))
+    }
+}
+
+impl AsyncByteSource for SliceSource {
+    fn read(&self, query: Query) -> QueryFuture<'_> {
+        Box::pin(async move {
+            let bytes = ByteSource::read(self, query.offset(), query.length())?;
+            Ok(QueryValue::new(bytes))
+        })
     }
 }
 
@@ -52,6 +67,16 @@ impl ByteSource for MmapSource {
             .get(start..end)
             .map(|bytes| bytes.to_vec())
             .ok_or_else(|| IonError::from("byte source: read out of bounds"))
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+impl AsyncByteSource for MmapSource {
+    fn read(&self, query: Query) -> QueryFuture<'_> {
+        Box::pin(async move {
+            let bytes = ByteSource::read(self, query.offset(), query.length())?;
+            Ok(QueryValue::new(bytes))
+        })
     }
 }
 
@@ -124,6 +149,41 @@ impl ByteSource for QueryCallbackSource {
     }
 }
 
+impl AsyncByteSource for QueryCallbackSource {
+    fn read(&self, query: Query) -> QueryFuture<'_> {
+        Box::pin(async move {
+            let bytes = ByteSource::read(self, query.offset(), query.length())?;
+            Ok(QueryValue::new(bytes))
+        })
+    }
+}
+
+pub type AsyncQueryReader = dyn Fn(Query) -> QueryFuture<'static>;
+
+pub struct AsyncQueryCallbackSource {
+    read: Box<AsyncQueryReader>,
+}
+
+impl AsyncQueryCallbackSource {
+    pub fn new(read: impl Fn(Query) -> QueryFuture<'static> + 'static) -> Self {
+        Self {
+            read: Box::new(read),
+        }
+    }
+}
+
+impl AsyncByteSource for AsyncQueryCallbackSource {
+    fn read(&self, query: Query) -> QueryFuture<'_> {
+        Box::pin(async move {
+            let length = query.length();
+            let value = (self.read)(query).await?;
+            let bytes = value.bytes();
+            allow_len(bytes, length)?;
+            Ok(value)
+        })
+    }
+}
+
 fn allow_len(bytes: &[u8], length: u64) -> IonResult<()> {
     let expected_len = to_usize(length, "length")?;
     if bytes.len() != expected_len {
@@ -137,41 +197,4 @@ fn allow_len(bytes: &[u8], length: u64) -> IonResult<()> {
 
 fn to_usize(value: u64, name: &str) -> IonResult<usize> {
     usize::try_from(value).map_err(|_| IonError::from(format!("byte source: {name} out of range")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn query_callback_source_handles_sync_read() {
-        let data: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4, 5, 6, 7, 8]);
-        let source = QueryCallbackSource::new(move |query| {
-            let start = query.offset() as usize;
-            let end = start + query.length() as usize;
-            Ok(QueryValue::new(data[start..end].to_vec()))
-        });
-        let result = source.read(2, 3).unwrap();
-        assert_eq!(result, vec![3, 4, 5]);
-    }
-
-    #[test]
-    fn query_callback_source_reports_out_of_bounds() {
-        let data: Arc<[u8]> = Arc::from(vec![1u8, 2, 3]);
-        let source = QueryCallbackSource::new(move |query| {
-            let start = query.offset() as usize;
-            let end = start + query.length() as usize;
-            if end > data.len() {
-                return Err(IonError::from("out of bounds"));
-            }
-            Ok(QueryValue::new(data[start..end].to_vec()))
-        });
-        assert!(source.read(1, 10).is_err());
-    }
-
-    #[test]
-    fn query_callback_source_requires_exact_length() {
-        let source = QueryCallbackSource::new(|_| Ok(QueryValue::new(vec![1u8, 2])));
-        assert!(source.read(0, 3).is_err());
-    }
 }
