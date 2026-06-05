@@ -63,11 +63,11 @@ impl<'a> HeaderView<'a> {
         }
     }
 
-    fn h_u32(&self, off: usize) -> u32 {
-        u32_at(self.header, off)
+    fn read_header_u32(&self, offset: usize) -> u32 {
+        u32_at(self.header, offset)
     }
-    fn h_u64(&self, off: usize) -> u64 {
-        u64_at(self.header, off)
+    fn read_header_u64(&self, offset: usize) -> u64 {
+        u64_at(self.header, offset)
     }
 
     fn signature_ok(&self) -> bool {
@@ -75,7 +75,7 @@ impl<'a> HeaderView<'a> {
     }
 
     fn header_crc_ok(&self) -> bool {
-        self.h_u32(1020) == crc32fast::hash(&self.header[0..1020])
+        self.read_header_u32(1020) == crc32fast::hash(&self.header[0..1020])
     }
 
     fn trailer_ok(&self) -> bool {
@@ -83,23 +83,23 @@ impl<'a> HeaderView<'a> {
     }
 
     fn file_size_ok(&self) -> bool {
-        self.h_u64(344) == self.bytes.len() as u64
+        self.read_header_u64(344) == self.bytes.len() as u64
     }
 
     fn spec_dir_fits(&self) -> bool {
-        self.h_u64(200)
+        self.read_header_u64(200)
             .checked_mul(32)
-            .is_some_and(|b| b <= self.h_u64(176))
+            .is_some_and(|b| b <= self.read_header_u64(176))
     }
 
     fn chrom_dir_fits(&self) -> bool {
-        self.h_u64(208)
+        self.read_header_u64(208)
             .checked_mul(32)
-            .is_some_and(|b| b <= self.h_u64(192))
+            .is_some_and(|b| b <= self.read_header_u64(192))
     }
 
     fn sections_in_bounds(&self) -> bool {
-        let trailer_start = self.h_u64(344).saturating_sub(8);
+        let trailer_start = self.read_header_u64(344).saturating_sub(8);
         self.sections.iter().all(|s| {
             s.size == 0
                 || s.offset
@@ -123,11 +123,11 @@ impl<'a> HeaderView<'a> {
     }
 
     fn crc_ok(&self, off_at: usize, len_at: usize, stored_at: usize) -> bool {
-        let off = self.h_u64(off_at) as usize;
-        let len = self.h_u64(len_at) as usize;
-        let stored = self.h_u32(stored_at);
-        off.checked_add(len)
-            .and_then(|end| self.bytes.get(off..end))
+        let offset = self.read_header_u64(off_at) as usize;
+        let len = self.read_header_u64(len_at) as usize;
+        let stored = self.read_header_u32(stored_at);
+        offset.checked_add(len)
+            .and_then(|end| self.bytes.get(offset..end))
             .is_some_and(|slice| crc32fast::hash(slice) == stored)
     }
 }
@@ -204,7 +204,7 @@ fn print_summary(view: &HeaderView<'_>) {
         _ => "unknown",
     };
     field("array_filter", filter, None);
-    let block_size = view.h_u64(16);
+    let block_size = view.read_header_u64(16);
     field(
         "block_size",
         &format!(
@@ -213,8 +213,8 @@ fn print_summary(view: &HeaderView<'_>) {
         ),
         None,
     );
-    field("spectrum_count", &view.h_u64(216).to_string(), None);
-    field("chrom_count", &view.h_u64(224).to_string(), None);
+    field("spectrum_count", &view.read_header_u64(216).to_string(), None);
+    field("chrom_count", &view.read_header_u64(224).to_string(), None);
     let actual = view.bytes.len() as u64;
     field(
         "total_file_size",

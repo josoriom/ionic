@@ -23,9 +23,10 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
+        decoder::async_reader::AsyncReader,
         decoder::utilities::byte_source::{
-            AsyncByteSource, AsyncQueryCallbackSource, ByteSource, Query, QueryCallbackSource,
-            QueryFuture, QueryValue, SliceSource,
+            AsyncByteSource, ByteSource, Query, QueryCallbackSource, QueryFuture, QueryPayload,
+            SliceSource,
         },
         encoder::encode::{
             FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
@@ -39,7 +40,7 @@ use crate::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
             container_view::{
-                AsyncContainerView, ContainerAccess, ContainerView, DefaultProcessor,
+                ContainerAccess, ContainerView, DefaultBlockProcessor, container_directory_range,
             },
             decompression_budget::DecompressionBudget,
             parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
@@ -101,12 +102,41 @@ pub(crate) fn slice_at<'a>(
         .ok_or_else(|| IonError::from(format!("{context}: range error")))
 }
 
-async fn read_async_bytes(
-    source: &dyn AsyncByteSource,
-    offset: u64,
-    length: u64,
-) -> IonResult<Vec<u8>> {
-    Ok(source.read(Query::new(offset, length)).await?.into_bytes())
+pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<(u64, u64)>> {
+    let mut ranges = vec![
+        (0, 1024),
+        (header.off_spec_summary, header.len_spec_summary),
+        (header.off_chrom_summary, header.len_chrom_summary),
+        (header.off_spec_entries, header.len_spec_entries),
+        (header.off_spec_arrayrefs, header.len_spec_arrayrefs),
+        (header.off_chrom_entries, header.len_chrom_entries),
+        (header.off_chrom_arrayrefs, header.len_chrom_arrayrefs),
+        (header.off_global_meta, header.len_global_meta),
+        (header.off_spec_meta, header.len_spec_meta),
+        (header.off_chrom_meta, header.len_chrom_meta),
+    ];
+
+    let spec_blocks = usize::try_from(header.spec_block_count)
+        .map_err(|_| IonError::from("spec: block count too large for this platform"))?;
+    ranges.push(container_directory_range(
+        header.off_spec_container,
+        header.len_spec_container,
+        spec_blocks,
+        "spec",
+    )?);
+
+    if header.chrom_block_count > 0 && header.len_chrom_container > 0 {
+        let chrom_blocks = usize::try_from(header.chrom_block_count)
+            .map_err(|_| IonError::from("chrom: block count too large for this platform"))?;
+        ranges.push(container_directory_range(
+            header.off_chrom_container,
+            header.len_chrom_container,
+            chrom_blocks,
+            "chrom",
+        )?);
+    }
+
+    Ok(ranges)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -144,35 +174,17 @@ pub struct Decoder {
     spec_summary_buf: Arc<[u8]>,
     chrom_summary_buf: Arc<[u8]>,
     spec_entries_buf: Arc<[u8]>,
-    spec_arrayrefs_buf: Arc<[u8]>,
+    spec_array_refs: Arc<[u8]>,
     chrom_entries_buf: Arc<[u8]>,
-    chrom_arrayrefs_buf: Arc<[u8]>,
+    chrom_array_refs: Arc<[u8]>,
     global_meta_buf: Arc<[u8]>,
-    spec_container: ContainerView<DefaultProcessor>,
-    chrom_container: Option<ContainerView<DefaultProcessor>>,
+    spec_container: ContainerView<DefaultBlockProcessor>,
+    chrom_container: Option<ContainerView<DefaultBlockProcessor>>,
     spec_meta_reader: MetaGroupReader,
     chrom_meta_reader: MetaGroupReader,
-    mz_buf: Vec<f64>,
-    int_buf: Vec<f64>,
+    mz_values: Vec<f64>,
+    int_values: Vec<f64>,
     parallel: bool,
-    decompression_budget: DecompressionBudget,
-}
-
-pub struct AsyncDecoder {
-    header: Header,
-    spec_summary_buf: Arc<[u8]>,
-    chrom_summary_buf: Arc<[u8]>,
-    spec_entries_buf: Arc<[u8]>,
-    spec_arrayrefs_buf: Arc<[u8]>,
-    chrom_entries_buf: Arc<[u8]>,
-    chrom_arrayrefs_buf: Arc<[u8]>,
-    global_meta_buf: Arc<[u8]>,
-    spec_container: AsyncContainerView<DefaultProcessor>,
-    chrom_container: Option<AsyncContainerView<DefaultProcessor>>,
-    spec_meta_reader: MetaGroupReader,
-    chrom_meta_reader: MetaGroupReader,
-    mz_buf: Vec<f64>,
-    int_buf: Vec<f64>,
     decompression_budget: DecompressionBudget,
 }
 
@@ -188,7 +200,7 @@ impl Decoder {
     }
 
     pub fn open_with_query(
-        read: impl Fn(Query) -> IonResult<QueryValue> + Send + Sync + 'static,
+        read: impl Fn(Query) -> IonResult<QueryPayload> + Send + Sync + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
         let source = Arc::new(QueryCallbackSource::new(read)) as Arc<dyn ByteSource>;
@@ -203,10 +215,10 @@ impl Decoder {
         let spec_summary_buf = source.read(header.off_spec_summary, header.len_spec_summary)?;
         let chrom_summary_buf = source.read(header.off_chrom_summary, header.len_chrom_summary)?;
         let spec_entries_buf = source.read(header.off_spec_entries, header.len_spec_entries)?;
-        let spec_arrayrefs_buf =
+        let spec_array_refs =
             source.read(header.off_spec_arrayrefs, header.len_spec_arrayrefs)?;
         let chrom_entries_buf = source.read(header.off_chrom_entries, header.len_chrom_entries)?;
-        let chrom_arrayrefs_buf =
+        let chrom_array_refs =
             source.read(header.off_chrom_arrayrefs, header.len_chrom_arrayrefs)?;
         let global_meta_buf = source.read(header.off_global_meta, header.len_global_meta)?;
 
@@ -219,7 +231,7 @@ impl Decoder {
             block_packing_id,
             config.verify_checksums,
             "spec",
-            DefaultProcessor,
+            DefaultBlockProcessor,
             config.max_cached_bytes,
             config.decompression_budget,
         )?;
@@ -234,7 +246,7 @@ impl Decoder {
                 block_packing_id,
                 config.verify_checksums,
                 "chrom",
-                DefaultProcessor,
+                DefaultBlockProcessor,
                 config.max_cached_bytes,
                 config.decompression_budget,
             )?)
@@ -281,16 +293,16 @@ impl Decoder {
             spec_summary_buf: Arc::from(spec_summary_buf),
             chrom_summary_buf: Arc::from(chrom_summary_buf),
             spec_entries_buf: Arc::from(spec_entries_buf),
-            spec_arrayrefs_buf: Arc::from(spec_arrayrefs_buf),
+            spec_array_refs: Arc::from(spec_array_refs),
             chrom_entries_buf: Arc::from(chrom_entries_buf),
-            chrom_arrayrefs_buf: Arc::from(chrom_arrayrefs_buf),
+            chrom_array_refs: Arc::from(chrom_array_refs),
             global_meta_buf: Arc::from(global_meta_buf),
             spec_container,
             chrom_container,
             spec_meta_reader,
             chrom_meta_reader,
-            mz_buf: Vec::new(),
-            int_buf: Vec::new(),
+            mz_values: Vec::new(),
+            int_values: Vec::new(),
             parallel: config.parallel,
             decompression_budget: config.decompression_budget,
         })
@@ -372,48 +384,82 @@ impl Decoder {
         if index >= self.header.spectrum_count as usize {
             return None;
         }
-        read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_arrayrefs_buf, index)
-            .map(ArrayRefs::into_vec)
+        read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, index)
+            .map(ArrayRefList::into_vec)
     }
 
     pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
         if index >= self.header.chrom_count as usize {
             return None;
         }
-        read_array_refs_from_buffers(&self.chrom_entries_buf, &self.chrom_arrayrefs_buf, index)
-            .map(ArrayRefs::into_vec)
+        read_array_refs_from_buffers(&self.chrom_entries_buf, &self.chrom_array_refs, index)
+            .map(ArrayRefList::into_vec)
     }
 
-    pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
-        let (element_offset, count, stride) = aref_read_params(aref);
-        let raw = self.spec_container.get_item_from_block(
-            aref.block_id,
+    pub(crate) fn spec_block_range(&self, block_id: u32) -> Option<(u64, u64)> {
+        self.spec_container.block_byte_range(block_id)
+    }
+
+    pub(crate) fn chrom_block_range(&self, block_id: u32) -> Option<(u64, u64)> {
+        self.chrom_container.as_ref()?.block_byte_range(block_id)
+    }
+
+    pub(crate) fn spec_block_ranges_all(&self) -> Vec<(u64, u64)> {
+        self.spec_container.all_block_ranges()
+    }
+
+    pub(crate) fn mzml_block_ranges(&self) -> Vec<(u64, u64)> {
+        let mut ranges = self.spec_container.all_block_ranges();
+        if let Some(chrom) = self.chrom_container.as_ref() {
+            ranges.extend(chrom.all_block_ranges());
+        }
+        ranges
+    }
+
+    pub(crate) fn spectrum_block_ranges(&self, index: usize) -> Vec<(u64, u64)> {
+        let mut ranges = Vec::new();
+        if let Some(array_refs) =
+            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, index)
+        {
+            for array_ref in array_refs.as_slice() {
+                if let Some(range) = self.spec_container.block_byte_range(array_ref.block_id) {
+                    ranges.push(range);
+                }
+            }
+        }
+        ranges
+    }
+
+    pub fn read_spectrum_array(&mut self, array_ref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
+        let (element_offset, count, stride) = aref_read_params(array_ref);
+        let raw = self.spec_container.get_array_bytes_from_block(
+            array_ref.block_id,
             element_offset,
             count,
             stride,
             "read_spectrum_array",
         )?;
-        decode_into(out, raw, aref.dtype, aref.array_filter)
+        decode_into(out, raw, array_ref.dtype, array_ref.array_filter)
     }
 
     pub fn read_chromatogram_array(
         &mut self,
-        aref: &ArrayRef,
+        array_ref: &ArrayRef,
         out: &mut Vec<f64>,
     ) -> IonResult<()> {
         let container = self
             .chrom_container
             .as_mut()
             .ok_or_else(|| IonError::from("no chromatogram container"))?;
-        let (element_offset, count, stride) = aref_read_params(aref);
-        let raw = container.get_item_from_block(
-            aref.block_id,
+        let (element_offset, count, stride) = aref_read_params(array_ref);
+        let raw = container.get_array_bytes_from_block(
+            array_ref.block_id,
             element_offset,
             count,
             stride,
             "read_chromatogram_array",
         )?;
-        decode_into(out, raw, aref.dtype, aref.array_filter)
+        decode_into(out, raw, array_ref.dtype, array_ref.array_filter)
     }
 
     pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
@@ -462,467 +508,26 @@ impl Decoder {
             return Ok(None);
         };
 
-        if let Some(arefs) =
-            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_arrayrefs_buf, index)
+        if let Some(array_refs) =
+            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, index)
         {
             let bd_list = spectrum
                 .binary_data_array_list
                 .get_or_insert_with(BinaryDataArrayList::default);
-            for aref in arefs.as_slice() {
-                let (eo, count, stride) = aref_read_params(aref);
-                let raw = self.spec_container.get_item_from_block(
-                    aref.block_id,
+            for array_ref in array_refs.as_slice() {
+                let (eo, count, stride) = aref_read_params(array_ref);
+                let raw = self.spec_container.get_array_bytes_from_block(
+                    array_ref.block_id,
                     eo,
                     count,
                     stride,
                     "spectrum_at",
                 )?;
-                attach_array(bd_list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
+                attach_array(bd_list, array_ref.array_type, array_ref.dtype, raw, array_ref.array_filter)?;
             }
             bd_list.count = Some(bd_list.binary_data_arrays.len());
         }
         Ok(Some(spectrum))
-    }
-}
-
-impl AsyncDecoder {
-    pub async fn open_with_async_query(
-        read: impl Fn(Query) -> QueryFuture<'static> + 'static,
-        config: DecoderConfig,
-    ) -> IonResult<Self> {
-        let source = Arc::new(AsyncQueryCallbackSource::new(read)) as Arc<dyn AsyncByteSource>;
-        Self::open_with_async_source(source, config).await
-    }
-
-    pub async fn open_with_async_source(
-        source: Arc<dyn AsyncByteSource>,
-        config: DecoderConfig,
-    ) -> IonResult<Self> {
-        let header_buf = read_async_bytes(source.as_ref(), 0, 1024).await?;
-        let header = parse_header(&header_buf)?;
-        let block_packing_id = PackingId::from_byte(header.default_array_filter)?;
-
-        let spec_summary_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_spec_summary,
-            header.len_spec_summary,
-        )
-        .await?;
-        let chrom_summary_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_chrom_summary,
-            header.len_chrom_summary,
-        )
-        .await?;
-        let spec_entries_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_spec_entries,
-            header.len_spec_entries,
-        )
-        .await?;
-        let spec_arrayrefs_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_spec_arrayrefs,
-            header.len_spec_arrayrefs,
-        )
-        .await?;
-        let chrom_entries_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_chrom_entries,
-            header.len_chrom_entries,
-        )
-        .await?;
-        let chrom_arrayrefs_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_chrom_arrayrefs,
-            header.len_chrom_arrayrefs,
-        )
-        .await?;
-        let global_meta_buf = read_async_bytes(
-            source.as_ref(),
-            header.off_global_meta,
-            header.len_global_meta,
-        )
-        .await?;
-
-        let spec_container = AsyncContainerView::new(
-            source.clone(),
-            header.off_spec_container,
-            header.len_spec_container,
-            header.spec_block_count,
-            header.compression_level,
-            block_packing_id,
-            config.verify_checksums,
-            "spec",
-            DefaultProcessor,
-            config.max_cached_bytes,
-            config.decompression_budget,
-        )
-        .await?;
-
-        let chrom_container = if header.chrom_block_count > 0 && header.len_chrom_container > 0 {
-            Some(
-                AsyncContainerView::new(
-                    source.clone(),
-                    header.off_chrom_container,
-                    header.len_chrom_container,
-                    header.chrom_block_count,
-                    header.compression_level,
-                    block_packing_id,
-                    config.verify_checksums,
-                    "chrom",
-                    DefaultProcessor,
-                    config.max_cached_bytes,
-                    config.decompression_budget,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-
-        let spec_meta_reader = MetaGroupReader::new(
-            Arc::from(
-                read_async_bytes(source.as_ref(), header.off_spec_meta, header.len_spec_meta)
-                    .await?,
-            ),
-            header.spec_meta_group_count,
-            header.meta_group_size,
-            header.spectrum_count,
-            MetaTotals {
-                rows: header.spec_meta_count,
-                numeric: header.spec_meta_numeric_count,
-                string: header.spec_meta_string_count,
-                uncompressed: header.spec_meta_uncompressed_bytes,
-            },
-            header.compression_codec,
-            config.verify_checksums,
-            config.decompression_budget,
-            config.max_cached_bytes,
-        )?;
-
-        let chrom_meta_reader = MetaGroupReader::new(
-            Arc::from(
-                read_async_bytes(
-                    source.as_ref(),
-                    header.off_chrom_meta,
-                    header.len_chrom_meta,
-                )
-                .await?,
-            ),
-            header.chrom_meta_group_count,
-            header.meta_group_size,
-            header.chrom_count,
-            MetaTotals {
-                rows: header.chrom_meta_count,
-                numeric: header.chrom_meta_numeric_count,
-                string: header.chrom_meta_string_count,
-                uncompressed: header.chrom_meta_uncompressed_bytes,
-            },
-            header.compression_codec,
-            config.verify_checksums,
-            config.decompression_budget,
-            config.max_cached_bytes,
-        )?;
-
-        Ok(Self {
-            header,
-            spec_summary_buf: Arc::from(spec_summary_buf),
-            chrom_summary_buf: Arc::from(chrom_summary_buf),
-            spec_entries_buf: Arc::from(spec_entries_buf),
-            spec_arrayrefs_buf: Arc::from(spec_arrayrefs_buf),
-            chrom_entries_buf: Arc::from(chrom_entries_buf),
-            chrom_arrayrefs_buf: Arc::from(chrom_arrayrefs_buf),
-            global_meta_buf: Arc::from(global_meta_buf),
-            spec_container,
-            chrom_container,
-            spec_meta_reader,
-            chrom_meta_reader,
-            mz_buf: Vec::new(),
-            int_buf: Vec::new(),
-            decompression_budget: config.decompression_budget,
-        })
-    }
-
-    #[inline]
-    pub fn format_version(&self) -> u16 {
-        self.header.format_version
-    }
-
-    #[inline]
-    pub fn spectrum_count(&self) -> u64 {
-        self.header.spectrum_count
-    }
-
-    #[inline]
-    pub fn chromatogram_count(&self) -> u64 {
-        self.header.chrom_count
-    }
-
-    pub fn spec_summary(&self, index: usize) -> Option<SpectrumSummary> {
-        let bytes = slice_summary(
-            &self.spec_summary_buf,
-            0,
-            index,
-            SPEC_SUMMARY_SIZE,
-            self.header.spectrum_count,
-        )?;
-        Some(parse_spec_summary(bytes))
-    }
-
-    pub fn chrom_summary(&self, index: usize) -> Option<ChromatogramSummary> {
-        let bytes = slice_summary(
-            &self.chrom_summary_buf,
-            0,
-            index,
-            CHROM_SUMMARY_SIZE,
-            self.header.chrom_count,
-        )?;
-        Some(parse_chrom_summary(bytes))
-    }
-
-    pub fn spec_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
-        let len = usize::try_from(self.header.len_spec_summary)
-            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
-        let count = usize::try_from(self.header.spectrum_count)
-            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
-        if len != count * SPEC_SUMMARY_SIZE {
-            return Err(
-                format!("spec summary: len={len} != count={count} × {SPEC_SUMMARY_SIZE}").into(),
-            );
-        }
-        Ok(self
-            .spec_summary_buf
-            .chunks_exact(SPEC_SUMMARY_SIZE)
-            .map(parse_spec_summary)
-            .collect())
-    }
-
-    pub fn chrom_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
-        let len = usize::try_from(self.header.len_chrom_summary)
-            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
-        let count = usize::try_from(self.header.chrom_count)
-            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
-        if len != count * CHROM_SUMMARY_SIZE {
-            return Err(format!(
-                "chrom summary: len={len} != count={count} × {CHROM_SUMMARY_SIZE}"
-            )
-            .into());
-        }
-        Ok(self
-            .chrom_summary_buf
-            .chunks_exact(CHROM_SUMMARY_SIZE)
-            .map(parse_chrom_summary)
-            .collect())
-    }
-
-    pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
-        if index >= self.header.spectrum_count as usize {
-            return None;
-        }
-        read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_arrayrefs_buf, index)
-            .map(ArrayRefs::into_vec)
-    }
-
-    pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
-        if index >= self.header.chrom_count as usize {
-            return None;
-        }
-        read_array_refs_from_buffers(&self.chrom_entries_buf, &self.chrom_arrayrefs_buf, index)
-            .map(ArrayRefs::into_vec)
-    }
-
-    pub async fn read_spectrum_array(
-        &mut self,
-        aref: &ArrayRef,
-        out: &mut Vec<f64>,
-    ) -> IonResult<()> {
-        let (element_offset, count, stride) = aref_read_params(aref);
-        let raw = self
-            .spec_container
-            .get_item_from_block(
-                aref.block_id,
-                element_offset,
-                count,
-                stride,
-                "read_spectrum_array",
-            )
-            .await?;
-        decode_into(out, raw, aref.dtype, aref.array_filter)
-    }
-
-    pub async fn read_chromatogram_array(
-        &mut self,
-        aref: &ArrayRef,
-        out: &mut Vec<f64>,
-    ) -> IonResult<()> {
-        let container = self
-            .chrom_container
-            .as_mut()
-            .ok_or_else(|| IonError::from("no chromatogram container"))?;
-        let (element_offset, count, stride) = aref_read_params(aref);
-        let raw = container
-            .get_item_from_block(
-                aref.block_id,
-                element_offset,
-                count,
-                stride,
-                "read_chromatogram_array",
-            )
-            .await?;
-        decode_into(out, raw, aref.dtype, aref.array_filter)
-    }
-
-    pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        parse_global_metadata(
-            &self.global_meta_buf,
-            0,
-            self.header.global_meta_count,
-            self.header.global_meta_numeric_count,
-            self.header.global_meta_string_count,
-            self.header.compression_codec,
-            self.header.global_meta_uncompressed_bytes,
-            self.decompression_budget,
-        )
-    }
-
-    pub(crate) fn spectrum_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        self.spec_meta_reader.read_all()
-    }
-
-    pub(crate) fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
-        self.chrom_meta_reader.read_all()
-    }
-
-    pub fn spectrum_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
-        self.spec_meta_reader.read_item(index as u64)
-    }
-
-    pub fn chromatogram_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
-        self.chrom_meta_reader.read_item(index as u64)
-    }
-
-    pub fn to_mzml_metadata_only(&self) -> IonResult<MzML> {
-        AsyncMzmlConverter::metadata_only(self)
-    }
-
-    pub async fn to_mzml(&mut self) -> IonResult<MzML> {
-        AsyncMzmlConverter::new(self).full().await
-    }
-
-    pub async fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
-        if index >= self.header.spectrum_count as usize {
-            return Ok(None);
-        }
-        let rows = self.spec_meta_reader.read_item(index as u64)?;
-        let Some(mut spectrum) = build_one_spectrum(&rows, index) else {
-            return Ok(None);
-        };
-
-        if let Some(arefs) =
-            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_arrayrefs_buf, index)
-        {
-            let bd_list = spectrum
-                .binary_data_array_list
-                .get_or_insert_with(BinaryDataArrayList::default);
-            for aref in arefs.as_slice() {
-                let (element_offset, count, stride) = aref_read_params(aref);
-                let raw = self
-                    .spec_container
-                    .get_item_from_block(
-                        aref.block_id,
-                        element_offset,
-                        count,
-                        stride,
-                        "spectrum_at",
-                    )
-                    .await?;
-                attach_array(bd_list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
-            }
-            bd_list.count = Some(bd_list.binary_data_arrays.len());
-        }
-        Ok(Some(spectrum))
-    }
-
-    pub async fn load_scan(
-        &mut self,
-        index: usize,
-        mz: &mut Vec<f64>,
-        intensity: &mut Vec<f64>,
-    ) -> IonResult<bool> {
-        let count = match usize::try_from(self.header.spectrum_count) {
-            Ok(count) => count,
-            Err(_) => return Ok(false),
-        };
-        if index >= count {
-            return Ok(false);
-        }
-        let entry_start = index * INDEX_ENTRY_BYTES;
-        let Some(entry) = self
-            .spec_entries_buf
-            .get(entry_start..entry_start + INDEX_ENTRY_BYTES)
-        else {
-            return Ok(false);
-        };
-        let Some((mz_ref, int_ref)) = parse_array_pair(entry, self.spec_arrayrefs_buf.as_ref())
-        else {
-            return Ok(false);
-        };
-        decode_from_async_block(&mut self.spec_container, mz, &mz_ref).await?;
-        decode_from_async_block(&mut self.spec_container, intensity, &int_ref).await?;
-        Ok(mz.len().min(intensity.len()) > 0)
-    }
-
-    pub async fn for_each_in_range<F>(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        mut callback: F,
-    ) -> IonResult<()>
-    where
-        F: FnMut(&ScanSummary, &[f64], &[f64]),
-    {
-        let rt_min_s = rt_min * 60.0;
-        let rt_max_s = rt_max * 60.0;
-        for (summary_bytes, entry_bytes) in self
-            .spec_summary_buf
-            .chunks_exact(SPEC_SUMMARY_SIZE)
-            .zip(self.spec_entries_buf.chunks_exact(INDEX_ENTRY_BYTES))
-        {
-            let summary = parse_spec_summary(summary_bytes);
-            if !summary.rt_seconds.is_finite()
-                || summary.rt_seconds < rt_min_s
-                || summary.rt_seconds > rt_max_s
-            {
-                continue;
-            }
-            if ms_level != 0 && summary.ms_level != ms_level {
-                continue;
-            }
-            let Some((mz_ref, int_ref)) =
-                parse_array_pair(entry_bytes, self.spec_arrayrefs_buf.as_ref())
-            else {
-                continue;
-            };
-            decode_from_async_block(&mut self.spec_container, &mut self.mz_buf, &mz_ref).await?;
-            decode_from_async_block(&mut self.spec_container, &mut self.int_buf, &int_ref).await?;
-            let len = self.mz_buf.len().min(self.int_buf.len());
-            if len == 0 {
-                continue;
-            }
-            let summary = ScanSummary {
-                rt: summary.rt_seconds / 60.0,
-                ms_level: summary.ms_level,
-                polarity: summary.polarity,
-                base_peak_mz: summary.base_peak_mz,
-                selected_ion_mz: summary.selected_ion_mz,
-                base_peak_int: summary.base_peak_int,
-                total_ion_current: summary.total_ion_current,
-            };
-            callback(&summary, &self.mz_buf[..len], &self.int_buf[..len]);
-        }
-        Ok(())
     }
 }
 
@@ -948,7 +553,7 @@ fn build_one_spectrum(rows: &[Metadatum], fallback_index: usize) -> Option<Spect
 #[allow(clippy::large_enum_variant)]
 enum IonBackend {
     Decoder(Decoder),
-    AsyncDecoder(AsyncDecoder),
+    Async(AsyncReader),
     Data,
 }
 
@@ -956,7 +561,7 @@ impl IonBackend {
     fn as_decoder_mut(&mut self) -> Option<&mut Decoder> {
         match self {
             Self::Decoder(d) => Some(d),
-            Self::AsyncDecoder(_) => None,
+            Self::Async(_) => None,
             Self::Data => None,
         }
     }
@@ -992,7 +597,7 @@ impl Ion {
     }
 
     pub fn open_with_query(
-        read: impl Fn(Query) -> IonResult<QueryValue> + Send + Sync + 'static,
+        read: impl Fn(Query) -> IonResult<QueryPayload> + Send + Sync + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
         let decoder = Decoder::open_with_query(read, config)?;
@@ -1003,16 +608,16 @@ impl Ion {
         source: Arc<dyn AsyncByteSource>,
         config: DecoderConfig,
     ) -> IonResult<Self> {
-        let decoder = AsyncDecoder::open_with_async_source(source, config).await?;
-        Ok(Self::empty(IonBackend::AsyncDecoder(decoder)))
+        let reader = AsyncReader::open_with_async_source(source, config).await?;
+        Ok(Self::empty(IonBackend::Async(reader)))
     }
 
     pub async fn open_with_async_query(
         read: impl Fn(Query) -> QueryFuture<'static> + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
-        let decoder = AsyncDecoder::open_with_async_query(read, config).await?;
-        Ok(Self::empty(IonBackend::AsyncDecoder(decoder)))
+        let reader = AsyncReader::open_with_async_query(read, config).await?;
+        Ok(Self::empty(IonBackend::Async(reader)))
     }
 
     pub fn open_bytes(bytes: Arc<[u8]>, config: DecoderConfig) -> IonResult<OwnedIon> {
@@ -1093,7 +698,7 @@ impl Ion {
     pub fn load_metadata(&mut self) -> IonResult<()> {
         let mzml = match &mut self.backend {
             IonBackend::Decoder(decoder) => Some(decoder.to_mzml_metadata_only()?),
-            IonBackend::AsyncDecoder(decoder) => Some(decoder.to_mzml_metadata_only()?),
+            IonBackend::Async(reader) => Some(reader.decoder().to_mzml_metadata_only()?),
             IonBackend::Data => None,
         };
         if let Some(mzml) = mzml {
@@ -1106,7 +711,7 @@ impl Ion {
     pub fn spectrum_count(&self) -> u64 {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.spectrum_count(),
-            IonBackend::AsyncDecoder(decoder) => decoder.spectrum_count(),
+            IonBackend::Async(reader) => reader.decoder().spectrum_count(),
             IonBackend::Data => self
                 .run
                 .spectrum_list
@@ -1119,7 +724,7 @@ impl Ion {
     pub fn chromatogram_count(&self) -> u64 {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.chromatogram_count(),
-            IonBackend::AsyncDecoder(decoder) => decoder.chromatogram_count(),
+            IonBackend::Async(reader) => reader.decoder().chromatogram_count(),
             IonBackend::Data => self
                 .run
                 .chromatogram_list
@@ -1132,7 +737,7 @@ impl Ion {
     pub fn format_version(&self) -> Option<u16> {
         match &self.backend {
             IonBackend::Decoder(decoder) => Some(decoder.format_version()),
-            IonBackend::AsyncDecoder(decoder) => Some(decoder.format_version()),
+            IonBackend::Async(reader) => Some(reader.decoder().format_version()),
             IonBackend::Data => None,
         }
     }
@@ -1141,7 +746,7 @@ impl Ion {
     pub fn spec_summary(&self, index: usize) -> Option<SpectrumSummary> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.spec_summary(index),
-            IonBackend::AsyncDecoder(decoder) => decoder.spec_summary(index),
+            IonBackend::Async(reader) => reader.decoder().spec_summary(index),
             IonBackend::Data => None,
         }
     }
@@ -1149,7 +754,7 @@ impl Ion {
     pub fn spec_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.spec_summaries(),
-            IonBackend::AsyncDecoder(decoder) => decoder.spec_summaries(),
+            IonBackend::Async(reader) => reader.decoder().spec_summaries(),
             IonBackend::Data => Err(IonError::from(
                 "spec summary summaries are unavailable for mzML-backed Ion",
             )),
@@ -1160,7 +765,7 @@ impl Ion {
     pub fn chrom_summary(&self, index: usize) -> Option<ChromatogramSummary> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.chrom_summary(index),
-            IonBackend::AsyncDecoder(decoder) => decoder.chrom_summary(index),
+            IonBackend::Async(reader) => reader.decoder().chrom_summary(index),
             IonBackend::Data => None,
         }
     }
@@ -1168,7 +773,7 @@ impl Ion {
     pub fn chrom_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.chrom_summaries(),
-            IonBackend::AsyncDecoder(decoder) => decoder.chrom_summaries(),
+            IonBackend::Async(reader) => reader.decoder().chrom_summaries(),
             IonBackend::Data => Err(IonError::from(
                 "chrom summary summaries are unavailable for mzML-backed Ion",
             )),
@@ -1178,7 +783,7 @@ impl Ion {
     pub fn spectrum_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.spectrum_array_refs(index),
-            IonBackend::AsyncDecoder(decoder) => decoder.spectrum_array_refs(index),
+            IonBackend::Async(reader) => reader.decoder().spectrum_array_refs(index),
             IonBackend::Data => None,
         }
     }
@@ -1186,37 +791,45 @@ impl Ion {
     pub fn chromatogram_array_refs(&self, index: usize) -> Option<Vec<ArrayRef>> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.chromatogram_array_refs(index),
-            IonBackend::AsyncDecoder(decoder) => decoder.chromatogram_array_refs(index),
+            IonBackend::Async(reader) => reader.decoder().chromatogram_array_refs(index),
             IonBackend::Data => None,
         }
     }
 
-    pub fn read_spectrum_array(&mut self, aref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
+    pub fn read_spectrum_array(&mut self, array_ref: &ArrayRef, out: &mut Vec<f64>) -> IonResult<()> {
         self.backend
             .as_decoder_mut()
-            .ok_or_else(|| IonError::from("array refs are unavailable for mzML-backed Ion"))
-            .and_then(|d| d.read_spectrum_array(aref, out))
+            .ok_or_else(|| {
+                IonError::from(
+                    "read_spectrum_array needs a sync source; for an async-backed Ion use read_spectrum_array_async",
+                )
+            })
+            .and_then(|d| d.read_spectrum_array(array_ref, out))
     }
 
     pub fn read_chromatogram_array(
         &mut self,
-        aref: &ArrayRef,
+        array_ref: &ArrayRef,
         out: &mut Vec<f64>,
     ) -> IonResult<()> {
         self.backend
             .as_decoder_mut()
-            .ok_or_else(|| IonError::from("array refs are unavailable for mzML-backed Ion"))
-            .and_then(|d| d.read_chromatogram_array(aref, out))
+            .ok_or_else(|| {
+                IonError::from(
+                    "read_chromatogram_array needs a sync source; for an async-backed Ion use read_chromatogram_array_async",
+                )
+            })
+            .and_then(|d| d.read_chromatogram_array(array_ref, out))
     }
 
     pub async fn read_spectrum_array_async(
         &mut self,
-        aref: &ArrayRef,
+        array_ref: &ArrayRef,
         out: &mut Vec<f64>,
     ) -> IonResult<()> {
         match &mut self.backend {
-            IonBackend::Decoder(decoder) => decoder.read_spectrum_array(aref, out),
-            IonBackend::AsyncDecoder(decoder) => decoder.read_spectrum_array(aref, out).await,
+            IonBackend::Decoder(decoder) => decoder.read_spectrum_array(array_ref, out),
+            IonBackend::Async(reader) => reader.read_spectrum_array(array_ref, out).await,
             IonBackend::Data => Err(IonError::from(
                 "array refs are unavailable for mzML-backed Ion",
             )),
@@ -1225,12 +838,12 @@ impl Ion {
 
     pub async fn read_chromatogram_array_async(
         &mut self,
-        aref: &ArrayRef,
+        array_ref: &ArrayRef,
         out: &mut Vec<f64>,
     ) -> IonResult<()> {
         match &mut self.backend {
-            IonBackend::Decoder(decoder) => decoder.read_chromatogram_array(aref, out),
-            IonBackend::AsyncDecoder(decoder) => decoder.read_chromatogram_array(aref, out).await,
+            IonBackend::Decoder(decoder) => decoder.read_chromatogram_array(array_ref, out),
+            IonBackend::Async(reader) => reader.read_chromatogram_array(array_ref, out).await,
             IonBackend::Data => Err(IonError::from(
                 "array refs are unavailable for mzML-backed Ion",
             )),
@@ -1240,7 +853,7 @@ impl Ion {
     pub fn to_mzml(&mut self) -> IonResult<MzML> {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.to_mzml(),
-            IonBackend::AsyncDecoder(_) => {
+            IonBackend::Async(_) => {
                 Err(IonError::from("use to_mzml_async for an async-backed Ion"))
             }
             IonBackend::Data => Ok(self.clone_as_mzml()),
@@ -1250,7 +863,7 @@ impl Ion {
     pub async fn to_mzml_async(&mut self) -> IonResult<MzML> {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.to_mzml(),
-            IonBackend::AsyncDecoder(decoder) => decoder.to_mzml().await,
+            IonBackend::Async(reader) => reader.to_mzml().await,
             IonBackend::Data => Ok(self.clone_as_mzml()),
         }
     }
@@ -1258,7 +871,7 @@ impl Ion {
     pub fn to_mzml_metadata_only(&self) -> IonResult<MzML> {
         match &self.backend {
             IonBackend::Decoder(decoder) => decoder.to_mzml_metadata_only(),
-            IonBackend::AsyncDecoder(decoder) => decoder.to_mzml_metadata_only(),
+            IonBackend::Async(reader) => reader.decoder().to_mzml_metadata_only(),
             IonBackend::Data => Ok(self.clone_as_mzml_metadata_only()),
         }
     }
@@ -1266,7 +879,7 @@ impl Ion {
     pub fn spectrum_at(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
         match &mut self.backend {
             IonBackend::Decoder(d) => d.spectrum_at(index),
-            IonBackend::AsyncDecoder(_) => Err(IonError::from(
+            IonBackend::Async(_) => Err(IonError::from(
                 "use spectrum_at_async for an async-backed Ion",
             )),
             IonBackend::Data => Ok(self
@@ -1280,7 +893,7 @@ impl Ion {
     pub async fn spectrum_at_async(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.spectrum_at(index),
-            IonBackend::AsyncDecoder(decoder) => decoder.spectrum_at(index).await,
+            IonBackend::Async(reader) => reader.spectrum_at(index).await,
             IonBackend::Data => Ok(self
                 .run
                 .spectrum_list
@@ -1292,7 +905,7 @@ impl Ion {
     pub fn spectrum_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
         match &mut self.backend {
             IonBackend::Decoder(d) => d.spectrum_metadata_at(index),
-            IonBackend::AsyncDecoder(d) => d.spectrum_metadata_at(index),
+            IonBackend::Async(reader) => reader.decoder_mut().spectrum_metadata_at(index),
             IonBackend::Data => Err(IonError::from(
                 "metadata rows are only available on a file-backed Ion (use Ion::open)",
             )),
@@ -1302,7 +915,7 @@ impl Ion {
     pub fn chromatogram_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
         match &mut self.backend {
             IonBackend::Decoder(d) => d.chromatogram_metadata_at(index),
-            IonBackend::AsyncDecoder(d) => d.chromatogram_metadata_at(index),
+            IonBackend::Async(reader) => reader.decoder_mut().chromatogram_metadata_at(index),
             IonBackend::Data => Err(IonError::from(
                 "metadata rows are only available on a file-backed Ion (use Ion::open)",
             )),
@@ -1317,7 +930,7 @@ impl Ion {
     ) -> IonResult<bool> {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => Ok(decoder.load_scan(index, mz, intensity)),
-            IonBackend::AsyncDecoder(decoder) => decoder.load_scan(index, mz, intensity).await,
+            IonBackend::Async(reader) => reader.load_scan(index, mz, intensity).await,
             IonBackend::Data => {
                 let spectra = self
                     .run
@@ -1345,8 +958,8 @@ impl Ion {
                 decoder.for_each_in_range(rt_min, rt_max, ms_level, callback);
                 Ok(())
             }
-            IonBackend::AsyncDecoder(decoder) => {
-                decoder
+            IonBackend::Async(reader) => {
+                reader
                     .for_each_in_range(rt_min, rt_max, ms_level, callback)
                     .await
             }
@@ -1444,7 +1057,7 @@ impl ScanSource for Decoder {
             return false;
         }
         let all_entries = self.spec_entries_buf.as_ref();
-        let array_ref_bytes = self.spec_arrayrefs_buf.as_ref();
+        let array_ref_bytes = self.spec_array_refs.as_ref();
         let entry_start = index * INDEX_ENTRY_BYTES;
         let Some(entry) = all_entries.get(entry_start..entry_start + INDEX_ENTRY_BYTES) else {
             return false;
@@ -1472,19 +1085,19 @@ impl ScanSource for Decoder {
             Err(_) => return,
         };
         let entry_bytes = self.spec_entries_buf.as_ref();
-        let array_ref_bytes = self.spec_arrayrefs_buf.as_ref();
-        let (container, mz_buf, int_buf) = (
+        let array_ref_bytes = self.spec_array_refs.as_ref();
+        let (container, mz_values, int_values) = (
             &mut self.spec_container as &mut dyn ContainerAccess,
-            &mut self.mz_buf,
-            &mut self.int_buf,
+            &mut self.mz_values,
+            &mut self.int_values,
         );
         ScanIterator::new(
             summary_bytes,
             entry_bytes,
             array_ref_bytes,
             container,
-            mz_buf,
-            int_buf,
+            mz_values,
+            int_values,
             rt_min * 60.0,
             rt_max * 60.0,
             ms_level,
@@ -1497,13 +1110,13 @@ impl ScanSource for Ion {
     fn for_each_summary(&mut self, callback: &mut dyn FnMut(usize, ScanSummary)) {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.for_each_summary(callback),
-            IonBackend::AsyncDecoder(decoder) => {
-                let count = match usize::try_from(decoder.spectrum_count()) {
+            IonBackend::Async(reader) => {
+                let count = match usize::try_from(reader.decoder().spectrum_count()) {
                     Ok(count) => count,
                     Err(_) => return,
                 };
                 for index in 0..count {
-                    if let Some(summary) = decoder.spec_summary(index) {
+                    if let Some(summary) = reader.decoder().spec_summary(index) {
                         callback(
                             index,
                             ScanSummary {
@@ -1530,7 +1143,7 @@ impl ScanSource for Ion {
     fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.load_scan(index, mz, intensity),
-            IonBackend::AsyncDecoder(_) => false,
+            IonBackend::Async(_) => false,
             IonBackend::Data => {
                 let spectra = self
                     .run
@@ -1552,7 +1165,7 @@ impl ScanSource for Ion {
             IonBackend::Decoder(decoder) => {
                 decoder.for_each_in_range(rt_min, rt_max, ms_level, callback);
             }
-            IonBackend::AsyncDecoder(_) => {}
+            IonBackend::Async(_) => {}
             IonBackend::Data => {
                 let spectra = self
                     .run
@@ -1671,7 +1284,7 @@ impl<'d> MzmlConverter<'d> {
         if let Some(spectrum_list) = mzml.run.spectrum_list.as_mut() {
             attach_binaries(
                 self.decoder.spec_entries_buf.as_ref(),
-                self.decoder.spec_arrayrefs_buf.as_ref(),
+                self.decoder.spec_array_refs.as_ref(),
                 &mut spectrum_list.spectra,
                 &self.decoder.spec_container,
                 "spec",
@@ -1685,7 +1298,7 @@ impl<'d> MzmlConverter<'d> {
         ) {
             attach_binaries(
                 self.decoder.chrom_entries_buf.as_ref(),
-                self.decoder.chrom_arrayrefs_buf.as_ref(),
+                self.decoder.chrom_array_refs.as_ref(),
                 &mut chrom_list.chromatograms,
                 container,
                 "chrom",
@@ -1697,132 +1310,15 @@ impl<'d> MzmlConverter<'d> {
     }
 }
 
-struct AsyncMzmlConverter<'d> {
-    decoder: &'d mut AsyncDecoder,
-}
-
-impl<'d> AsyncMzmlConverter<'d> {
-    #[inline]
-    fn new(decoder: &'d mut AsyncDecoder) -> Self {
-        Self { decoder }
-    }
-
-    fn metadata_only(decoder: &AsyncDecoder) -> IonResult<MzML> {
-        let global_meta = decoder.global_metadata()?;
-        let global_lookup = ChildrenLookup::new(&global_meta);
-        let meta_refs: Vec<&Metadatum> = global_meta.iter().collect();
-        let policy = DefaultMetadataPolicy;
-
-        let mut owner_rows = OwnerRows::with_capacity(global_meta.len());
-        for metadatum in &global_meta {
-            owner_rows.insert(metadatum.id, metadatum);
-        }
-
-        let run_id = global_lookup
-            .all_ids(TagId::Run)
-            .first()
-            .copied()
-            .unwrap_or(0);
-        let rows = owner_rows.get(run_id);
-
-        let mut param_buffer: Vec<&Metadatum> = Vec::new();
-        global_lookup.get_param_rows_into(&owner_rows, run_id, &policy, &mut param_buffer);
-        let (cv_params, user_params) = parse_cv_and_user_params(&param_buffer);
-
-        let spec_meta = decoder.spectrum_metadata()?;
-        let chrom_meta = decoder.chromatogram_metadata()?;
-        let spec_refs: Vec<&Metadatum> = spec_meta.iter().collect();
-        let chrom_refs: Vec<&Metadatum> = chrom_meta.iter().collect();
-
-        let spectrum_list =
-            parse_spectrum_list(&spec_refs, &ChildrenLookup::new(&spec_meta), &policy);
-        let chromatogram_list =
-            parse_chromatogram_list(&chrom_refs, &ChildrenLookup::new(&chrom_meta), &policy);
-
-        let source_file_ref_list = parse_run_source_file_refs(&owner_rows, &global_lookup, run_id);
-
-        Ok(MzML {
-            cv_list: parse_cv_list(&meta_refs, &global_lookup),
-            file_description: parse_file_description(&meta_refs, &global_lookup, &policy),
-            referenceable_param_group_list: parse_referenceable_param_group_list(
-                &meta_refs,
-                &global_lookup,
-                &policy,
-            ),
-            sample_list: parse_sample_list(&meta_refs, &global_lookup, &policy),
-            instrument_list: parse_instrument_list(&meta_refs, &global_lookup, &policy),
-            software_list: parse_software_list(&meta_refs, &global_lookup, &policy),
-            data_processing_list: parse_data_processing_list(&meta_refs, &global_lookup, &policy),
-            scan_settings_list: parse_scan_settings_list(&meta_refs, &global_lookup, &policy),
-            run: Run {
-                id: get_attr_text(rows, ACC_ATTR_ID).unwrap_or_default(),
-                start_time_stamp: get_attr_text(rows, ACC_ATTR_START_TIME_STAMP)
-                    .filter(|value| !value.is_empty()),
-                default_instrument_configuration_ref: get_attr_text(
-                    rows,
-                    ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF,
-                )
-                .or_else(|| get_attr_text(rows, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF)),
-                default_source_file_ref: get_attr_text(rows, ACC_ATTR_DEFAULT_SOURCE_FILE_REF),
-                sample_ref: get_attr_text(rows, ACC_ATTR_SAMPLE_REF),
-                referenceable_param_group_refs: global_lookup
-                    .ids_for(run_id, TagId::ReferenceableParamGroupRef)
-                    .iter()
-                    .filter_map(|&ref_id| {
-                        get_attr_text(owner_rows.get(ref_id), ACC_ATTR_REF)
-                            .map(|r| ReferenceableParamGroupRef { r#ref: r })
-                    })
-                    .collect(),
-                cv_params,
-                user_params,
-                source_file_ref_list,
-                spectrum_list,
-                chromatogram_list,
-            },
-        })
-    }
-
-    async fn full(&mut self) -> IonResult<MzML> {
-        let mut mzml = Self::metadata_only(self.decoder)?;
-
-        if let Some(spectrum_list) = mzml.run.spectrum_list.as_mut() {
-            attach_binaries_async(
-                self.decoder.spec_entries_buf.as_ref(),
-                self.decoder.spec_arrayrefs_buf.as_ref(),
-                &mut spectrum_list.spectra,
-                &self.decoder.spec_container,
-                "spec",
-            )
-            .await?;
-        }
-
-        if let (Some(chrom_list), Some(container)) = (
-            mzml.run.chromatogram_list.as_mut(),
-            self.decoder.chrom_container.as_ref(),
-        ) {
-            attach_binaries_async(
-                self.decoder.chrom_entries_buf.as_ref(),
-                self.decoder.chrom_arrayrefs_buf.as_ref(),
-                &mut chrom_list.chromatograms,
-                container,
-                "chrom",
-            )
-            .await?;
-        }
-
-        Ok(mzml)
-    }
-}
-
 struct ScanIterator<'a, 'd> {
     summary_chunks: std::slice::ChunksExact<'a, u8>,
     entry_chunks: std::slice::ChunksExact<'a, u8>,
     aref_bytes: &'a [u8],
     container: &'d mut dyn ContainerAccess,
-    mz_buf: &'d mut Vec<f64>,
-    int_buf: &'d mut Vec<f64>,
-    rt_min_s: f64,
-    rt_max_s: f64,
+    mz_values: &'d mut Vec<f64>,
+    int_values: &'d mut Vec<f64>,
+    rt_min: f64,
+    rt_max: f64,
     ms_level: u8,
 }
 
@@ -1833,10 +1329,10 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         entry_bytes: &'a [u8],
         aref_bytes: &'a [u8],
         container: &'d mut dyn ContainerAccess,
-        mz_buf: &'d mut Vec<f64>,
-        int_buf: &'d mut Vec<f64>,
-        rt_min_s: f64,
-        rt_max_s: f64,
+        mz_values: &'d mut Vec<f64>,
+        int_values: &'d mut Vec<f64>,
+        rt_min: f64,
+        rt_max: f64,
         ms_level: u8,
     ) -> Self {
         Self {
@@ -1844,10 +1340,10 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
             entry_chunks: entry_bytes.chunks_exact(INDEX_ENTRY_BYTES),
             aref_bytes,
             container,
-            mz_buf,
-            int_buf,
-            rt_min_s,
-            rt_max_s,
+            mz_values,
+            int_values,
+            rt_min,
+            rt_max,
             ms_level,
         }
     }
@@ -1861,8 +1357,8 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
         {
             let summary = parse_spec_summary(summary_bytes);
             if !summary.rt_seconds.is_finite()
-                || summary.rt_seconds < self.rt_min_s
-                || summary.rt_seconds > self.rt_max_s
+                || summary.rt_seconds < self.rt_min
+                || summary.rt_seconds > self.rt_max
             {
                 continue;
             }
@@ -1872,13 +1368,13 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
             let Some((mz_ref, int_ref)) = parse_array_pair(entry_bytes, self.aref_bytes) else {
                 continue;
             };
-            if !decode_from_block(self.container, self.mz_buf, &mz_ref) {
+            if !decode_from_block(self.container, self.mz_values, &mz_ref) {
                 continue;
             }
-            if !decode_from_block(self.container, self.int_buf, &int_ref) {
+            if !decode_from_block(self.container, self.int_values, &int_ref) {
                 continue;
             }
-            let len = self.mz_buf.len().min(self.int_buf.len());
+            let len = self.mz_values.len().min(self.int_values.len());
             if len == 0 {
                 continue;
             }
@@ -1891,7 +1387,7 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
                 base_peak_int: summary.base_peak_int,
                 total_ion_current: summary.total_ion_current,
             };
-            callback(&summary, &self.mz_buf[..len], &self.int_buf[..len]);
+            callback(&summary, &self.mz_values[..len], &self.int_values[..len]);
         }
     }
 }
@@ -1915,13 +1411,13 @@ impl BinaryArrayOwner for Chromatogram {
 }
 
 #[derive(Clone)]
-struct ArrayRefs {
+struct ArrayRefList {
     len: usize,
     inline: [ArrayRef; INLINE_ARRAY_REF_CAP],
     heap: Option<Vec<ArrayRef>>,
 }
 
-impl ArrayRefs {
+impl ArrayRefList {
     #[inline]
     fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -2006,7 +1502,7 @@ fn read_array_refs_from_buffers(
     entries_buf: &[u8],
     arrayrefs_buf: &[u8],
     index: usize,
-) -> Option<ArrayRefs> {
+) -> Option<ArrayRefList> {
     let entry_offset = index.checked_mul(INDEX_ENTRY_BYTES)?;
     let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
     let entry = entries_buf.get(entry_offset..entry_end)?;
@@ -2016,7 +1512,7 @@ fn read_array_refs_from_buffers(
     if ref_count > max_refs {
         return None;
     }
-    let mut refs = ArrayRefs::with_capacity(ref_count);
+    let mut refs = ArrayRefList::with_capacity(ref_count);
     for offset in 0..ref_count {
         let pos = ref_start
             .checked_add(offset)?
@@ -2032,7 +1528,7 @@ fn read_array_refs_at(
     entry_base: usize,
     aref_base: usize,
     index: usize,
-) -> Option<ArrayRefs> {
+) -> Option<ArrayRefList> {
     let entry_offset = index
         .checked_mul(INDEX_ENTRY_BYTES)?
         .checked_add(entry_base)?;
@@ -2044,7 +1540,7 @@ fn read_array_refs_at(
     if ref_count > max_refs {
         return None;
     }
-    let mut refs = ArrayRefs::with_capacity(ref_count);
+    let mut refs = ArrayRefList::with_capacity(ref_count);
     for offset in 0..ref_count {
         let pos = ref_start
             .checked_add(offset)?
@@ -2070,27 +1566,27 @@ fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
 }
 
 #[inline]
-fn aref_read_params(aref: &ArrayRef) -> (u64, u64, usize) {
-    if aref.encoded_len > 0 {
-        (aref.element_offset, aref.encoded_len as u64, 1)
+fn aref_read_params(array_ref: &ArrayRef) -> (u64, u64, usize) {
+    if array_ref.encoded_len > 0 {
+        (array_ref.element_offset, array_ref.encoded_len as u64, 1)
     } else {
         (
-            aref.element_offset,
-            aref.element_count,
-            dtype_stride(aref.dtype),
+            array_ref.element_offset,
+            array_ref.element_count,
+            dtype_stride(array_ref.dtype),
         )
     }
 }
 
-fn array_byte_range(aref: &ArrayRef, ctx: &'static str) -> IonResult<(usize, usize)> {
-    let (element_offset, count, stride) = aref_read_params(aref);
+fn array_byte_range(array_ref: &ArrayRef, ctx: &'static str) -> IonResult<(usize, usize)> {
+    let (element_offset, count, stride) = aref_read_params(array_ref);
     let start = usize::try_from(element_offset)
         .ok()
         .and_then(|offset| offset.checked_mul(stride))
         .ok_or_else(|| {
             IonError::from(format!(
                 "{ctx}: item range overflow for block {}",
-                aref.block_id
+                array_ref.block_id
             ))
         })?;
     let end = usize::try_from(count)
@@ -2100,7 +1596,7 @@ fn array_byte_range(aref: &ArrayRef, ctx: &'static str) -> IonResult<(usize, usi
         .ok_or_else(|| {
             IonError::from(format!(
                 "{ctx}: item range overflow for block {}",
-                aref.block_id
+                array_ref.block_id
             ))
         })?;
     Ok((start, end))
@@ -2135,25 +1631,13 @@ fn parse_array_pair(entry_bytes: &[u8], aref_bytes: &[u8]) -> Option<(ArrayRef, 
 fn decode_from_block(
     container: &mut dyn ContainerAccess,
     buf: &mut Vec<f64>,
-    aref: &ArrayRef,
+    array_ref: &ArrayRef,
 ) -> bool {
-    let (element_offset, count, stride) = aref_read_params(aref);
-    match container.get_item_from_block(aref.block_id, element_offset, count, stride, "scan") {
-        Ok(raw) => decode_into(buf, raw, aref.dtype, aref.array_filter).is_ok(),
+    let (element_offset, count, stride) = aref_read_params(array_ref);
+    match container.get_array_bytes_from_block(array_ref.block_id, element_offset, count, stride, "scan") {
+        Ok(raw) => decode_into(buf, raw, array_ref.dtype, array_ref.array_filter).is_ok(),
         Err(_) => false,
     }
-}
-
-async fn decode_from_async_block(
-    container: &mut AsyncContainerView<DefaultProcessor>,
-    buf: &mut Vec<f64>,
-    aref: &ArrayRef,
-) -> IonResult<()> {
-    let (element_offset, count, stride) = aref_read_params(aref);
-    let raw = container
-        .get_item_from_block(aref.block_id, element_offset, count, stride, "scan")
-        .await?;
-    decode_into(buf, raw, aref.dtype, aref.array_filter)
 }
 
 #[inline]
@@ -2256,7 +1740,7 @@ fn attach_binaries<E: BinaryArrayOwner>(
     entries_buf: &[u8],
     arrayrefs_buf: &[u8],
     entries: &mut [E],
-    container: &ContainerView<DefaultProcessor>,
+    container: &ContainerView<DefaultBlockProcessor>,
     ctx: &'static str,
     parallel: bool,
 ) -> IonResult<()> {
@@ -2273,18 +1757,18 @@ fn attach_binaries<E: BinaryArrayOwner>(
         if item_refs.is_empty() {
             continue;
         }
-        for aref in item_refs.as_slice() {
-            let stride = if aref.encoded_len > 0 {
+        for array_ref in item_refs.as_slice() {
+            let stride = if array_ref.encoded_len > 0 {
                 1
             } else {
-                dtype_stride(aref.dtype)
+                dtype_stride(array_ref.dtype)
             };
-            if let Some(old) = blocks.insert(aref.block_id, stride)
+            if let Some(old) = blocks.insert(array_ref.block_id, stride)
                 && old != stride
             {
                 return Err(IonError::from(format!(
                     "{ctx}: stride mismatch for block {} (expected {old}, got {stride})",
-                    aref.block_id
+                    array_ref.block_id
                 )));
             }
         }
@@ -2326,19 +1810,19 @@ fn attach_binaries<E: BinaryArrayOwner>(
         let list = entries[index]
             .binary_data_array_list_mut()
             .get_or_insert_with(BinaryDataArrayList::default);
-        for aref in item_refs.as_slice() {
+        for array_ref in item_refs.as_slice() {
             let block = data
-                .get(&aref.block_id)
-                .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", aref.block_id)))?;
+                .get(&array_ref.block_id)
+                .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", array_ref.block_id)))?;
             let (start, end) = {
-                let (element_offset, count, stride) = aref_read_params(aref);
+                let (element_offset, count, stride) = aref_read_params(array_ref);
                 let s = usize::try_from(element_offset)
                     .ok()
                     .and_then(|offset| offset.checked_mul(stride))
                     .ok_or_else(|| {
                         IonError::from(format!(
                             "{ctx}: item range overflow for block {}",
-                            aref.block_id
+                            array_ref.block_id
                         ))
                     })?;
                 let e = usize::try_from(count)
@@ -2348,7 +1832,7 @@ fn attach_binaries<E: BinaryArrayOwner>(
                     .ok_or_else(|| {
                         IonError::from(format!(
                             "{ctx}: item range overflow for block {}",
-                            aref.block_id
+                            array_ref.block_id
                         ))
                     })?;
                 (s, e)
@@ -2356,80 +1840,11 @@ fn attach_binaries<E: BinaryArrayOwner>(
             let raw = block.get(start..end).ok_or_else(|| {
                 IonError::from(format!(
                     "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
-                    aref.block_id,
+                    array_ref.block_id,
                     block.len()
                 ))
             })?;
-            attach_array(list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
-        }
-        list.count = Some(list.binary_data_arrays.len());
-    }
-
-    Ok(())
-}
-
-async fn attach_binaries_async<E: BinaryArrayOwner>(
-    entries_buf: &[u8],
-    arrayrefs_buf: &[u8],
-    entries: &mut [E],
-    container: &AsyncContainerView<DefaultProcessor>,
-    ctx: &'static str,
-) -> IonResult<()> {
-    let mut refs = Vec::new();
-    let mut blocks = HashMap::new();
-
-    for index in 0..entries.len() {
-        let Some(item_refs) = read_array_refs_from_buffers(entries_buf, arrayrefs_buf, index)
-        else {
-            continue;
-        };
-        if item_refs.is_empty() {
-            continue;
-        }
-        for aref in item_refs.as_slice() {
-            let stride = if aref.encoded_len > 0 {
-                1
-            } else {
-                dtype_stride(aref.dtype)
-            };
-            if let Some(old) = blocks.insert(aref.block_id, stride)
-                && old != stride
-            {
-                return Err(IonError::from(format!(
-                    "{ctx}: stride mismatch for block {} (expected {old}, got {stride})",
-                    aref.block_id
-                )));
-            }
-        }
-        refs.push((index, item_refs));
-    }
-
-    let mut block_list: Vec<_> = blocks.into_iter().collect();
-    block_list.sort_unstable_by_key(|(block_id, _)| *block_id);
-
-    let mut data = HashMap::with_capacity(block_list.len());
-    for (block_id, stride) in block_list {
-        let block = container.read_block(block_id, stride, ctx).await?;
-        data.insert(block_id, block);
-    }
-
-    for (index, item_refs) in refs {
-        let list = entries[index]
-            .binary_data_array_list_mut()
-            .get_or_insert_with(BinaryDataArrayList::default);
-        for aref in item_refs.as_slice() {
-            let block = data
-                .get(&aref.block_id)
-                .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", aref.block_id)))?;
-            let (start, end) = array_byte_range(aref, ctx)?;
-            let raw = block.get(start..end).ok_or_else(|| {
-                IonError::from(format!(
-                    "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
-                    aref.block_id,
-                    block.len()
-                ))
-            })?;
-            attach_array(list, aref.array_type, aref.dtype, raw, aref.array_filter)?;
+            attach_array(list, array_ref.array_type, array_ref.dtype, raw, array_ref.array_filter)?;
         }
         list.count = Some(list.binary_data_arrays.len());
     }

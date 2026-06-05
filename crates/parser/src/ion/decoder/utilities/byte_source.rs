@@ -1,4 +1,9 @@
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use crate::ion::{IonError, IonResult};
 
@@ -10,7 +15,7 @@ pub trait AsyncByteSource {
     fn read(&self, query: Query) -> QueryFuture<'_>;
 }
 
-pub type QueryFuture<'a> = Pin<Box<dyn Future<Output = IonResult<QueryValue>> + 'a>>;
+pub type QueryFuture<'a> = Pin<Box<dyn Future<Output = IonResult<QueryPayload>> + 'a>>;
 
 pub struct SliceSource {
     data: Arc<[u8]>,
@@ -39,7 +44,7 @@ impl AsyncByteSource for SliceSource {
     fn read(&self, query: Query) -> QueryFuture<'_> {
         Box::pin(async move {
             let bytes = ByteSource::read(self, query.offset(), query.length())?;
-            Ok(QueryValue::new(bytes))
+            Ok(QueryPayload::new(bytes))
         })
     }
 }
@@ -75,7 +80,7 @@ impl AsyncByteSource for MmapSource {
     fn read(&self, query: Query) -> QueryFuture<'_> {
         Box::pin(async move {
             let bytes = ByteSource::read(self, query.offset(), query.length())?;
-            Ok(QueryValue::new(bytes))
+            Ok(QueryPayload::new(bytes))
         })
     }
 }
@@ -101,11 +106,11 @@ impl Query {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryValue {
+pub struct QueryPayload {
     bytes: Vec<u8>,
 }
 
-impl QueryValue {
+impl QueryPayload {
     pub fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
@@ -119,20 +124,20 @@ impl QueryValue {
     }
 }
 
-impl From<Vec<u8>> for QueryValue {
+impl From<Vec<u8>> for QueryPayload {
     fn from(bytes: Vec<u8>) -> Self {
         Self::new(bytes)
     }
 }
 
-pub type QueryReader = dyn Fn(Query) -> IonResult<QueryValue> + Send + Sync;
+pub type QueryReader = dyn Fn(Query) -> IonResult<QueryPayload> + Send + Sync;
 
 pub struct QueryCallbackSource {
     read: Box<QueryReader>,
 }
 
 impl QueryCallbackSource {
-    pub fn new(read: impl Fn(Query) -> IonResult<QueryValue> + Send + Sync + 'static) -> Self {
+    pub fn new(read: impl Fn(Query) -> IonResult<QueryPayload> + Send + Sync + 'static) -> Self {
         Self {
             read: Box::new(read),
         }
@@ -153,7 +158,7 @@ impl AsyncByteSource for QueryCallbackSource {
     fn read(&self, query: Query) -> QueryFuture<'_> {
         Box::pin(async move {
             let bytes = ByteSource::read(self, query.offset(), query.length())?;
-            Ok(QueryValue::new(bytes))
+            Ok(QueryPayload::new(bytes))
         })
     }
 }
@@ -181,6 +186,41 @@ impl AsyncByteSource for AsyncQueryCallbackSource {
             allow_len(bytes, length)?;
             Ok(value)
         })
+    }
+}
+
+pub(crate) struct CacheBackedSource {
+    chunks: Mutex<HashMap<(u64, u64), Vec<u8>>>,
+}
+
+impl CacheBackedSource {
+    pub(crate) fn new() -> Self {
+        Self {
+            chunks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) fn has(&self, offset: u64, length: u64) -> bool {
+        self.chunks.lock().unwrap().contains_key(&(offset, length))
+    }
+
+    pub(crate) fn fill(&self, offset: u64, length: u64, bytes: Vec<u8>) {
+        self.chunks.lock().unwrap().insert((offset, length), bytes);
+    }
+}
+
+impl ByteSource for CacheBackedSource {
+    fn read(&self, offset: u64, length: u64) -> IonResult<Vec<u8>> {
+        self.chunks
+            .lock()
+            .unwrap()
+            .get(&(offset, length))
+            .map(|bytes| bytes.to_vec())
+            .ok_or_else(|| {
+                IonError::from(format!(
+                    "byte source: prefetch miss at offset {offset} length {length}"
+                ))
+            })
     }
 }
 

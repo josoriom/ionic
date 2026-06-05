@@ -4,8 +4,8 @@ pub mod mzml;
 pub mod utilities;
 
 pub use ion::{
-    AsyncByteSource, AsyncDecoder, AsyncQueryCallbackSource, AsyncQueryReader, ByteSource,
-    ChromatogramSummary, Query, QueryCallbackSource, QueryFuture, QueryReader, QueryValue,
+    AsyncByteSource, AsyncQueryCallbackSource, AsyncQueryReader, ByteSource,
+    ChromatogramSummary, Query, QueryCallbackSource, QueryFuture, QueryReader, QueryPayload,
     SliceSource, SpectrumSummary, decoder,
     decoder::decode::{Metadatum, MetadatumValue},
     decoder::utilities::spectrum_source::{ScanSource, ScanSummary},
