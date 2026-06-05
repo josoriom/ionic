@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::MzML,
     utilities::test::{
-        CvRefMode, assert_cv, assert_software_param, parse_b, spectrum_by_id, spectrum_description,
+        CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_by_id, spectrum_description,
         spectrum_precursor_list, spectrum_scan_list,
     },
 };
@@ -15,7 +15,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::AllowMissingMs;
 
 #[test]
 fn tiny1_mzml0_99_0_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -284,7 +284,7 @@ fn tiny1_mzml0_99_0_header_sections() {
 
 #[test]
 fn tiny1_mzml0_99_0_spectrum_s19() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
     let sfrefl = run
         .source_file_ref_list
@@ -480,7 +480,7 @@ fn tiny1_mzml0_99_0_spectrum_s19() {
 
 #[test]
 fn tiny1_mzml0_99_0_spectrum_s20() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let sl = mzml
         .run
         .spectrum_list

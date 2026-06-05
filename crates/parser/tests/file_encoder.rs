@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 
 use common::helpers::{minimal_file_description, synthetic_binary_data_array};
-use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode, encoder::FileEncoderOutput};
+use ionic::ion::{Decoder, DecoderConfig, encode, encoder::FileEncoderOutput};
 use ionic::mzml::structs::*;
 
 #[test]
@@ -11,7 +11,7 @@ fn memory_mode_roundtrip_multi_spectrum() {
     let mzml = build_multi_spectrum_mzml(10, 100);
 
     let mut buf = Vec::new();
-    encode(&mzml, 6, false, WritingMode::Memory, &mut buf).expect("encode should succeed");
+    encode(&mzml, 6, false, &mut buf).expect("encode should succeed");
     assert!(!buf.is_empty(), "output should not be empty");
 
     let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
@@ -42,8 +42,7 @@ fn streaming_mode_roundtrip_via_tempfile() {
             panic!("failed to create FileEncoderOutput: {e}");
         });
 
-    encode(&mzml, 3, false, WritingMode::Streaming, &mut file_output)
-        .expect("streaming encode should succeed");
+    encode(&mzml, 3, false, &mut file_output).expect("streaming encode should succeed");
     drop(file_output);
 
     let bytes = fs::read(&temp_path).expect("should read temp file");
@@ -66,12 +65,12 @@ fn memory_and_streaming_produce_equivalent_results() {
     let mzml = build_multi_spectrum_mzml(3, 20);
 
     let mut mem_buf = Vec::new();
-    encode(&mzml, 0, false, WritingMode::Memory, &mut mem_buf).expect("memory encode");
+    encode(&mzml, 0, false, &mut mem_buf).expect("memory encode");
 
     let temp_path = std::env::temp_dir().join("ionic_test_equiv.ion");
     let mut file_output = FileEncoderOutput::open_for_writing(temp_path.to_str().unwrap())
         .expect("create file output");
-    encode(&mzml, 0, false, WritingMode::Streaming, &mut file_output).expect("streaming encode");
+    encode(&mzml, 0, false, &mut file_output).expect("streaming encode");
     drop(file_output); // ensure flush
     let stream_buf = fs::read(&temp_path).expect("read temp file");
 
@@ -135,7 +134,7 @@ fn large_array_roundtrip_stress() {
     };
 
     let mut buf = Vec::new();
-    encode(&mzml, 12, false, WritingMode::Memory, &mut buf).expect("encode large array");
+    encode(&mzml, 12, false, &mut buf).expect("encode large array");
 
     let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");

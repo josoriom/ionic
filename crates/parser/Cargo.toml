@@ -10,13 +10,18 @@ miniz_oxide = { workspace = true }
 once_cell = { workspace = true }
 quick-xml = { workspace = true }
 serde_json = { workspace = true }
-zstd = { workspace = true }
-rayon = { workspace = true }
 hashbrown = "0.17.1"
 itoa = { workspace = true }
 crc32fast = "1.5.0"
 sha1 = "0.11"
+
+[target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies]
+zstd = { workspace = true }
+rayon = { workspace = true }
 memmap2 = "0.9"
+
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
+ruzstd = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"

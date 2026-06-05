@@ -1,0 +1,88 @@
+use crate::ion::IonResult;
+use crate::ion::encoder::utilities::encoder_output::{EncoderOutput, SectionChunk};
+
+pub(crate) struct SummaryTable {
+    section_chunk: SectionChunk,
+}
+
+impl SummaryTable {
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
+    }
+
+    pub(crate) fn push(&mut self, record: &[u8]) -> IonResult<()> {
+        self.section_chunk.write(record)
+    }
+
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
+    }
+}
+
+pub(crate) struct IndexTable {
+    section_chunk: SectionChunk,
+}
+
+impl IndexTable {
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
+    }
+
+    pub(crate) fn push(&mut self, first_aref: u64, aref_count: u64) -> IonResult<()> {
+        let mut record = [0u8; 16];
+        record[0..8].copy_from_slice(&first_aref.to_le_bytes());
+        record[8..16].copy_from_slice(&aref_count.to_le_bytes());
+        self.section_chunk.write(&record)
+    }
+
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
+    }
+}
+
+pub(crate) struct ArrayRefTable {
+    section_chunk: SectionChunk,
+}
+
+impl ArrayRefTable {
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push(
+        &mut self,
+        element_offset: u64,
+        element_count: u64,
+        block_id: u32,
+        array_accession: u32,
+        dtype: u8,
+        array_filter: u8,
+        encoded_len: u32,
+    ) -> IonResult<()> {
+        let mut record = [0u8; 32];
+        record[0..8].copy_from_slice(&element_offset.to_le_bytes());
+        record[8..16].copy_from_slice(&element_count.to_le_bytes());
+        record[16..20].copy_from_slice(&block_id.to_le_bytes());
+        record[20..24].copy_from_slice(&array_accession.to_le_bytes());
+        record[24] = dtype;
+        record[25] = array_filter;
+        record[26..30].copy_from_slice(&encoded_len.to_le_bytes());
+        self.section_chunk.write(&record)
+    }
+
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
+    }
+}
+
+pub(crate) fn write_aligned(output: &mut dyn EncoderOutput, bytes: &[u8]) -> IonResult<u64> {
+    static PAD: [u8; 7] = [0u8; 7];
+    let pos = output.current_byte_position()?;
+    let aligned = (pos + 7) & !7;
+    if aligned > pos {
+        output.write_bytes(&PAD[..(aligned - pos) as usize])?;
+    }
+    output.write_bytes(bytes)?;
+    Ok(aligned)
+}

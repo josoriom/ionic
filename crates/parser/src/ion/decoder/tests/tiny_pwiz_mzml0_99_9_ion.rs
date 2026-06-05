@@ -1,7 +1,7 @@
 use crate::{
     mzml::structs::{BinaryData, MzML},
     utilities::test::{
-        CvRefMode, assert_cv, assert_software_param, chromatogram, chromatogram_list, parse_b,
+        CvRefMode, assert_cv, assert_software_param, chromatogram, chromatogram_list, parse_ion_as_mzml,
         spectrum_by_index, spectrum_description, spectrum_precursor_list, spectrum_scan_list,
     },
 };
@@ -15,7 +15,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -247,7 +247,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
 
 #[test]
 fn tiny_pwiz_mzml0_99_9_pwiz_first_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run: &_ = &mzml.run;
 
     let sfrefl = run
@@ -446,7 +446,7 @@ fn tiny_pwiz_mzml0_99_9_pwiz_first_spectrum() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_second_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -693,7 +693,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_second_spectrum() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_chromatograms() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -812,7 +812,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_chromatograms() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s19_mz_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s0 = spectrum_by_index(mzml, 0);
     assert_eq!(s0.id, "S19");
 
@@ -837,7 +837,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s19_mz_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s19_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s0 = spectrum_by_index(mzml, 0);
     assert_eq!(s0.id, "S19");
 
@@ -862,7 +862,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s19_intensity_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s20_mz_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s1 = spectrum_by_index(mzml, 1);
     assert_eq!(s1.id, "S20");
 
@@ -887,7 +887,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s20_mz_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s20_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s1 = spectrum_by_index(mzml, 1);
     assert_eq!(s1.id, "S20");
 
@@ -912,7 +912,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s20_intensity_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_tic_time_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -939,7 +939,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_tic_time_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_tic_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -966,7 +966,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_tic_intensity_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_sic_time_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -993,7 +993,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_sic_time_binary() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_sic_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);

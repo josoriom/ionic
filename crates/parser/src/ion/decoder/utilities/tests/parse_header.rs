@@ -37,6 +37,9 @@ fn check_header() {
     assert!(header.spec_meta_uncompressed_bytes > 0);
     assert!(header.chrom_meta_uncompressed_bytes > 0);
     assert!(header.global_meta_uncompressed_bytes > 0);
+    assert_eq!(header.meta_group_size, 8192);
+    assert_eq!(header.spec_meta_group_count, 1);
+    assert_eq!(header.chrom_meta_group_count, 1);
 
     for &off in &[
         header.off_spec_summary,
@@ -109,7 +112,7 @@ fn check_header() {
     assert!(header.len_chrom_container >= header.chrom_block_count * 32);
 
     assert_eq!(&bytes[5..8], &[0u8; 3]);
-    assert_eq!(&bytes[352..1008], &[0u8; 656]);
+    assert_eq!(&bytes[376..1008], &[0u8; 632]);
 
     let len = bytes.len() as u64;
     for &off in &[

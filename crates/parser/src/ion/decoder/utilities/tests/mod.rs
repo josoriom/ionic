@@ -1,3 +1,4 @@
+mod meta;
 mod parse_binary_array_list;
 mod parse_header;
 mod parse_scan_list;

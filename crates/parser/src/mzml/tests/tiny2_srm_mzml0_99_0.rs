@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_cv_absent, assert_software, mzml, spectrum_by_id,
+        CvRefMode, assert_cv, assert_software, mzml, spectrum_by_id,
         spectrum_description, spectrum_precursor_list, spectrum_scan_list,
     },
 };
@@ -311,7 +311,15 @@ fn tiny2_srm_mzml0_99_0_spectrum_s101() {
     let s0 = spectrum_by_id(mzml, "S101");
     assert!(s0.cv_params.iter().any(|cv| cv.name == "SRM spectrum"));
 
-    assert_cv_absent(&s0.cv_params, "ms level");
+    assert_cv(
+        CV_REF_MODE,
+        &s0.cv_params,
+        "ms level",
+        "MS:1000511",
+        "MS",
+        Some("2"),
+        None,
+    );
     let sd = spectrum_description(s0);
     assert_cv(
         CV_REF_MODE,
@@ -531,7 +539,15 @@ fn tiny2_srm_mzml0_99_0_spectrum_s102() {
     let s1 = spectrum_by_id(mzml, "S102");
     assert!(s1.cv_params.iter().any(|cv| cv.name == "MSn spectrum"));
 
-    assert_cv_absent(&s1.cv_params, "ms level");
+    assert_cv(
+        CV_REF_MODE,
+        &s1.cv_params,
+        "ms level",
+        "MS:1000511",
+        "MS",
+        Some("2"),
+        None,
+    );
     let sd = spectrum_description(s1);
     assert_cv(
         CV_REF_MODE,

@@ -13,7 +13,7 @@ pub(crate) use binary_ext::BinaryDataExt;
 use std::{collections::BTreeSet, fs, path::PathBuf, sync::OnceLock};
 
 use ionic::{
-    ion::{Decoder, DecoderConfig, IonResult, WritingMode, encode},
+    ion::{Decoder, DecoderConfig, IonResult, encode},
     mzml::{
         parse_mzml::{parse_indexed_mzml, parse_mzml},
         structs::*,
@@ -52,14 +52,7 @@ pub(crate) fn parse_indexed(rel: &str) -> IndexedmzML {
 
 pub(crate) fn encode_to_ion(mzml: &MzML, compression_level: u8, force_f32: bool) -> Vec<u8> {
     let mut out = Vec::new();
-    encode(
-        mzml,
-        compression_level,
-        force_f32,
-        WritingMode::Memory,
-        &mut out,
-    )
-    .expect("encode should succeed");
+    encode(mzml, compression_level, force_f32, &mut out).expect("encode should succeed");
     out
 }
 

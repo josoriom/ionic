@@ -10,8 +10,7 @@ use crate::{
     mzml::schema::TagId,
 };
 
-pub(crate) const HDR_CODEC_NONE: u8 = 0;
-pub(crate) const HDR_CODEC_ZSTD: u8 = 1;
+pub(crate) use crate::ion::format::{CODEC_NONE as HDR_CODEC_NONE, CODEC_ZSTD as HDR_CODEC_ZSTD};
 
 pub(crate) fn parse_metadata(
     bytes: &[u8],

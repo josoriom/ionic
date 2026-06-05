@@ -5,5 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+serde = { workspace = true }
 serde_json = { workspace = true }
-regex = { workspace = true }
+toml_edit = "0.22"
+sha2 = "0.10"

@@ -1,4 +1,5 @@
 use crate::ion::utilities::EmitAttributes;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
     decoder::decode::MetadatumValue,
     encoder::utilities::le_writers::{write_f64_slice_le, write_u32_slice_le},
     ion::{
+        IonResult,
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_CV_FULL_NAME, ACC_ATTR_CV_URI, ACC_ATTR_CV_VERSION,
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
@@ -28,40 +30,75 @@ use crate::{
     },
 };
 
+use super::encoder_output::SectionChunk;
+use crate::ion::meta_groups::{META_GROUP_ENTRY_SIZE, MetaGroupEntry, write_group_header};
+
 const USER_PARAM_NAME_VALUE_SEPARATOR: char = '\0';
 
 pub(crate) struct MetaCollector {
-    ctx: TraversalCtx,
+    context: TraversalContext,
 }
 
 impl MetaCollector {
     pub(crate) fn new() -> Self {
         Self {
-            ctx: TraversalCtx::new(),
+            context: TraversalContext::new(),
         }
     }
 
     #[inline]
     pub(crate) fn alloc(&mut self) -> u32 {
-        self.ctx.alloc()
-    }
-
-    pub(crate) fn collect_item_list_meta<T, L>(
-        &mut self,
-        items: &[T],
-        list_node_id: u32,
-        list_schema: Option<&L>,
-        policy: ArrayPolicy,
-    ) -> PackedMeta
-    where
-        T: MzmlListItem,
-        L: EmitAttributes,
-    {
-        pack_item_list_meta(items, list_node_id, list_schema, &mut self.ctx, policy)
+        self.context.alloc()
     }
 
     pub(crate) fn collect_global_meta(&mut self, mzml: &MzML) -> (PackedMeta, GlobalCounts) {
-        pack_global_meta(mzml, &mut self.ctx)
+        pack_global_meta(mzml, &mut self.context)
+    }
+
+    pub(crate) fn add_item<T, L>(
+        &mut self,
+        item: &T,
+        item_index: usize,
+        list_node_id: u32,
+        list_schema: Option<&L>,
+        policy: ArrayPolicy,
+        metadata_writer: &mut dyn MetadataWriter,
+    ) -> IonResult<()>
+    where
+        T: MzmlListItem,
+        L: crate::ion::utilities::EmitAttributes,
+    {
+        let mut buffer = MetaParamBuffer::new();
+        {
+            let mut writer = buffer.as_writer();
+            if item_index == 0 && list_node_id != 0 {
+                if let Some(schema) = list_schema {
+                    writer.touch(T::list_tag(), list_node_id, 0);
+                    writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
+                }
+            }
+            let item_id = self.context.alloc();
+            writer.push_schema_attrs(T::item_tag(), item_id, list_node_id, item);
+            if !item.has_explicit_index() {
+                writer.push_optional_u32_attr(
+                    T::item_tag(),
+                    item_id,
+                    list_node_id,
+                    ACC_ATTR_INDEX,
+                    Some(item_index as u32),
+                );
+            }
+            writer.push_ref_group_params(item_id, item.group_refs(), &mut self.context);
+            writer.push_cv_and_user_params(
+                item_id,
+                list_node_id,
+                item.cv_params(),
+                item.user_params(),
+            );
+            item.flatten_children(&mut writer, item_id, &mut self.context, policy);
+        }
+        buffer.normalize_attr_cv_values();
+        metadata_writer.write_metadata_item(&buffer)
     }
 }
 
@@ -112,35 +149,170 @@ pub(crate) struct GlobalCounts {
     pub(crate) n_cvs: u32,
 }
 
-pub(crate) struct CompressedMetaSections {
-    pub(crate) spectrum_bytes: Vec<u8>,
-    pub(crate) chromatogram_bytes: Vec<u8>,
-    pub(crate) global_bytes: Vec<u8>,
-    pub(crate) spectrum_uncompressed_size: u64,
-    pub(crate) chromatogram_uncompressed_size: u64,
-    pub(crate) global_uncompressed_size: u64,
+pub(crate) struct GroupedSection {
+    pub(crate) section: SectionChunk,
+    pub(crate) byte_len: u64,
+    pub(crate) crc32: u32,
+    pub(crate) group_count: u64,
+    pub(crate) uncompressed_size: u64,
+    pub(crate) row_count: u64,
+    pub(crate) numeric_count: u64,
+    pub(crate) string_count: u64,
 }
 
-impl CompressedMetaSections {
-    pub(crate) fn build(
-        spectrum_meta: &PackedMeta,
-        chrom_meta: &PackedMeta,
-        global_meta: &PackedMeta,
-        counts: &GlobalCounts,
-        level: u8,
-    ) -> Self {
-        let raw_s = serialize_packed_meta(spectrum_meta);
-        let raw_c = serialize_packed_meta(chrom_meta);
-        let raw_g = serialize_global_meta_with_counts(counts, global_meta);
+pub(crate) struct MetaGrouper {
+    group_size: u32,
+    level: u8,
+    builder: PackedMetaBuilder,
+    items_in_group: u32,
+    payloads: SectionChunk,
+    crc: crc32fast::Hasher,
+    directory: Vec<MetaGroupEntry>,
+    uncompressed_size: u64,
+    group_count: u64,
+    row_count: u64,
+    numeric_count: u64,
+    string_count: u64,
+}
+
+impl MetaGrouper {
+    pub(crate) fn new(group_size: u32, level: u8, payloads: SectionChunk) -> Self {
         Self {
-            spectrum_uncompressed_size: raw_s.len() as u64,
-            chromatogram_uncompressed_size: raw_c.len() as u64,
-            global_uncompressed_size: raw_g.len() as u64,
-            spectrum_bytes: compress_bytes_if_enabled(raw_s, level),
-            chromatogram_bytes: compress_bytes_if_enabled(raw_c, level),
-            global_bytes: compress_bytes_if_enabled(raw_g, level),
+            group_size,
+            level,
+            builder: PackedMetaBuilder::new(),
+            items_in_group: 0,
+            payloads,
+            crc: crc32fast::Hasher::new(),
+            directory: Vec::new(),
+            uncompressed_size: 0,
+            group_count: 0,
+            row_count: 0,
+            numeric_count: 0,
+            string_count: 0,
         }
     }
+
+    fn seal_group(&mut self) -> IonResult<()> {
+        if self.items_in_group == 0 {
+            return Ok(());
+        }
+        let meta = std::mem::replace(&mut self.builder, PackedMetaBuilder::new()).build();
+        self.row_count += meta.ref_codes.len() as u64;
+        self.numeric_count += meta.numeric_values.len() as u64;
+        self.string_count += meta.string_offsets.len() as u64;
+        let raw = serialize_group(&meta, 0, self.items_in_group as usize);
+        let raw_size = raw.len() as u64;
+        self.uncompressed_size += raw_size;
+        let payload_offset = self.payloads.len();
+        let compressed = compress_bytes_if_enabled(raw, self.level);
+        self.directory.push(MetaGroupEntry {
+            payload_offset,
+            payload_size: compressed.len() as u64,
+            uncompressed_size: raw_size,
+            checksum: crc32fast::hash(&compressed),
+        });
+        self.crc.update(&compressed);
+        self.payloads.write(&compressed)?;
+        self.group_count += 1;
+        self.items_in_group = 0;
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> IonResult<GroupedSection> {
+        self.seal_group()?;
+        let mut directory_bytes = Vec::with_capacity(self.directory.len() * META_GROUP_ENTRY_SIZE);
+        for entry in &self.directory {
+            entry.write_into(&mut directory_bytes);
+        }
+        self.crc.update(&directory_bytes);
+        self.payloads.write(&directory_bytes)?;
+        let byte_len = self.payloads.len();
+        let crc32 = self.crc.finalize();
+        Ok(GroupedSection {
+            section: self.payloads,
+            byte_len,
+            crc32,
+            group_count: self.group_count,
+            uncompressed_size: self.uncompressed_size,
+            row_count: self.row_count,
+            numeric_count: self.numeric_count,
+            string_count: self.string_count,
+        })
+    }
+}
+
+impl MetadataWriter for MetaGrouper {
+    fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()> {
+        self.builder.flush_buffer(buffer);
+        self.items_in_group += 1;
+        if self.items_in_group == self.group_size {
+            self.seal_group()?;
+        }
+        Ok(())
+    }
+}
+
+fn serialize_group(meta: &PackedMeta, item_start: usize, item_end: usize) -> Vec<u8> {
+    let row_start = meta.index_offsets[item_start] as usize;
+    let row_end = meta.index_offsets[item_end] as usize;
+    let meta_count = row_end - row_start;
+    let first_row = meta.index_offsets[item_start];
+
+    let mut local_index_offsets = Vec::with_capacity(item_end - item_start + 1);
+    for item in item_start..=item_end {
+        local_index_offsets.push(meta.index_offsets[item] - first_row);
+    }
+
+    let mut numeric_values = Vec::new();
+    let mut string_offsets = Vec::new();
+    let mut string_lengths = Vec::new();
+    let mut string_bytes = Vec::new();
+    let mut value_indices = Vec::with_capacity(meta_count);
+    for row in row_start..row_end {
+        match meta.value_kinds[row] {
+            0 => {
+                let source = meta.value_indices[row] as usize;
+                value_indices.push(numeric_values.len() as u32);
+                numeric_values.push(meta.numeric_values[source]);
+            }
+            1 => {
+                let source = meta.value_indices[row] as usize;
+                let offset = meta.string_offsets[source] as usize;
+                let length = meta.string_lengths[source] as usize;
+                value_indices.push(string_offsets.len() as u32);
+                string_offsets.push(string_bytes.len() as u32);
+                string_lengths.push(length as u32);
+                string_bytes.extend_from_slice(&meta.string_bytes[offset..offset + length]);
+            }
+            _ => {
+                value_indices.push(0);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    write_group_header(
+        &mut out,
+        meta_count as u32,
+        numeric_values.len() as u32,
+        string_offsets.len() as u32,
+    );
+    write_u32_slice_le(&mut out, &local_index_offsets);
+    write_u32_slice_le(&mut out, &meta.ids[row_start..row_end]);
+    write_u32_slice_le(&mut out, &meta.parent_indices[row_start..row_end]);
+    out.extend_from_slice(&meta.tag_ids[row_start..row_end]);
+    out.extend_from_slice(&meta.ref_codes[row_start..row_end]);
+    write_u32_slice_le(&mut out, &meta.accession_numbers[row_start..row_end]);
+    out.extend_from_slice(&meta.unit_ref_codes[row_start..row_end]);
+    write_u32_slice_le(&mut out, &meta.unit_accession_numbers[row_start..row_end]);
+    out.extend_from_slice(&meta.value_kinds[row_start..row_end]);
+    write_u32_slice_le(&mut out, &value_indices);
+    write_f64_slice_le(&mut out, &numeric_values);
+    write_u32_slice_le(&mut out, &string_offsets);
+    write_u32_slice_le(&mut out, &string_lengths);
+    out.extend_from_slice(&string_bytes);
+    out
 }
 
 struct IdAllocator(u32);
@@ -157,11 +329,11 @@ impl IdAllocator {
     }
 }
 
-pub(crate) struct TraversalCtx {
+pub(crate) struct TraversalContext {
     nodes: IdAllocator,
 }
 
-impl TraversalCtx {
+impl TraversalContext {
     fn new() -> Self {
         Self {
             nodes: IdAllocator::new(),
@@ -248,7 +420,7 @@ struct MetaParamRow {
     parent_id: u32,
 }
 
-struct MetaParamBuffer {
+pub(crate) struct MetaParamBuffer {
     rows: Vec<MetaParamRow>,
 }
 
@@ -257,10 +429,6 @@ impl MetaParamBuffer {
         Self {
             rows: Vec::with_capacity(64),
         }
-    }
-
-    fn clear(&mut self) {
-        self.rows.clear();
     }
 
     fn push(&mut self, tag: TagId, id: u32, parent_id: u32, cv_param: CvParam) {
@@ -375,10 +543,10 @@ impl<'b> MetaParamWriter<'b> {
         &mut self,
         id: u32,
         group_refs: &[ReferenceableParamGroupRef],
-        ctx: &mut TraversalCtx,
+        context: &mut TraversalContext,
     ) {
         for gr in group_refs {
-            let ref_id = ctx.alloc();
+            let ref_id = context.alloc();
             self.touch(TagId::ReferenceableParamGroupRef, ref_id, id);
             self.push_str_attr(
                 TagId::ReferenceableParamGroupRef,
@@ -668,13 +836,7 @@ fn write_packed_meta(buf: &mut Vec<u8>, m: &PackedMeta) {
     buf.extend_from_slice(&m.string_bytes);
 }
 
-fn serialize_packed_meta(m: &PackedMeta) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(packed_meta_byte_size(m));
-    write_packed_meta(&mut buf, m);
-    buf
-}
-
-fn serialize_global_meta_with_counts(counts: &GlobalCounts, m: &PackedMeta) -> Vec<u8> {
+pub(crate) fn serialize_global_meta_with_counts(counts: &GlobalCounts, m: &PackedMeta) -> Vec<u8> {
     let mut buf = Vec::with_capacity(32 + packed_meta_byte_size(m));
     for n in [
         counts.n_file_description as u16,
@@ -694,7 +856,8 @@ fn serialize_global_meta_with_counts(counts: &GlobalCounts, m: &PackedMeta) -> V
     buf
 }
 
-fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub(crate) fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
     if level == 0 {
         bytes
     } else {
@@ -702,19 +865,24 @@ fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
     }
 }
 
-fn pack_meta_for_each<F: FnMut(&mut MetaParamWriter<'_>, usize)>(
-    item_count: usize,
-    mut fill: F,
-) -> PackedMeta {
-    let mut builder = PackedMetaBuilder::new();
-    let mut buffer = MetaParamBuffer::new();
-    for i in 0..item_count {
-        buffer.clear();
-        fill(&mut buffer.as_writer(), i);
-        buffer.normalize_attr_cv_values();
-        builder.flush_buffer(&buffer);
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+pub(crate) fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
+    if level == 0 {
+        bytes
+    } else {
+        panic!("zstd compression is not available in browser wasm")
     }
-    builder.build()
+}
+
+pub(crate) trait MetadataWriter {
+    fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()>;
+}
+
+impl MetadataWriter for PackedMetaBuilder {
+    fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()> {
+        self.flush_buffer(buffer);
+        Ok(())
+    }
 }
 
 fn append_meta_buffer(
@@ -738,7 +906,7 @@ pub(crate) trait MzmlListItem: EmitAttributes {
         &self,
         writer: &mut MetaParamWriter<'_>,
         item_id: u32,
-        ctx: &mut TraversalCtx,
+        context: &mut TraversalContext,
         policy: ArrayPolicy,
     );
 }
@@ -766,10 +934,10 @@ impl MzmlListItem for Spectrum {
         &self,
         writer: &mut MetaParamWriter<'_>,
         id: u32,
-        ctx: &mut TraversalCtx,
+        context: &mut TraversalContext,
         policy: ArrayPolicy,
     ) {
-        flatten_spectrum_children(writer, self, id, ctx, policy);
+        flatten_spectrum_children(writer, self, id, context, policy);
     }
 }
 
@@ -796,68 +964,31 @@ impl MzmlListItem for Chromatogram {
         &self,
         writer: &mut MetaParamWriter<'_>,
         id: u32,
-        ctx: &mut TraversalCtx,
+        context: &mut TraversalContext,
         policy: ArrayPolicy,
     ) {
-        flatten_chromatogram_children(writer, self, id, ctx, policy);
+        flatten_chromatogram_children(writer, self, id, context, policy);
     }
-}
-
-fn pack_item_list_meta<T, L>(
-    items: &[T],
-    list_node_id: u32,
-    list_schema: Option<&L>,
-    ctx: &mut TraversalCtx,
-    policy: ArrayPolicy,
-) -> PackedMeta
-where
-    T: MzmlListItem,
-    L: EmitAttributes,
-{
-    pack_meta_for_each(items.len(), |writer, i| {
-        let item = &items[i];
-        if i == 0
-            && list_node_id != 0
-            && let Some(schema) = list_schema
-        {
-            writer.touch(T::list_tag(), list_node_id, 0);
-            writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
-        }
-        let item_id = ctx.alloc();
-        writer.push_schema_attrs(T::item_tag(), item_id, list_node_id, item);
-        if !item.has_explicit_index() {
-            writer.push_optional_u32_attr(
-                T::item_tag(),
-                item_id,
-                list_node_id,
-                ACC_ATTR_INDEX,
-                Some(i as u32),
-            );
-        }
-        writer.push_ref_group_params(item_id, item.group_refs(), ctx);
-        writer.push_cv_and_user_params(item_id, list_node_id, item.cv_params(), item.user_params());
-        item.flatten_children(writer, item_id, ctx, policy);
-    })
 }
 
 fn flatten_spectrum_children(
     writer: &mut MetaParamWriter<'_>,
     spectrum: &Spectrum,
     spectrum_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     policy: ArrayPolicy,
 ) {
     if let Some(desc) = &spectrum.spectrum_description {
-        flatten_legacy_spectrum_description(writer, desc, spectrum_id, ctx);
+        flatten_legacy_spectrum_description(writer, desc, spectrum_id, context);
     }
-    flatten_scan_list_opt(writer, spectrum.scan_list.as_ref(), spectrum_id, ctx);
-    flatten_precursor_list_opt(writer, spectrum.precursor_list.as_ref(), spectrum_id, ctx);
-    flatten_product_list_opt(writer, spectrum.product_list.as_ref(), spectrum_id, ctx);
+    flatten_scan_list_opt(writer, spectrum.scan_list.as_ref(), spectrum_id, context);
+    flatten_precursor_list_opt(writer, spectrum.precursor_list.as_ref(), spectrum_id, context);
+    flatten_product_list_opt(writer, spectrum.product_list.as_ref(), spectrum_id, context);
     flatten_binary_data_array_list(
         writer,
         spectrum.binary_data_array_list.as_ref(),
         spectrum_id,
-        ctx,
+        context,
         policy,
     );
 }
@@ -866,35 +997,35 @@ fn flatten_legacy_spectrum_description(
     writer: &mut MetaParamWriter<'_>,
     desc: &SpectrumDescription,
     spectrum_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
-    let desc_id = ctx.alloc();
+    let desc_id = context.alloc();
     writer.touch(TagId::SpectrumDescription, desc_id, spectrum_id);
-    writer.push_ref_group_params(desc_id, &desc.referenceable_param_group_refs, ctx);
+    writer.push_ref_group_params(desc_id, &desc.referenceable_param_group_refs, context);
     writer.push_cv_and_user_params(desc_id, spectrum_id, &desc.cv_params, &desc.user_params);
-    flatten_scan_list_opt(writer, desc.scan_list.as_ref(), desc_id, ctx);
-    flatten_precursor_list_opt(writer, desc.precursor_list.as_ref(), desc_id, ctx);
-    flatten_product_list_opt(writer, desc.product_list.as_ref(), desc_id, ctx);
+    flatten_scan_list_opt(writer, desc.scan_list.as_ref(), desc_id, context);
+    flatten_precursor_list_opt(writer, desc.precursor_list.as_ref(), desc_id, context);
+    flatten_product_list_opt(writer, desc.product_list.as_ref(), desc_id, context);
 }
 
 fn flatten_chromatogram_children(
     writer: &mut MetaParamWriter<'_>,
     chrom: &Chromatogram,
     chrom_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     policy: ArrayPolicy,
 ) {
     if let Some(p) = &chrom.precursor {
-        flatten_precursor(writer, p, chrom_id, ctx);
+        flatten_precursor(writer, p, chrom_id, context);
     }
     if let Some(p) = &chrom.product {
-        flatten_product(writer, p, chrom_id, ctx);
+        flatten_product(writer, p, chrom_id, context);
     }
     flatten_binary_data_array_list(
         writer,
         chrom.binary_data_array_list.as_ref(),
         chrom_id,
-        ctx,
+        context,
         policy,
     );
 }
@@ -903,10 +1034,10 @@ fn flatten_scan_list_opt(
     writer: &mut MetaParamWriter<'_>,
     sl: Option<&ScanList>,
     parent: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
     let Some(sl) = sl else { return };
-    let sl_id = ctx.alloc();
+    let sl_id = context.alloc();
     writer.push_optional_u32_attr(
         TagId::ScanList,
         sl_id,
@@ -914,19 +1045,19 @@ fn flatten_scan_list_opt(
         ACC_ATTR_COUNT,
         Some(sl.scans.len() as u32),
     );
-    writer.push_ref_group_params(sl_id, &sl.referenceable_param_group_refs, ctx);
+    writer.push_ref_group_params(sl_id, &sl.referenceable_param_group_refs, context);
     writer.push_cv_and_user_params(sl_id, parent, &sl.cv_params, &sl.user_params);
-    flatten_scan_list(writer, sl, sl_id, ctx);
+    flatten_scan_list(writer, sl, sl_id, context);
 }
 
 fn flatten_precursor_list_opt(
     writer: &mut MetaParamWriter<'_>,
     pl: Option<&crate::mzml::structs::PrecursorList>,
     parent: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
     let Some(pl) = pl else { return };
-    let pl_id = ctx.alloc();
+    let pl_id = context.alloc();
     writer.push_optional_u32_attr(
         TagId::PrecursorList,
         pl_id,
@@ -936,7 +1067,7 @@ fn flatten_precursor_list_opt(
     );
     writer.push_cv_and_user_params(pl_id, parent, &pl.cv_params, &pl.user_params);
     for p in &pl.precursors {
-        flatten_precursor(writer, p, pl_id, ctx);
+        flatten_precursor(writer, p, pl_id, context);
     }
 }
 
@@ -944,10 +1075,10 @@ fn flatten_product_list_opt(
     writer: &mut MetaParamWriter<'_>,
     pl: Option<&crate::mzml::structs::ProductList>,
     parent: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
     let Some(pl) = pl else { return };
-    let pl_id = ctx.alloc();
+    let pl_id = context.alloc();
     writer.push_optional_u32_attr(
         TagId::ProductList,
         pl_id,
@@ -957,7 +1088,7 @@ fn flatten_product_list_opt(
     );
     writer.push_cv_and_user_params(pl_id, parent, &pl.cv_params, &pl.user_params);
     for p in &pl.products {
-        flatten_product(writer, p, pl_id, ctx);
+        flatten_product(writer, p, pl_id, context);
     }
 }
 
@@ -965,11 +1096,11 @@ fn flatten_binary_data_array_list(
     writer: &mut MetaParamWriter<'_>,
     bda_list: Option<&BinaryDataArrayList>,
     parent_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     policy: ArrayPolicy,
 ) {
     let Some(list) = bda_list else { return };
-    let list_id = ctx.alloc();
+    let list_id = context.alloc();
     writer.push_optional_u32_attr(
         TagId::BinaryDataArrayList,
         list_id,
@@ -978,10 +1109,10 @@ fn flatten_binary_data_array_list(
         Some(list.binary_data_arrays.len() as u32),
     );
     for bda in &list.binary_data_arrays {
-        let bda_id = ctx.alloc();
+        let bda_id = context.alloc();
         writer.touch(TagId::BinaryDataArray, bda_id, list_id);
         writer.push_schema_attrs(TagId::BinaryDataArray, bda_id, list_id, bda);
-        writer.push_ref_group_params(bda_id, &bda.referenceable_param_group_refs, ctx);
+        writer.push_ref_group_params(bda_id, &bda.referenceable_param_group_refs, context);
         emit_binary_data_array_cv_params(writer, bda_id, list_id, bda, policy);
     }
 }
@@ -990,19 +1121,19 @@ fn flatten_precursor(
     writer: &mut MetaParamWriter<'_>,
     precursor: &Precursor,
     parent_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
-    let p_id = ctx.alloc();
+    let p_id = context.alloc();
     writer.touch(TagId::Precursor, p_id, parent_id);
     writer.push_schema_attrs(TagId::Precursor, p_id, parent_id, precursor);
     if let Some(iw) = &precursor.isolation_window {
-        let iw_id = ctx.alloc();
+        let iw_id = context.alloc();
         writer.touch(TagId::IsolationWindow, iw_id, p_id);
-        writer.push_ref_group_params(iw_id, &iw.referenceable_param_group_refs, ctx);
+        writer.push_ref_group_params(iw_id, &iw.referenceable_param_group_refs, context);
         writer.push_cv_and_user_params(iw_id, p_id, &iw.cv_params, &iw.user_params);
     }
     if let Some(sil) = &precursor.selected_ion_list {
-        let sil_id = ctx.alloc();
+        let sil_id = context.alloc();
         writer.push_optional_u32_attr(
             TagId::SelectedIonList,
             sil_id,
@@ -1011,16 +1142,16 @@ fn flatten_precursor(
             Some(sil.selected_ions.len() as u32),
         );
         for si in &sil.selected_ions {
-            let si_id = ctx.alloc();
+            let si_id = context.alloc();
             writer.touch(TagId::SelectedIon, si_id, sil_id);
-            writer.push_ref_group_params(si_id, &si.referenceable_param_group_refs, ctx);
+            writer.push_ref_group_params(si_id, &si.referenceable_param_group_refs, context);
             writer.push_cv_and_user_params(si_id, sil_id, &si.cv_params, &si.user_params);
         }
     }
     if let Some(act) = &precursor.activation {
-        let act_id = ctx.alloc();
+        let act_id = context.alloc();
         writer.touch(TagId::Activation, act_id, p_id);
-        writer.push_ref_group_params(act_id, &act.referenceable_param_group_refs, ctx);
+        writer.push_ref_group_params(act_id, &act.referenceable_param_group_refs, context);
         writer.push_cv_and_user_params(act_id, p_id, &act.cv_params, &act.user_params);
     }
 }
@@ -1029,16 +1160,16 @@ fn flatten_product(
     writer: &mut MetaParamWriter<'_>,
     product: &Product,
     parent_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
-    let prod_id = ctx.alloc();
+    let prod_id = context.alloc();
     writer.touch(TagId::Product, prod_id, parent_id);
     writer.push_schema_attrs(TagId::Product, prod_id, parent_id, product);
     writer.push_cv_and_user_params(prod_id, prod_id, &product.cv_params, &product.user_params);
     if let Some(iw) = &product.isolation_window {
-        let iw_id = ctx.alloc();
+        let iw_id = context.alloc();
         writer.touch(TagId::IsolationWindow, iw_id, prod_id);
-        writer.push_ref_group_params(iw_id, &iw.referenceable_param_group_refs, ctx);
+        writer.push_ref_group_params(iw_id, &iw.referenceable_param_group_refs, context);
         writer.push_cv_and_user_params(iw_id, prod_id, &iw.cv_params, &iw.user_params);
     }
 }
@@ -1047,16 +1178,16 @@ fn flatten_scan_list(
     writer: &mut MetaParamWriter<'_>,
     scan_list: &ScanList,
     sl_id: u32,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
     for scan in &scan_list.scans {
-        let scan_id = ctx.alloc();
+        let scan_id = context.alloc();
         writer.touch(TagId::Scan, scan_id, sl_id);
         writer.push_schema_attrs(TagId::Scan, scan_id, sl_id, scan);
-        writer.push_ref_group_params(scan_id, &scan.referenceable_param_group_refs, ctx);
+        writer.push_ref_group_params(scan_id, &scan.referenceable_param_group_refs, context);
         writer.push_cv_and_user_params(scan_id, sl_id, &scan.cv_params, &scan.user_params);
         if let Some(swl) = &scan.scan_window_list {
-            let swl_id = ctx.alloc();
+            let swl_id = context.alloc();
             writer.push_optional_u32_attr(
                 TagId::ScanWindowList,
                 swl_id,
@@ -1065,7 +1196,7 @@ fn flatten_scan_list(
                 Some(swl.scan_windows.len() as u32),
             );
             for sw in &swl.scan_windows {
-                let sw_id = ctx.alloc();
+                let sw_id = context.alloc();
                 writer.touch(TagId::ScanWindow, sw_id, swl_id);
                 writer.push_cv_and_user_params(sw_id, swl_id, &sw.cv_params, &sw.user_params);
             }
@@ -1073,18 +1204,18 @@ fn flatten_scan_list(
     }
 }
 
-fn pack_global_meta(mzml: &MzML, ctx: &mut TraversalCtx) -> (PackedMeta, GlobalCounts) {
+fn pack_global_meta(mzml: &MzML, context: &mut TraversalContext) -> (PackedMeta, GlobalCounts) {
     let mut buffers: Vec<MetaParamBuffer> = Vec::new();
 
-    let n_file_description = append_file_description_meta(mzml, ctx, &mut buffers);
-    let n_run = append_run_meta(mzml, ctx, &mut buffers);
-    let n_ref_param_groups = append_ref_param_groups_meta(mzml, ctx, &mut buffers);
-    let n_samples = append_samples_meta(mzml, ctx, &mut buffers);
-    let n_instrument_configs = append_instruments_meta(mzml, ctx, &mut buffers);
-    let n_software = append_software_list_meta(mzml, ctx, &mut buffers);
-    let n_data_processing = append_data_processing_list_meta(mzml, ctx, &mut buffers);
-    let n_acquisition_settings = append_scan_settings_list_meta(mzml, ctx, &mut buffers);
-    let n_cvs = append_cv_list_meta(mzml, ctx, &mut buffers);
+    let n_file_description = append_file_description_meta(mzml, context, &mut buffers);
+    let n_run = append_run_meta(mzml, context, &mut buffers);
+    let n_ref_param_groups = append_ref_param_groups_meta(mzml, context, &mut buffers);
+    let n_samples = append_samples_meta(mzml, context, &mut buffers);
+    let n_instrument_configs = append_instruments_meta(mzml, context, &mut buffers);
+    let n_software = append_software_list_meta(mzml, context, &mut buffers);
+    let n_data_processing = append_data_processing_list_meta(mzml, context, &mut buffers);
+    let n_acquisition_settings = append_scan_settings_list_meta(mzml, context, &mut buffers);
+    let n_cvs = append_cv_list_meta(mzml, context, &mut buffers);
 
     let counts = GlobalCounts {
         n_file_description,
@@ -1106,20 +1237,20 @@ fn pack_global_meta(mzml: &MzML, ctx: &mut TraversalCtx) -> (PackedMeta, GlobalC
 
 fn append_file_description_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(fd) = &mzml.file_description else {
         return 0;
     };
     append_meta_buffer(buffers, |writer| {
-        let fd_id = ctx.alloc();
-        let fc_id = ctx.alloc();
-        let sfl_id = ctx.alloc();
+        let fd_id = context.alloc();
+        let fc_id = context.alloc();
+        let sfl_id = context.alloc();
 
         writer.touch(TagId::FileDescription, fd_id, 0);
         writer.touch(TagId::FileContent, fc_id, fd_id);
-        writer.push_ref_group_params(fc_id, &fd.file_content.referenceable_param_group_refs, ctx);
+        writer.push_ref_group_params(fc_id, &fd.file_content.referenceable_param_group_refs, context);
         writer.push_cv_and_user_params(
             fc_id,
             fd_id,
@@ -1137,7 +1268,7 @@ fn append_file_description_meta(
         );
 
         for sf in &fd.source_file_list.source_file {
-            let sf_id = ctx.alloc();
+            let sf_id = context.alloc();
             writer.touch(TagId::SourceFile, sf_id, sfl_id);
             writer.push_str_attr(TagId::SourceFile, sf_id, sfl_id, ACC_ATTR_ID, &sf.id);
             writer.push_str_attr(TagId::SourceFile, sf_id, sfl_id, ACC_ATTR_NAME, &sf.name);
@@ -1148,23 +1279,23 @@ fn append_file_description_meta(
                 ACC_ATTR_LOCATION,
                 &sf.location,
             );
-            writer.push_ref_group_params(sf_id, &sf.referenceable_param_group_ref, ctx);
+            writer.push_ref_group_params(sf_id, &sf.referenceable_param_group_ref, context);
             writer.push_cv_and_user_params(sf_id, sfl_id, &sf.cv_param, &sf.user_param);
         }
         for contact in &fd.contacts {
-            let c_id = ctx.alloc();
+            let c_id = context.alloc();
             writer.touch(TagId::Contact, c_id, fd_id);
-            writer.push_ref_group_params(c_id, &contact.referenceable_param_group_refs, ctx);
+            writer.push_ref_group_params(c_id, &contact.referenceable_param_group_refs, context);
             writer.push_cv_and_user_params(c_id, fd_id, &contact.cv_params, &contact.user_params);
         }
     });
     1
 }
 
-fn append_run_meta(mzml: &MzML, ctx: &mut TraversalCtx, buffers: &mut Vec<MetaParamBuffer>) -> u32 {
+fn append_run_meta(mzml: &MzML, context: &mut TraversalContext, buffers: &mut Vec<MetaParamBuffer>) -> u32 {
     let run = &mzml.run;
     append_meta_buffer(buffers, |writer| {
-        let run_id = ctx.alloc();
+        let run_id = context.alloc();
         writer.touch(TagId::Run, run_id, 0);
         writer.push_str_attr(TagId::Run, run_id, 0, ACC_ATTR_ID, &run.id);
         if let Some(ts) = run.start_time_stamp.as_deref() {
@@ -1186,7 +1317,7 @@ fn append_run_meta(mzml: &MzML, ctx: &mut TraversalCtx, buffers: &mut Vec<MetaPa
             writer.push_str_attr(TagId::Run, run_id, 0, ACC_ATTR_SAMPLE_REF, r);
         }
         if let Some(sfrl) = &run.source_file_ref_list {
-            let sfrl_id = ctx.alloc();
+            let sfrl_id = context.alloc();
             writer.touch(TagId::SourceFileRefList, sfrl_id, run_id);
             writer.push_optional_u32_attr(
                 TagId::SourceFileRefList,
@@ -1196,7 +1327,7 @@ fn append_run_meta(mzml: &MzML, ctx: &mut TraversalCtx, buffers: &mut Vec<MetaPa
                 Some(sfrl.source_file_refs.len() as u32),
             );
             for sfr in &sfrl.source_file_refs {
-                let sfr_id = ctx.alloc();
+                let sfr_id = context.alloc();
                 writer.touch(TagId::SourceFileRef, sfr_id, sfrl_id);
                 writer.push_str_attr(
                     TagId::SourceFileRef,
@@ -1208,7 +1339,7 @@ fn append_run_meta(mzml: &MzML, ctx: &mut TraversalCtx, buffers: &mut Vec<MetaPa
             }
         }
         for gr in &run.referenceable_param_group_refs {
-            let gref_id = ctx.alloc();
+            let gref_id = context.alloc();
             writer.touch(TagId::ReferenceableParamGroupRef, gref_id, run_id);
             writer.push_str_attr(
                 TagId::ReferenceableParamGroupRef,
@@ -1225,7 +1356,7 @@ fn append_run_meta(mzml: &MzML, ctx: &mut TraversalCtx, buffers: &mut Vec<MetaPa
 
 fn append_ref_param_groups_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.referenceable_param_group_list else {
@@ -1233,7 +1364,7 @@ fn append_ref_param_groups_meta(
     };
     for group in &list.referenceable_param_groups {
         append_meta_buffer(buffers, |writer| {
-            let gid = ctx.alloc();
+            let gid = context.alloc();
             writer.touch(TagId::ReferenceableParamGroup, gid, 0);
             writer.push_str_attr(
                 TagId::ReferenceableParamGroup,
@@ -1250,24 +1381,24 @@ fn append_ref_param_groups_meta(
 
 fn append_samples_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.sample_list else {
         return 0;
     };
-    let list_id = ctx.alloc();
+    let list_id = context.alloc();
     for (i, sample) in list.samples.iter().enumerate() {
         append_meta_buffer(buffers, |writer| {
             if i == 0 {
                 writer.touch(TagId::SampleList, list_id, 0);
                 writer.push_cv_and_user_params(list_id, 0, &list.cv_params, &list.user_params);
             }
-            let sid = ctx.alloc();
+            let sid = context.alloc();
             writer.touch(TagId::Sample, sid, list_id);
             writer.push_str_attr(TagId::Sample, sid, list_id, ACC_ATTR_ID, &sample.id);
             writer.push_str_attr(TagId::Sample, sid, list_id, ACC_ATTR_NAME, &sample.name);
-            writer.push_ref_group_params(sid, &sample.referenceable_param_group_refs, ctx);
+            writer.push_ref_group_params(sid, &sample.referenceable_param_group_refs, context);
             writer.push_cv_and_user_params(sid, list_id, &sample.cv_params, &sample.user_params);
         });
     }
@@ -1283,18 +1414,18 @@ fn emit_instrument_component(
     group_refs: &[ReferenceableParamGroupRef],
     cv_params: &[CvParam],
     user_params: &[UserParam],
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
 ) {
-    let comp_id = ctx.alloc();
+    let comp_id = context.alloc();
     writer.touch(tag, comp_id, parent_id);
     writer.push_optional_u32_attr(tag, comp_id, parent_id, ACC_ATTR_ORDER, order);
-    writer.push_ref_group_params(comp_id, group_refs, ctx);
+    writer.push_ref_group_params(comp_id, group_refs, context);
     writer.push_cv_and_user_params(comp_id, parent_id, cv_params, user_params);
 }
 
 fn append_instruments_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.instrument_list else {
@@ -1302,7 +1433,7 @@ fn append_instruments_meta(
     };
     for inst in &list.instrument {
         append_meta_buffer(buffers, |writer| {
-            let id = ctx.alloc();
+            let id = context.alloc();
             writer.touch(TagId::Instrument, id, 0);
             writer.push_str_attr(TagId::Instrument, id, 0, ACC_ATTR_ID, &inst.id);
             if let Some(ssr) = &inst.scan_settings_ref {
@@ -1314,10 +1445,10 @@ fn append_instruments_meta(
                     &ssr.r#ref,
                 );
             }
-            writer.push_ref_group_params(id, &inst.referenceable_param_group_ref, ctx);
+            writer.push_ref_group_params(id, &inst.referenceable_param_group_ref, context);
             writer.push_cv_and_user_params(id, 0, &inst.cv_param, &inst.user_param);
             if let Some(sw) = &inst.software_ref {
-                let sw_id = ctx.alloc();
+                let sw_id = context.alloc();
                 writer.touch(TagId::SoftwareRef, sw_id, id);
                 writer.push_str_attr(TagId::SoftwareRef, sw_id, id, ACC_ATTR_REF, &sw.r#ref);
             }
@@ -1331,7 +1462,7 @@ fn append_instruments_meta(
                         &s.referenceable_param_group_ref,
                         &s.cv_param,
                         &s.user_param,
-                        ctx,
+                        context,
                     );
                 }
                 for a in &cl.analyzer {
@@ -1343,7 +1474,7 @@ fn append_instruments_meta(
                         &a.referenceable_param_group_ref,
                         &a.cv_param,
                         &a.user_param,
-                        ctx,
+                        context,
                     );
                 }
                 for d in &cl.detector {
@@ -1355,7 +1486,7 @@ fn append_instruments_meta(
                         &d.referenceable_param_group_ref,
                         &d.cv_param,
                         &d.user_param,
-                        ctx,
+                        context,
                     );
                 }
             }
@@ -1366,7 +1497,7 @@ fn append_instruments_meta(
 
 fn append_software_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.software_list else {
@@ -1374,7 +1505,7 @@ fn append_software_list_meta(
     };
     for sw in &list.software {
         append_meta_buffer(buffers, |writer| {
-            let swid = ctx.alloc();
+            let swid = context.alloc();
             writer.touch(TagId::Software, swid, 0);
             writer.push_str_attr(TagId::Software, swid, 0, ACC_ATTR_ID, &sw.id);
             let version = sw
@@ -1384,9 +1515,9 @@ fn append_software_list_meta(
             if let Some(v) = version {
                 writer.push_str_attr(TagId::Software, swid, 0, ACC_ATTR_VERSION, v);
             }
-            writer.push_ref_group_params(swid, &sw.referenceable_param_group_refs, ctx);
+            writer.push_ref_group_params(swid, &sw.referenceable_param_group_refs, context);
             for sp in &sw.software_param {
-                let pid = ctx.alloc();
+                let pid = context.alloc();
                 writer.touch(TagId::SoftwareParam, pid, swid);
                 writer.push_one(
                     TagId::SoftwareParam,
@@ -1411,7 +1542,7 @@ fn append_software_list_meta(
 
 fn append_data_processing_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.data_processing_list else {
@@ -1419,14 +1550,14 @@ fn append_data_processing_list_meta(
     };
     for dp in &list.data_processing {
         append_meta_buffer(buffers, |writer| {
-            let dp_id = ctx.alloc();
+            let dp_id = context.alloc();
             writer.touch(TagId::DataProcessing, dp_id, 0);
             writer.push_str_attr(TagId::DataProcessing, dp_id, 0, ACC_ATTR_ID, &dp.id);
             if let Some(sw) = dp.software_ref.as_deref() {
                 writer.push_str_attr(TagId::DataProcessing, dp_id, 0, ACC_ATTR_SOFTWARE_REF, sw);
             }
             for pm in &dp.processing_method {
-                let pm_id = ctx.alloc();
+                let pm_id = context.alloc();
                 writer.touch(TagId::ProcessingMethod, pm_id, dp_id);
                 writer.push_optional_u32_attr(
                     TagId::ProcessingMethod,
@@ -1444,7 +1575,7 @@ fn append_data_processing_list_meta(
                         sw,
                     );
                 }
-                writer.push_ref_group_params(pm_id, &pm.referenceable_param_group_ref, ctx);
+                writer.push_ref_group_params(pm_id, &pm.referenceable_param_group_ref, context);
                 writer.push_cv_and_user_params(pm_id, dp_id, &pm.cv_param, &pm.user_param);
             }
         });
@@ -1454,7 +1585,7 @@ fn append_data_processing_list_meta(
 
 fn append_scan_settings_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(list) = &mzml.scan_settings_list else {
@@ -1462,7 +1593,7 @@ fn append_scan_settings_list_meta(
     };
     for ss in &list.scan_settings {
         append_meta_buffer(buffers, |writer| {
-            let ss_id = ctx.alloc();
+            let ss_id = context.alloc();
             writer.touch(TagId::ScanSettings, ss_id, 0);
             if let Some(id) = ss.id.as_deref() {
                 writer.push_str_attr(TagId::ScanSettings, ss_id, 0, ACC_ATTR_ID, id);
@@ -1477,7 +1608,7 @@ fn append_scan_settings_list_meta(
                 );
             }
             if let Some(sfrl) = &ss.source_file_ref_list {
-                let sfrl_id = ctx.alloc();
+                let sfrl_id = context.alloc();
                 writer.touch(TagId::SourceFileRefList, sfrl_id, ss_id);
                 writer.push_optional_u32_attr(
                     TagId::SourceFileRefList,
@@ -1487,7 +1618,7 @@ fn append_scan_settings_list_meta(
                     Some(sfrl.source_file_refs.len() as u32),
                 );
                 for sfr in &sfrl.source_file_refs {
-                    let sfr_id = ctx.alloc();
+                    let sfr_id = context.alloc();
                     writer.touch(TagId::SourceFileRef, sfr_id, sfrl_id);
                     writer.push_str_attr(
                         TagId::SourceFileRef,
@@ -1498,13 +1629,13 @@ fn append_scan_settings_list_meta(
                     );
                 }
             }
-            writer.push_ref_group_params(ss_id, &ss.referenceable_param_group_refs, ctx);
+            writer.push_ref_group_params(ss_id, &ss.referenceable_param_group_refs, context);
             writer.push_cv_and_user_params(ss_id, 0, &ss.cv_params, &ss.user_params);
             if let Some(tl) = &ss.target_list {
                 for target in &tl.targets {
-                    let t_id = ctx.alloc();
+                    let t_id = context.alloc();
                     writer.touch(TagId::Target, t_id, ss_id);
-                    writer.push_ref_group_params(t_id, &target.referenceable_param_group_refs, ctx);
+                    writer.push_ref_group_params(t_id, &target.referenceable_param_group_refs, context);
                     writer.push_cv_and_user_params(
                         t_id,
                         ss_id,
@@ -1520,7 +1651,7 @@ fn append_scan_settings_list_meta(
 
 fn append_cv_list_meta(
     mzml: &MzML,
-    ctx: &mut TraversalCtx,
+    context: &mut TraversalContext,
     buffers: &mut Vec<MetaParamBuffer>,
 ) -> u32 {
     let Some(cv_list) = &mzml.cv_list else {
@@ -1529,7 +1660,7 @@ fn append_cv_list_meta(
     if cv_list.cv.is_empty() {
         return 0;
     }
-    let cv_list_id = ctx.alloc();
+    let cv_list_id = context.alloc();
     let cv_count = cv_list.cv.len() as u32;
     for (i, cv) in cv_list.cv.iter().enumerate() {
         append_meta_buffer(buffers, |writer| {
@@ -1543,7 +1674,7 @@ fn append_cv_list_meta(
                     Some(cv_count),
                 );
             }
-            let cv_id = ctx.alloc();
+            let cv_id = context.alloc();
             writer.touch(TagId::Cv, cv_id, cv_list_id);
             writer.push_str_attr(TagId::Cv, cv_id, cv_list_id, ACC_ATTR_LABEL, &cv.id);
             if let Some(n) = cv.full_name.as_deref().filter(|s| !s.is_empty()) {
@@ -1563,7 +1694,7 @@ fn append_cv_list_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mzml::structs::SpectrumList;
+    use std::sync::Arc;
 
     #[test]
     fn value_pool_empty_value_gives_kind_2() {
@@ -1615,14 +1746,6 @@ mod tests {
         buffer.push(TagId::CvParam, 1, 0, empty_cv_param());
         assert_eq!(buffer.rows.len(), 1);
         assert_eq!(buffer.rows[0].id, 1);
-    }
-
-    #[test]
-    fn meta_param_buffer_clear_empties_rows() {
-        let mut buffer = MetaParamBuffer::new();
-        buffer.push(TagId::CvParam, 1, 0, empty_cv_param());
-        buffer.clear();
-        assert!(buffer.rows.is_empty());
     }
 
     #[test]
@@ -1754,45 +1877,163 @@ mod tests {
     }
 
     #[test]
-    fn collector_spectrum_meta_on_empty_list_produces_empty_packed_meta() {
-        let mut collector = MetaCollector::new();
-        let spectra: &[Spectrum] = &[];
-        let policy = ArrayPolicy {
-            x_array_accession: MZ_ARRAY,
-            y_array_accession: INTENSITY_ARRAY,
-            force_f32: false,
+    fn grouped_metadata_keeps_values_local_to_each_group() {
+        use crate::decoder::decode::MetadatumValue;
+        use crate::ion::DecompressionBudget;
+        use crate::ion::format::CODEC_NONE;
+        use crate::ion::meta_groups::MetaTotals;
+        use crate::ion::utilities::MetaGroupReader;
+
+        let grouped = three_item_grouped();
+        assert_eq!(grouped.group_count, 3);
+
+        let mut reader = MetaGroupReader::new(
+            Arc::from(grouped_bytes(&grouped)),
+            grouped.group_count,
+            1,
+            3,
+            MetaTotals {
+                rows: 3,
+                numeric: 3,
+                string: 0,
+                uncompressed: grouped.uncompressed_size,
+            },
+            CODEC_NONE,
+            true,
+            DecompressionBudget::default(),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+
+        let all = reader.read_all().unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].item_index, 0);
+        assert_eq!(all[1].item_index, 1);
+        assert_eq!(all[2].item_index, 2);
+        assert_eq!(all[0].value, MetadatumValue::Number(10.5));
+        assert_eq!(all[1].value, MetadatumValue::Number(20.5));
+        assert_eq!(all[2].value, MetadatumValue::Number(30.5));
+
+        let second = reader.read_item(1).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].item_index, 1);
+        assert_eq!(second[0].value, MetadatumValue::Number(20.5));
+
+        let third = reader.read_item(2).unwrap();
+        assert_eq!(third.len(), 1);
+        assert_eq!(third[0].value, MetadatumValue::Number(30.5));
+    }
+
+    fn three_item_grouped() -> GroupedSection {
+        let make_cv = |value: &str| CvParam {
+            cv_ref: Some("MS".to_string()),
+            accession: Some("MS:1000285".to_string()),
+            name: String::new(),
+            value: Some(value.to_string()),
+            unit_cv_ref: None,
+            unit_name: None,
+            unit_accession: None,
         };
-        let meta =
-            collector.collect_item_list_meta::<Spectrum, SpectrumList>(spectra, 0, None, policy);
-        assert_eq!(meta.index_offsets, vec![0]);
-        assert!(meta.ids.is_empty());
+        let mut grouper = MetaGrouper::new(1, 0, SectionChunk::memory(0));
+        for (index, value) in ["10.5", "20.5", "30.5"].iter().enumerate() {
+            let mut buffer = MetaParamBuffer::new();
+            buffer.push(TagId::CvParam, (index + 1) as u32, 0, make_cv(value));
+            buffer.normalize_attr_cv_values();
+            grouper.write_metadata_item(&buffer).unwrap();
+        }
+        grouper.finish().unwrap()
+    }
+
+    fn grouped_bytes(grouped: &GroupedSection) -> &[u8] {
+        grouped.section.as_slice().unwrap()
     }
 
     #[test]
-    fn serialize_packed_meta_roundtrip_size() {
-        let meta = PackedMetaBuilder::new().build();
-        let bytes = serialize_packed_meta(&meta);
-        assert_eq!(bytes.len(), packed_meta_byte_size(&meta));
+    fn metadata_reader_rejects_wrong_uncompressed_total() {
+        use crate::ion::DecompressionBudget;
+        use crate::ion::format::CODEC_NONE;
+        use crate::ion::meta_groups::MetaTotals;
+        use crate::ion::utilities::MetaGroupReader;
+
+        let grouped = three_item_grouped();
+        let result = MetaGroupReader::new(
+            Arc::from(grouped_bytes(&grouped)),
+            grouped.group_count,
+            1,
+            3,
+            MetaTotals {
+                rows: 3,
+                numeric: 3,
+                string: 0,
+                uncompressed: grouped.uncompressed_size + 1,
+            },
+            CODEC_NONE,
+            true,
+            DecompressionBudget::default(),
+            64 * 1024 * 1024,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
-    fn compressed_meta_sections_level_zero_preserves_bytes() {
-        let meta = PackedMetaBuilder::new().build();
-        let counts = GlobalCounts {
-            n_file_description: 0,
-            n_run: 1,
-            n_ref_param_groups: 0,
-            n_samples: 0,
-            n_instrument_configs: 0,
-            n_software: 0,
-            n_data_processing: 0,
-            n_acquisition_settings: 0,
-            n_cvs: 0,
-        };
-        let compressed = CompressedMetaSections::build(&meta, &meta, &meta, &counts, 0);
-        let raw_s = serialize_packed_meta(&meta);
-        assert_eq!(compressed.spectrum_bytes, raw_s);
-        assert_eq!(compressed.spectrum_uncompressed_size, raw_s.len() as u64);
+    fn metadata_reader_rejects_wrong_row_total() {
+        use crate::ion::DecompressionBudget;
+        use crate::ion::format::CODEC_NONE;
+        use crate::ion::meta_groups::MetaTotals;
+        use crate::ion::utilities::MetaGroupReader;
+
+        let grouped = three_item_grouped();
+        let reader = MetaGroupReader::new(
+            Arc::from(grouped_bytes(&grouped)),
+            grouped.group_count,
+            1,
+            3,
+            MetaTotals {
+                rows: 99,
+                numeric: 3,
+                string: 0,
+                uncompressed: grouped.uncompressed_size,
+            },
+            CODEC_NONE,
+            true,
+            DecompressionBudget::default(),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(reader.read_all().is_err());
+    }
+
+    #[test]
+    fn metadata_reader_rejects_payload_into_directory() {
+        use crate::ion::DecompressionBudget;
+        use crate::ion::format::CODEC_NONE;
+        use crate::ion::meta_groups::{META_GROUP_ENTRY_SIZE, MetaTotals};
+        use crate::ion::utilities::MetaGroupReader;
+
+        let grouped = three_item_grouped();
+        let mut bytes = grouped_bytes(&grouped).to_vec();
+        let directory_start = bytes.len() - grouped.group_count as usize * META_GROUP_ENTRY_SIZE;
+        bytes[directory_start..directory_start + 8]
+            .copy_from_slice(&(directory_start as u64).to_le_bytes());
+
+        let mut reader = MetaGroupReader::new(
+            Arc::from(bytes.as_slice()),
+            grouped.group_count,
+            1,
+            3,
+            MetaTotals {
+                rows: 3,
+                numeric: 3,
+                string: 0,
+                uncompressed: grouped.uncompressed_size,
+            },
+            CODEC_NONE,
+            true,
+            DecompressionBudget::default(),
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(reader.read_item(0).is_err());
     }
 
     #[test]

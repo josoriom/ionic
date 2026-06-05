@@ -42,7 +42,7 @@ fn assert_num(xs: &[Metadatum], tail: AccessionTail, n: f64) {
 }
 
 #[test]
-fn assign_attrs_spectrum_emits_schema_only() {
+fn assign_attrs_spectrum_emits_all_fields() {
     let mut s = Spectrum::default();
 
     s.id = "scan=1".to_string();
@@ -79,8 +79,8 @@ fn assign_attrs_spectrum_emits_schema_only() {
     assert_text(&out, ACC_ATTR_SOURCE_FILE_REF, "sf1");
     assert_text(&out, ACC_ATTR_SPOT_ID, "spotA");
 
-    assert_missing_attr_tail(&out, ACC_ATTR_MS_LEVEL);
     assert_missing_attr_tail(&out, ACC_ATTR_SCAN_NUMBER);
+    assert_missing_attr_tail(&out, ACC_ATTR_MS_LEVEL);
 }
 
 #[test]
