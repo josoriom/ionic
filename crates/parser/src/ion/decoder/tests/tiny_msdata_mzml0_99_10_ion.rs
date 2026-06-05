@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_software_param, parse_b, spectrum_description,
+        CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_description,
         spectrum_precursor_list, spectrum_scan_list,
     },
 };
@@ -14,12 +14,12 @@ const PATH: &str = "data/ion/tiny.msdata.mzML0.99.10.ion";
 const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 
 fn mzml_cached() -> &'static MzML {
-    parse_b(&MZML_CACHE, PATH)
+    parse_ion_as_mzml(&MZML_CACHE, PATH)
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_10_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -322,7 +322,7 @@ fn tiny_msdata_mzml0_99_10_header_sections() {
 
 #[test]
 fn tiny_msdata_mzml0_99_10_first_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
@@ -496,7 +496,7 @@ fn tiny_msdata_mzml0_99_10_first_spectrum() {
 
 #[test]
 fn tiny_msdata_mzml0_99_10_second_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);

@@ -29,7 +29,7 @@ pub(crate) fn mzml(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML 
 }
 
 #[allow(dead_code)]
-pub(crate) fn load_ion_as_mzml(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML {
+pub(crate) fn parse_ion_as_mzml(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML {
     cache.get_or_init(|| {
         let bytes: &'static [u8] = Box::leak(load_mzml_bytes(path).into_boxed_slice());
 

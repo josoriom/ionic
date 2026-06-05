@@ -12,10 +12,10 @@ pub trait ByteSource: Send + Sync {
 }
 
 pub trait AsyncByteSource {
-    fn read(&self, query: Query) -> QueryFuture<'_>;
+    fn read(&self, query: Query) -> QueryPromise<'_>;
 }
 
-pub type QueryFuture<'a> = Pin<Box<dyn Future<Output = IonResult<QueryPayload>> + 'a>>;
+pub type QueryPromise<'a> = Pin<Box<dyn Future<Output = IonResult<QueryPayload>> + 'a>>;
 
 pub struct SliceSource {
     data: Arc<[u8]>,
@@ -41,7 +41,7 @@ impl ByteSource for SliceSource {
 }
 
 impl AsyncByteSource for SliceSource {
-    fn read(&self, query: Query) -> QueryFuture<'_> {
+    fn read(&self, query: Query) -> QueryPromise<'_> {
         Box::pin(async move {
             let bytes = ByteSource::read(self, query.offset(), query.length())?;
             Ok(QueryPayload::new(bytes))
@@ -77,7 +77,7 @@ impl ByteSource for MmapSource {
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl AsyncByteSource for MmapSource {
-    fn read(&self, query: Query) -> QueryFuture<'_> {
+    fn read(&self, query: Query) -> QueryPromise<'_> {
         Box::pin(async move {
             let bytes = ByteSource::read(self, query.offset(), query.length())?;
             Ok(QueryPayload::new(bytes))
@@ -155,7 +155,7 @@ impl ByteSource for QueryCallbackSource {
 }
 
 impl AsyncByteSource for QueryCallbackSource {
-    fn read(&self, query: Query) -> QueryFuture<'_> {
+    fn read(&self, query: Query) -> QueryPromise<'_> {
         Box::pin(async move {
             let bytes = ByteSource::read(self, query.offset(), query.length())?;
             Ok(QueryPayload::new(bytes))
@@ -163,14 +163,14 @@ impl AsyncByteSource for QueryCallbackSource {
     }
 }
 
-pub type AsyncQueryReader = dyn Fn(Query) -> QueryFuture<'static>;
+pub type AsyncQueryReader = dyn Fn(Query) -> QueryPromise<'static>;
 
 pub struct AsyncQueryCallbackSource {
     read: Box<AsyncQueryReader>,
 }
 
 impl AsyncQueryCallbackSource {
-    pub fn new(read: impl Fn(Query) -> QueryFuture<'static> + 'static) -> Self {
+    pub fn new(read: impl Fn(Query) -> QueryPromise<'static> + 'static) -> Self {
         Self {
             read: Box::new(read),
         }
@@ -178,7 +178,7 @@ impl AsyncQueryCallbackSource {
 }
 
 impl AsyncByteSource for AsyncQueryCallbackSource {
-    fn read(&self, query: Query) -> QueryFuture<'_> {
+    fn read(&self, query: Query) -> QueryPromise<'_> {
         Box::pin(async move {
             let length = query.length();
             let value = (self.read)(query).await?;

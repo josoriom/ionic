@@ -25,7 +25,7 @@ use crate::{
         },
         decoder::async_reader::AsyncReader,
         decoder::utilities::byte_source::{
-            AsyncByteSource, ByteSource, Query, QueryCallbackSource, QueryFuture, QueryPayload,
+            AsyncByteSource, ByteSource, Query, QueryCallbackSource, QueryPromise, QueryPayload,
             SliceSource,
         },
         encoder::encode::{
@@ -613,7 +613,7 @@ impl Ion {
     }
 
     pub async fn open_with_async_query(
-        read: impl Fn(Query) -> QueryFuture<'static> + 'static,
+        read: impl Fn(Query) -> QueryPromise<'static> + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
         let reader = AsyncReader::open_with_async_query(read, config).await?;

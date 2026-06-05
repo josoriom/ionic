@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_cv_absent, assert_cv_ref, assert_software_param, parse_b,
+        CvRefMode, assert_cv, assert_cv_absent, assert_cv_ref, assert_software_param, parse_ion_as_mzml,
         spectrum_by_id, spectrum_description, spectrum_precursor_list, spectrum_scan_list,
     },
 };
@@ -15,7 +15,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::AllowMissingMs;
 
 #[test]
 fn tiny1_srm_mzml0_99_1_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -315,7 +315,7 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
 
 #[test]
 fn tiny1_srm_mzml0_99_1_spectrum_s101() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let sl = mzml
         .run
         .spectrum_list
@@ -539,7 +539,7 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
 
 #[test]
 fn tiny1_srm_mzml0_99_1_spectrum_s102() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let sl = mzml
         .run
@@ -733,7 +733,7 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s101_mz_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -762,7 +762,7 @@ fn tiny2_srm_mzml0_99_1_ion_s101_mz_binary_payload() {
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s101_intensity_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -791,7 +791,7 @@ fn tiny2_srm_mzml0_99_1_ion_s101_intensity_binary_payload() {
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s102_mz_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -820,7 +820,7 @@ fn tiny2_srm_mzml0_99_1_ion_s102_mz_binary_payload() {
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s102_intensity_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");

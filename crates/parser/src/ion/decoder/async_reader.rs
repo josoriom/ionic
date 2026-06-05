@@ -4,7 +4,7 @@ use crate::ion::{
     IonResult,
     decoder::decode::{ArrayRef, Decoder, DecoderConfig, open_byte_ranges},
     decoder::utilities::byte_source::{
-        AsyncByteSource, AsyncQueryCallbackSource, ByteSource, CacheBackedSource, Query, QueryFuture,
+        AsyncByteSource, AsyncQueryCallbackSource, ByteSource, CacheBackedSource, Query, QueryPromise,
     },
     decoder::utilities::parse_header::parse_header,
     decoder::utilities::spectrum_source::{ScanSource, ScanSummary},
@@ -19,7 +19,7 @@ pub(crate) struct AsyncReader {
 
 impl AsyncReader {
     pub async fn open_with_async_query(
-        read: impl Fn(Query) -> QueryFuture<'static> + 'static,
+        read: impl Fn(Query) -> QueryPromise<'static> + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
         let source = Arc::new(AsyncQueryCallbackSource::new(read)) as Arc<dyn AsyncByteSource>;
@@ -205,7 +205,7 @@ mod tests {
     }
 
     impl AsyncByteSource for RangeServer {
-        fn read(&self, query: Query) -> QueryFuture<'_> {
+        fn read(&self, query: Query) -> QueryPromise<'_> {
             self.reads.fetch_add(1, Ordering::Relaxed);
             let data = self.data.clone();
             Box::pin(async move {

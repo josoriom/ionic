@@ -5,7 +5,7 @@ pub mod utilities;
 
 pub use ion::{
     AsyncByteSource, AsyncQueryCallbackSource, AsyncQueryReader, ByteSource,
-    ChromatogramSummary, Query, QueryCallbackSource, QueryFuture, QueryReader, QueryPayload,
+    ChromatogramSummary, Query, QueryCallbackSource, QueryPromise, QueryReader, QueryPayload,
     SliceSource, SpectrumSummary, decoder,
     decoder::decode::{Metadatum, MetadatumValue},
     decoder::utilities::spectrum_source::{ScanSource, ScanSummary},

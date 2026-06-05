@@ -12,7 +12,7 @@ pub(crate) use decoder::utilities;
 pub use decoder::utilities::byte_source::MmapSource;
 pub use decoder::utilities::byte_source::{
     AsyncByteSource, AsyncQueryCallbackSource, AsyncQueryReader, ByteSource, Query,
-    QueryCallbackSource, QueryFuture, QueryReader, QueryPayload, SliceSource,
+    QueryCallbackSource, QueryPromise, QueryReader, QueryPayload, SliceSource,
 };
 pub use decoder::utilities::decompression_budget::{
     DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionBudget,

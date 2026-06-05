@@ -1,7 +1,7 @@
 use crate::{
     mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_software_param, parse_b, spectrum_description,
+        CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_description,
         spectrum_precursor_list, spectrum_scan_list,
     },
 };
@@ -14,12 +14,12 @@ const PATH: &str = "data/ion/tiny.msdata.mzML0.99.9.ion";
 const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 
 fn mzml_cached() -> &'static MzML {
-    parse_b(&MZML_CACHE, PATH)
+    parse_ion_as_mzml(&MZML_CACHE, PATH)
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
 
     assert_eq!(cv_list.cv.len(), 1);
