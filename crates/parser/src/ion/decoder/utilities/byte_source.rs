@@ -3,6 +3,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Poll},
 };
 
 use crate::ion::{IonError, IonResult};
@@ -189,6 +190,53 @@ impl AsyncByteSource for AsyncQueryCallbackSource {
     }
 }
 
+pub(crate) async fn read_all(
+    source: &dyn AsyncByteSource,
+    ranges: &[(u64, u64)],
+) -> IonResult<Vec<QueryPayload>> {
+    let promises = ranges
+        .iter()
+        .map(|&(offset, length)| Some(source.read(Query::new(offset, length))))
+        .collect();
+    let payloads = ranges.iter().map(|_| None).collect();
+    ReadAll { promises, payloads }.await
+}
+
+struct ReadAll<'source> {
+    promises: Vec<Option<QueryPromise<'source>>>,
+    payloads: Vec<Option<QueryPayload>>,
+}
+
+impl<'source> Future for ReadAll<'source> {
+    type Output = IonResult<Vec<QueryPayload>>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let state = self.get_mut();
+        let mut all_ready = true;
+        for index in 0..state.promises.len() {
+            let poll = {
+                let Some(promise) = state.promises[index].as_mut() else {
+                    continue;
+                };
+                promise.as_mut().poll(context)
+            };
+            match poll {
+                Poll::Ready(Ok(payload)) => {
+                    state.payloads[index] = Some(payload);
+                    state.promises[index] = None;
+                }
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => all_ready = false,
+            }
+        }
+        if !all_ready {
+            return Poll::Pending;
+        }
+        let payloads = state.payloads.iter_mut().map(|slot| slot.take().unwrap()).collect();
+        Poll::Ready(Ok(payloads))
+    }
+}
+
 pub(crate) struct CacheBackedSource {
     chunks: Mutex<HashMap<(u64, u64), Vec<u8>>>,
 }
@@ -200,8 +248,22 @@ impl CacheBackedSource {
         }
     }
 
-    pub(crate) fn has(&self, offset: u64, length: u64) -> bool {
-        self.chunks.lock().unwrap().contains_key(&(offset, length))
+    pub(crate) fn missing(&self, ranges: &[(u64, u64)]) -> Vec<(u64, u64)> {
+        let chunks = self.chunks.lock().unwrap();
+        let mut missing = Vec::new();
+        for &(offset, length) in ranges {
+            if length == 0 {
+                continue;
+            }
+            if chunks.contains_key(&(offset, length)) {
+                continue;
+            }
+            if missing.contains(&(offset, length)) {
+                continue;
+            }
+            missing.push((offset, length));
+        }
+        missing
     }
 
     pub(crate) fn fill(&self, offset: u64, length: u64, bytes: Vec<u8>) {
@@ -211,6 +273,9 @@ impl CacheBackedSource {
 
 impl ByteSource for CacheBackedSource {
     fn read(&self, offset: u64, length: u64) -> IonResult<Vec<u8>> {
+        if length == 0 {
+            return Ok(Vec::new());
+        }
         self.chunks
             .lock()
             .unwrap()

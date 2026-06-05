@@ -4,7 +4,8 @@ use crate::ion::{
     IonResult,
     decoder::decode::{ArrayRef, Decoder, DecoderConfig, open_byte_ranges},
     decoder::utilities::byte_source::{
-        AsyncByteSource, AsyncQueryCallbackSource, ByteSource, CacheBackedSource, Query, QueryPromise,
+        AsyncByteSource, AsyncQueryCallbackSource, ByteSource, CacheBackedSource, Query,
+        QueryPromise, read_all,
     },
     decoder::utilities::parse_header::parse_header,
     decoder::utilities::spectrum_source::{ScanSource, ScanSummary},
@@ -36,9 +37,8 @@ impl AsyncReader {
         let header = parse_header(&header_bytes)?;
         cache.fill(0, 1024, header_bytes);
 
-        for (offset, length) in open_byte_ranges(&header)? {
-            fetch_one(source.as_ref(), cache.as_ref(), offset, length).await?;
-        }
+        let ranges = open_byte_ranges(&header)?;
+        fetch_missing(source.as_ref(), cache.as_ref(), &ranges).await?;
 
         let byte_source = cache.clone() as Arc<dyn ByteSource>;
         let decoder = Decoder::open_with_source(byte_source, config)?;
@@ -59,10 +59,7 @@ impl AsyncReader {
     }
 
     async fn fetch_ranges(&self, ranges: &[(u64, u64)]) -> IonResult<()> {
-        for &(offset, length) in ranges {
-            fetch_one(self.source.as_ref(), self.cache.as_ref(), offset, length).await?;
-        }
-        Ok(())
+        fetch_missing(self.source.as_ref(), self.cache.as_ref(), ranges).await
     }
 
     pub async fn to_mzml(&mut self) -> IonResult<MzML> {
@@ -128,21 +125,19 @@ impl AsyncReader {
     }
 }
 
-async fn fetch_one(
+async fn fetch_missing(
     source: &dyn AsyncByteSource,
     cache: &CacheBackedSource,
-    offset: u64,
-    length: u64,
+    ranges: &[(u64, u64)],
 ) -> IonResult<()> {
-    if length == 0 {
-        cache.fill(offset, 0, Vec::new());
+    let missing = cache.missing(ranges);
+    if missing.is_empty() {
         return Ok(());
     }
-    if cache.has(offset, length) {
-        return Ok(());
+    let payloads = read_all(source, &missing).await?;
+    for (&(offset, length), payload) in missing.iter().zip(payloads) {
+        cache.fill(offset, length, payload.into_bytes());
     }
-    let bytes = source.read(Query::new(offset, length)).await?.into_bytes();
-    cache.fill(offset, length, bytes);
     Ok(())
 }
 
@@ -227,6 +222,53 @@ mod tests {
             DecoderConfig::default(),
         ))
         .unwrap()
+    }
+
+    struct CountingServer {
+        data: Arc<[u8]>,
+        in_flight: AtomicUsize,
+        peak_in_flight: AtomicUsize,
+    }
+
+    impl CountingServer {
+        fn new(bytes: &[u8]) -> Arc<Self> {
+            Arc::new(Self {
+                data: Arc::from(bytes),
+                in_flight: AtomicUsize::new(0),
+                peak_in_flight: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl AsyncByteSource for CountingServer {
+        fn read(&self, query: Query) -> QueryPromise<'_> {
+            let data = self.data.clone();
+            Box::pin(async move {
+                let started = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+                self.peak_in_flight.fetch_max(started, Ordering::Relaxed);
+                YieldOnce { done: false }.await;
+                self.in_flight.fetch_sub(1, Ordering::Relaxed);
+                let start = query.offset() as usize;
+                let end = start + query.length() as usize;
+                if end > data.len() {
+                    return Err(IonError::from("counting server: out of bounds"));
+                }
+                Ok(QueryPayload::new(data[start..end].to_vec()))
+            })
+        }
+    }
+
+    #[test]
+    fn async_open_fetches_ranges_concurrently() {
+        let server = CountingServer::new(BYTES);
+        let source = server.clone() as Arc<dyn AsyncByteSource>;
+        let reader = block_on(AsyncReader::open_with_async_source(
+            source,
+            DecoderConfig::default(),
+        ))
+        .unwrap();
+        assert!(server.peak_in_flight.load(Ordering::Relaxed) > 1);
+        drop(reader);
     }
 
     #[test]
