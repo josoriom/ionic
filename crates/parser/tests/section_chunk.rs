@@ -36,6 +36,8 @@ fn config(mode: SectionChunkMode, compression_level: u8) -> EncodingConfig {
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_chunk: mode,
+        target_piece_bytes: 128 * 1024,
+        min_split_bytes: 512 * 1024,
     }
 }
 

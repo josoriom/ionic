@@ -188,7 +188,7 @@ impl BlockDirectory {
 struct ActiveBlock {
     block_id: u32,
     accumulated_data: Vec<u8>,
-    is_dedicated: bool,
+    compress_sequentially: bool,
 }
 
 struct StrideSlots([Option<ActiveBlock>; 4]);
@@ -251,7 +251,7 @@ impl BlockStore {
                 ActiveBlock {
                     block_id,
                     accumulated_data: Vec::with_capacity(capacity_hint),
-                    is_dedicated: false,
+                    compress_sequentially: false,
                 },
             );
         }
@@ -278,14 +278,19 @@ impl BlockStore {
         Ok((block_id, element_offset))
     }
 
-    fn open_dedicated_block(&mut self, stride: Stride, capacity: usize) -> u32 {
+    fn open_isolated_block(
+        &mut self,
+        stride: Stride,
+        capacity: usize,
+        compress_sequentially: bool,
+    ) -> u32 {
         let block_id = self.directory.reserve_next_block_id();
         self.slots.insert(
             stride,
             ActiveBlock {
                 block_id,
                 accumulated_data: Vec::with_capacity(capacity),
-                is_dedicated: true,
+                compress_sequentially,
             },
         );
         block_id
@@ -312,7 +317,7 @@ struct PendingBlock {
     block_id: u32,
     stride: Stride,
     data: Vec<u8>,
-    is_dedicated: bool,
+    compress_sequentially: bool,
 }
 
 struct ReadyBlock {
@@ -402,16 +407,30 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
     {
         let stride = Stride::from_size(element_size.max(1));
         if item_byte_size > self.store.max_block_size {
-            self.add_oversized_item(item_byte_size, stride, write_action)
+            self.add_isolated_block(item_byte_size, stride, true, write_action)
         } else {
             self.add_normal_item(item_byte_size, stride, write_action)
         }
     }
 
-    fn add_oversized_item<WriteAction>(
+    pub(crate) fn add_array_as_block<WriteAction>(
+        &mut self,
+        item_byte_size: usize,
+        element_size: usize,
+        write_action: WriteAction,
+    ) -> IonResult<(u32, u64)>
+    where
+        WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
+    {
+        let stride = Stride::from_size(element_size.max(1));
+        self.add_isolated_block(item_byte_size, stride, false, write_action)
+    }
+
+    fn add_isolated_block<WriteAction>(
         &mut self,
         item_byte_size: usize,
         stride: Stride,
+        compress_sequentially: bool,
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
@@ -419,14 +438,16 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
     {
         self.seal_open_block_for_stride(stride)?;
 
-        let block_id = self.store.open_dedicated_block(stride, item_byte_size);
+        let block_id =
+            self.store
+                .open_isolated_block(stride, item_byte_size, compress_sequentially);
 
         write_action(
             &mut self
                 .store
                 .slots
                 .get_mut(stride)
-                .expect("dedicated block was just inserted")
+                .expect("isolated block was just inserted")
                 .accumulated_data,
         )?;
 
@@ -467,7 +488,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
             block_id: active_block.block_id,
             stride,
             data: active_block.accumulated_data,
-            is_dedicated: active_block.is_dedicated,
+            compress_sequentially: active_block.compress_sequentially,
         });
         self.pending_bytes += data_len;
         if self.pending_bytes >= self.max_pending_bytes {
@@ -575,9 +596,10 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         }
         let batch = std::mem::take(&mut self.pending);
         self.pending_bytes = 0;
-        let (dedicated, shared): (Vec<_>, Vec<_>) = batch.into_iter().partition(|b| b.is_dedicated);
+        let (sequential, shared): (Vec<_>, Vec<_>) =
+            batch.into_iter().partition(|b| b.compress_sequentially);
 
-        let dedicated_ready = self.finish_seq(dedicated)?;
+        let sequential_ready = self.finish_seq(sequential)?;
 
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
         let shared_ready = {
@@ -591,7 +613,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let shared_ready = self.finish_seq(shared)?;
 
-        let ready = merge_sorted_by_block_id(dedicated_ready, shared_ready);
+        let ready = merge_sorted_by_block_id(sequential_ready, shared_ready);
 
         for block in ready {
             self.output.write_bytes(&block.bytes)?;
@@ -717,7 +739,7 @@ mod tests {
             ActiveBlock {
                 block_id: 7,
                 accumulated_data: vec![1, 2, 3, 4],
-                is_dedicated: false,
+                compress_sequentially: false,
             },
         );
         assert!(slots.is_open(Stride::FourBytes));
@@ -736,7 +758,7 @@ mod tests {
             ActiveBlock {
                 block_id: 0,
                 accumulated_data: vec![0u8; 12],
-                is_dedicated: false,
+                compress_sequentially: false,
             },
         );
         assert_eq!(slots.byte_len(Stride::FourBytes), 12);
@@ -807,15 +829,15 @@ mod tests {
     }
 
     #[test]
-    fn block_store_open_dedicated_block_replaces_slot() {
+    fn block_store_open_isolated_block_replaces_slot() {
         let mut store = BlockStore::new(1024);
         store.ensure_open_block(Stride::FourBytes, 8);
         let first_id = store.slots.get_mut(Stride::FourBytes).unwrap().block_id;
-        let dedicated_id = store.open_dedicated_block(Stride::FourBytes, 256);
-        assert_ne!(first_id, dedicated_id);
+        let isolated_id = store.open_isolated_block(Stride::FourBytes, 256, true);
+        assert_ne!(first_id, isolated_id);
         assert_eq!(
             store.slots.get_mut(Stride::FourBytes).unwrap().block_id,
-            dedicated_id
+            isolated_id
         );
     }
 
@@ -905,6 +927,50 @@ mod tests {
         assert_eq!(block_count, 1);
         assert!(total_bytes > 0);
         assert!(output.0.starts_with(&item_data));
+    }
+
+    #[test]
+    fn add_array_as_block_stays_on_parallel_path() {
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            64 * 1024 * 1024,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder
+            .add_array_as_block(8, 8, |buf| {
+                buf.extend_from_slice(&[1u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(builder.pending.len(), 1);
+        assert!(
+            !builder.pending[0].compress_sequentially,
+            "split piece blocks must stay on the parallel path"
+        );
+    }
+
+    #[test]
+    fn oversized_item_uses_sequential_path() {
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            16,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder
+            .add_item_to_box(64, 8, |buf| {
+                buf.extend_from_slice(&[2u8; 64]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(builder.pending.len(), 1);
+        assert!(
+            builder.pending[0].compress_sequentially,
+            "oversized blocks must stay on the sequential path"
+        );
     }
 
     #[test]

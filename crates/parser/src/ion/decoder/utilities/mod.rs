@@ -46,6 +46,7 @@ pub(crate) mod children_lookup;
 pub(crate) mod container_view;
 pub(crate) mod cv_table;
 pub(crate) mod decompression_budget;
+pub(crate) mod piece_bounds;
 pub(crate) mod spectrum_source;
 
 #[cfg(test)]

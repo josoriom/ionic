@@ -14,20 +14,24 @@ use crate::{
         meta_collector::{
             ArrayPolicy, array_type_accession_from_binary_data_array, parse_accession_tail_raw,
         },
+        pieces::PiecePlan,
     },
     ion::{
         IonError, IonResult,
+        axes::axis_of,
         encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor},
         filter_summary::{ChromatogramSummary, SpectrumSummary},
         packing::raw::RAW as RAW_PACKING,
         packing::{Dtype, Packing, PackingId, PackingInput, packing_for},
-        utilities::spectrum_source::summary_from_spectrum,
+        utilities::spectrum_source::{f16_bits_to_f64, summary_from_spectrum},
     },
     mzml::structs::{
         BinaryData, BinaryDataArray, Chromatogram, CvParam, MzML, NumericType, Spectrum,
     },
 };
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
+pub const DEFAULT_TARGET_PIECE_BYTES: usize = 128 * 1024;
+pub const DEFAULT_MIN_SPLIT_BYTES: usize = 512 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
@@ -170,6 +174,8 @@ pub fn encode(
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: true,
         section_chunk: SectionChunkMode::Memory,
+        target_piece_bytes: DEFAULT_TARGET_PIECE_BYTES,
+        min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
     };
     crate::ion::encoder::ion_writer::write_mzml_to_ion(mzml, config, output)
 }
@@ -194,6 +200,8 @@ pub struct EncodingConfig {
     pub uncompressed_block_size: usize,
     pub parallel: bool,
     pub section_chunk: SectionChunkMode,
+    pub target_piece_bytes: usize,
+    pub min_split_bytes: usize,
 }
 
 impl EncodingConfig {
@@ -264,6 +272,51 @@ impl<'a> ArrayData<'a> {
 
     fn is_empty(self) -> bool {
         self.element_count() == 0
+    }
+
+    fn slice(self, start: usize, end: usize) -> ArrayData<'a> {
+        match self {
+            Self::F16(e) => Self::F16(&e[start..end]),
+            Self::F32(e) => Self::F32(&e[start..end]),
+            Self::F64(e) => Self::F64(&e[start..end]),
+            Self::I16(e) => Self::I16(&e[start..end]),
+            Self::I32(e) => Self::I32(&e[start..end]),
+            Self::I64(e) => Self::I64(&e[start..end]),
+        }
+    }
+
+    fn value_at(self, index: usize) -> f64 {
+        match self {
+            Self::F16(e) => f16_bits_to_f64(e[index]),
+            Self::F32(e) => e[index] as f64,
+            Self::F64(e) => e[index],
+            Self::I16(e) => e[index] as f64,
+            Self::I32(e) => e[index] as f64,
+            Self::I64(e) => e[index] as f64,
+        }
+    }
+
+    fn stored_value_at(self, index: usize, dtype: u8) -> f64 {
+        match (self, dtype) {
+            (Self::F64(e), FILE_DTYPE_F32) => (e[index] as f32) as f64,
+            _ => self.value_at(index),
+        }
+    }
+
+    fn is_monotonic_non_decreasing(self) -> bool {
+        let count = self.element_count();
+        if count < 2 {
+            return true;
+        }
+        let mut previous = self.value_at(0);
+        for index in 1..count {
+            let current = self.value_at(index);
+            if current < previous {
+                return false;
+            }
+            previous = current;
+        }
+        true
     }
 }
 
@@ -393,6 +446,7 @@ pub(crate) struct EncodedArrayRef {
     pub(crate) dtype: u8,
     pub(crate) array_filter: u8,
     pub(crate) encoded_len: u32,
+    pub(crate) continues_previous: u8,
 }
 
 fn encode_variable_length_array(
@@ -417,6 +471,28 @@ fn encode_variable_length_array(
     Ok((bid, eoff, enc_len))
 }
 
+fn write_fixed_array_payload(
+    buf: &mut Vec<u8>,
+    data: ArrayData<'_>,
+    dtype: u8,
+    dtype_enum: Dtype,
+    packing: &'static dyn Packing,
+) -> IonResult<()> {
+    match packing.id() {
+        PackingId::DeltaShuffle => match (data, dtype_enum) {
+            (ArrayData::F64(slice), Dtype::F64) => packing.encode(PackingInput::F64(slice), buf),
+            _ => {
+                write_array_data(buf, data, dtype);
+                Ok(())
+            }
+        },
+        _ => {
+            write_array_data(buf, data, dtype);
+            Ok(())
+        }
+    }
+}
+
 fn encode_fixed_length_array(
     data: ArrayData<'_>,
     dtype: u8,
@@ -427,31 +503,25 @@ fn encode_fixed_length_array(
 ) -> IonResult<(u32, u64, u32)> {
     let (bid, eoff) =
         container.add_item_to_box(data.element_count() * elem_bytes, elem_bytes, |buf| {
-            match packing.id() {
-                PackingId::DeltaShuffle => match (data, dtype_enum) {
-                    (ArrayData::F64(slice), Dtype::F64) => {
-                        packing.encode(PackingInput::F64(slice), buf)
-                    }
-                    _ => {
-                        write_array_data(buf, data, dtype);
-                        Ok(())
-                    }
-                },
-                _ => {
-                    write_array_data(buf, data, dtype);
-                    Ok(())
-                }
-            }
+            write_fixed_array_payload(buf, data, dtype, dtype_enum, packing)
         })?;
     Ok((bid, eoff, 0u32))
 }
 
-pub(crate) fn encode_single_array(
-    bda: &BinaryDataArray,
+struct ArrayEncoding<'a> {
+    data: ArrayData<'a>,
+    accession: u32,
+    dtype: u8,
+    dtype_enum: Dtype,
+    elem_bytes: usize,
+    packing: &'static dyn Packing,
+}
+
+fn resolve_array_encoding<'a>(
+    bda: &'a BinaryDataArray,
     config: EncodingConfig,
     policy: ArrayPolicy,
-    container: &mut ContainerBuilder<'_, DefaultCompressor>,
-) -> IonResult<Option<EncodedArrayRef>> {
+) -> IonResult<Option<ArrayEncoding<'a>>> {
     let Some(data) = array_data_from_binary_data_array(bda) else {
         return Ok(None);
     };
@@ -473,6 +543,33 @@ pub(crate) fn encode_single_array(
     } else {
         &RAW_PACKING
     };
+    Ok(Some(ArrayEncoding {
+        data,
+        accession,
+        dtype,
+        dtype_enum,
+        elem_bytes,
+        packing,
+    }))
+}
+
+pub(crate) fn encode_single_array(
+    bda: &BinaryDataArray,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+) -> IonResult<Option<EncodedArrayRef>> {
+    let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
+        return Ok(None);
+    };
+    let ArrayEncoding {
+        data,
+        accession,
+        dtype,
+        dtype_enum,
+        elem_bytes,
+        packing,
+    } = encoding;
     let (block_id, element_offset, encoded_len) = if packing.is_variable_length() {
         encode_variable_length_array(data, dtype, dtype_enum, packing, container)?
     } else {
@@ -486,7 +583,89 @@ pub(crate) fn encode_single_array(
         dtype,
         array_filter: packing.id() as u8,
         encoded_len,
+        continues_previous: 0,
     }))
+}
+
+pub(crate) fn array_is_fixed_width_splittable(
+    bda: &BinaryDataArray,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+) -> IonResult<Option<(usize, usize)>> {
+    let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
+        return Ok(None);
+    };
+    if encoding.packing.is_variable_length() {
+        return Ok(None);
+    }
+    Ok(Some((encoding.data.element_count(), encoding.elem_bytes)))
+}
+
+pub(crate) fn write_array_pieces(
+    bda: &BinaryDataArray,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    plan: &PiecePlan,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+) -> IonResult<Vec<EncodedArrayRef>> {
+    let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
+        return Ok(Vec::new());
+    };
+    let ArrayEncoding {
+        data,
+        accession,
+        dtype,
+        dtype_enum,
+        elem_bytes,
+        packing,
+    } = encoding;
+
+    if packing.is_variable_length() {
+        return Err("write_array_pieces: variable-length arrays cannot be split".into());
+    }
+
+    let mut refs = Vec::with_capacity(plan.count());
+    for (piece_index, range) in plan.iter().enumerate() {
+        let piece = data.slice(range.start, range.end);
+        let (block_id, _) =
+            container.add_array_as_block(piece.element_count() * elem_bytes, elem_bytes, |buf| {
+                write_fixed_array_payload(buf, piece, dtype, dtype_enum, packing)
+            })?;
+        refs.push(EncodedArrayRef {
+            element_offset: 0,
+            element_count: piece.element_count() as u64,
+            block_id,
+            accession,
+            dtype,
+            array_filter: packing.id() as u8,
+            encoded_len: 0,
+            continues_previous: (piece_index > 0) as u8,
+        });
+    }
+    Ok(refs)
+}
+
+pub(crate) fn get_piece_bounds(
+    bda: &BinaryDataArray,
+    plan: &PiecePlan,
+    dtype: u8,
+) -> Option<Vec<(f64, f64)>> {
+    let data = array_data_from_binary_data_array(bda)?;
+    if data.is_empty() {
+        return None;
+    }
+    let accession = array_type_accession_from_binary_data_array(bda);
+    axis_of(accession)?;
+    if !data.is_monotonic_non_decreasing() {
+        return None;
+    }
+    let mut bounds = Vec::with_capacity(plan.count());
+    for range in plan.iter() {
+        let low = data.stored_value_at(range.start, dtype);
+        let high = data.stored_value_at(range.end - 1, dtype);
+        bounds.push((low, high));
+    }
+    Some(bounds)
 }
 
 #[cfg(test)]
@@ -622,6 +801,8 @@ mod tests {
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_chunk: SectionChunkMode::Memory,
+            target_piece_bytes: DEFAULT_TARGET_PIECE_BYTES,
+            min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -637,6 +818,8 @@ mod tests {
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_chunk: SectionChunkMode::Memory,
+            target_piece_bytes: DEFAULT_TARGET_PIECE_BYTES,
+            min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);

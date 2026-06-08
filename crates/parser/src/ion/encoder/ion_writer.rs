@@ -9,24 +9,31 @@ use crate::{
         make_chunk,
         meta_collector::{
             ArrayPolicy, GroupedSection, MetaCollector, MetaGrouper, MzmlListItem,
+            LOCAL_LIST_NODE_ID, array_type_accession_from_binary_data_array,
             compress_bytes_if_enabled, serialize_global_meta_with_counts,
         },
-        tables::{ArrayRefTable, IndexTable, SummaryTable, write_aligned},
+        pieces::{PiecePlan, allow_split, get_piece_ranges},
+        tables::{ArrayRefTable, IndexTable, PieceBound, PieceBoundsTable, SummaryTable, write_aligned},
     },
     ion::{
         IonResult,
         encoder::{
             encode::{
                 CHROM_SUMMARY_SIZE, EncodingConfig, SPEC_SUMMARY_SIZE, allow_compression_level,
-                encode_single_array, extract_chrom_summary, spec_summary_from_spectrum,
+                array_is_fixed_width_splittable, encode_single_array, extract_chrom_summary,
+                get_piece_bounds, spec_summary_from_spectrum, write_array_pieces,
             },
             utilities::{ContainerBuilder, DefaultCompressor},
+        },
+        extensions::{
+            EXTENSION_KIND_A3_SPEC_PIECE_BOUNDS, ExtensionLocation, ExtensionRecord,
+            write_extension_table,
         },
         format::{FILE_TRAILER, HEADER_SIZE},
         meta_groups::METADATA_GROUP_SIZE,
         utilities::EmitAttributes,
     },
-    mzml::structs::{BinaryDataArrayList, Chromatogram, MzML, Spectrum},
+    mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
 };
 
 fn spec_summary_bytes(spec: &Spectrum) -> [u8; SPEC_SUMMARY_SIZE] {
@@ -58,43 +65,139 @@ fn chrom_summary_bytes(chrom: &Chromatogram) -> [u8; CHROM_SUMMARY_SIZE] {
     buf
 }
 
+fn allow_split_for_item(
+    arrays: &[BinaryDataArray],
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+) -> IonResult<Option<PiecePlan>> {
+    let Some(x_array) = arrays
+        .iter()
+        .find(|bda| array_type_accession_from_binary_data_array(bda) == policy.x_array_accession)
+    else {
+        return Ok(None);
+    };
+
+    let Some((x_count, x_elem_bytes)) = array_is_fixed_width_splittable(x_array, config, policy)?
+    else {
+        return Ok(None);
+    };
+    if x_count == 0 {
+        return Ok(None);
+    }
+
+    for bda in arrays {
+        match array_is_fixed_width_splittable(bda, config, policy)? {
+            Some((count, _)) if count == x_count => {}
+            _ => return Ok(None),
+        }
+    }
+
+    let plan = get_piece_ranges(x_count, x_elem_bytes, config.target_piece_bytes);
+    let x_array_bytes = x_count * x_elem_bytes;
+    if !allow_split(x_array_bytes, config.min_split_bytes, &plan) {
+        return Ok(None);
+    }
+    Ok(Some(plan))
+}
+
+struct ArrayWriteState<'a> {
+    arefs: &'a mut ArrayRefTable,
+    cursor: &'a mut u64,
+    seen: &'a mut Vec<u32>,
+    piece_bounds: &'a mut PieceBoundsTable,
+}
+
+impl ArrayWriteState<'_> {
+    fn emit(&mut self, aref: &crate::ion::encoder::encode::EncodedArrayRef) -> IonResult<()> {
+        if aref.accession != 0 && !self.seen.contains(&aref.accession) {
+            self.seen.push(aref.accession);
+        }
+        self.arefs.push(
+            aref.element_offset,
+            aref.element_count,
+            aref.block_id,
+            aref.accession,
+            aref.dtype,
+            aref.array_filter,
+            aref.encoded_len,
+            aref.continues_previous,
+        )?;
+        *self.cursor += 1;
+        Ok(())
+    }
+}
+
+fn write_single_array(
+    bda: &BinaryDataArray,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    state: &mut ArrayWriteState<'_>,
+) -> IonResult<()> {
+    let Some(aref) = encode_single_array(bda, config, policy, container)? else {
+        return Ok(());
+    };
+    state.emit(&aref)
+}
+
+fn write_split_array(
+    bda: &BinaryDataArray,
+    config: EncodingConfig,
+    policy: ArrayPolicy,
+    plan: &PiecePlan,
+    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    state: &mut ArrayWriteState<'_>,
+) -> IonResult<()> {
+    let refs = write_array_pieces(bda, config, policy, plan, container)?;
+    let Some(first) = refs.first() else {
+        return Ok(());
+    };
+    let bounds = get_piece_bounds(bda, plan, first.dtype);
+    for (piece_index, aref) in refs.iter().enumerate() {
+        let ref_index = *state.cursor;
+        state.emit(aref)?;
+        if let Some(bounds) = bounds.as_ref() {
+            let (low, high) = bounds[piece_index];
+            state.piece_bounds.push(PieceBound {
+                a2_ref_index: ref_index,
+                low,
+                high,
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn encode_arrays_for<T>(
     item: &T,
     config: EncodingConfig,
     policy: ArrayPolicy,
+    allow_splitting: bool,
     container: &mut ContainerBuilder<'_, DefaultCompressor>,
     index: &mut IndexTable,
-    arefs: &mut ArrayRefTable,
-    cursor: &mut u64,
-    seen: &mut Vec<u32>,
+    state: &mut ArrayWriteState<'_>,
 ) -> IonResult<()>
 where
     T: HasArrayList,
 {
-    let aref_start = *cursor;
-    let mut aref_count: u64 = 0;
+    let aref_start = *state.cursor;
 
     if let Some(list) = item.array_list() {
+        let plan = if allow_splitting {
+            allow_split_for_item(&list.binary_data_arrays, config, policy)?
+        } else {
+            None
+        };
+
         for bda in &list.binary_data_arrays {
-            let Some(aref) = encode_single_array(bda, config, policy, container)? else {
-                continue;
-            };
-            if aref.accession != 0 && !seen.contains(&aref.accession) {
-                seen.push(aref.accession);
+            match plan.as_ref() {
+                Some(plan) => write_split_array(bda, config, policy, plan, container, state)?,
+                None => write_single_array(bda, config, policy, container, state)?,
             }
-            arefs.push(
-                aref.element_offset,
-                aref.element_count,
-                aref.block_id,
-                aref.accession,
-                aref.dtype,
-                aref.array_filter,
-                aref.encoded_len,
-            )?;
-            *cursor += 1;
-            aref_count += 1;
         }
     }
+
+    let aref_count = *state.cursor - aref_start;
     index.push(aref_start, aref_count)?;
     Ok(())
 }
@@ -120,6 +223,8 @@ struct ItemStream {
     index: IndexTable,
     arefs: ArrayRefTable,
     grouper: MetaGrouper,
+    piece_bounds: PieceBoundsTable,
+    allow_splitting: bool,
     count: usize,
     aref_cursor: u64,
     seen: Vec<u32>,
@@ -133,6 +238,7 @@ struct StreamParts {
     summary: SectionChunk,
     index: SectionChunk,
     arefs: SectionChunk,
+    piece_bounds: SectionChunk,
     count: usize,
     type_count: usize,
     container_offset: u64,
@@ -147,6 +253,7 @@ impl ItemStream {
         summary_size: usize,
         table_hint: usize,
         config: EncodingConfig,
+        allow_splitting: bool,
     ) -> IonResult<Self> {
         let mode = config.section_chunk;
         Ok(Self {
@@ -166,6 +273,12 @@ impl ItemStream {
                 config.compression_level,
                 make_chunk(mode, &format!("{tag}-meta"), 0)?,
             ),
+            piece_bounds: PieceBoundsTable::new(make_chunk(
+                mode,
+                &format!("{tag}-piece-bounds"),
+                0,
+            )?),
+            allow_splitting,
             count: 0,
             aref_cursor: 0,
             seen: Vec::with_capacity(8),
@@ -190,15 +303,20 @@ impl ItemStream {
         T: HasArrayList + MzmlListItem,
         L: EmitAttributes,
     {
+        let mut state = ArrayWriteState {
+            arefs: &mut self.arefs,
+            cursor: &mut self.aref_cursor,
+            seen: &mut self.seen,
+            piece_bounds: &mut self.piece_bounds,
+        };
         encode_arrays_for(
             item,
             config,
             policy,
+            self.allow_splitting,
             container,
             &mut self.index,
-            &mut self.arefs,
-            &mut self.aref_cursor,
-            &mut self.seen,
+            &mut state,
         )?;
         self.summary.push(summary)?;
         collector.add_item(
@@ -219,6 +337,7 @@ impl ItemStream {
             summary: self.summary.finish(),
             index: self.index.finish(),
             arefs: self.arefs.finish(),
+            piece_bounds: self.piece_bounds.finish(),
             count: self.count,
             type_count: self.seen.len(),
             container_offset: self.container_offset,
@@ -303,9 +422,9 @@ impl<'out> IonWriter<'out> {
         allow_compression_level(config.compression_level)?;
         output.write_bytes(&[0u8; HEADER_SIZE])?;
 
-        let mut collector = MetaCollector::new();
-        let spec_list_id = collector.alloc();
-        let chrom_list_id = collector.alloc();
+        let collector = MetaCollector::new();
+        let spec_list_id = LOCAL_LIST_NODE_ID;
+        let chrom_list_id = LOCAL_LIST_NODE_ID;
 
         Ok(Self {
             output,
@@ -313,8 +432,8 @@ impl<'out> IonWriter<'out> {
             collector,
             spec_list_id,
             chrom_list_id,
-            spec_stream: ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, config)?,
-            chrom_stream: ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, config)?,
+            spec_stream: ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, config, true)?,
+            chrom_stream: ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, config, false)?,
         })
     }
 
@@ -387,6 +506,37 @@ impl<'out> IonWriter<'out> {
         self.finish_inner(&metadata)
     }
 
+    fn write_extensions(
+        &mut self,
+        piece_bounds: SectionChunk,
+    ) -> IonResult<Option<ExtensionLocation>> {
+        if piece_bounds.len() == 0 {
+            return Ok(None);
+        }
+
+        let raw = piece_bounds.into_vec()?;
+        let plain_length = raw.len() as u64;
+        let stored = compress_bytes_if_enabled(raw, self.config.compression_level);
+        let checksum = crc32fast::hash(&stored);
+        let stored_length = stored.len() as u64;
+        let a3_offset = write_aligned(self.output, &stored)?;
+
+        let records = [ExtensionRecord {
+            kind: EXTENSION_KIND_A3_SPEC_PIECE_BOUNDS,
+            offset: a3_offset,
+            stored_length,
+            plain_length,
+            checksum,
+        }];
+        let table_bytes = write_extension_table(&records);
+        let table_offset = write_aligned(self.output, &table_bytes)?;
+
+        Ok(Some(ExtensionLocation {
+            offset: table_offset,
+            length: table_bytes.len() as u64,
+        }))
+    }
+
     fn finish_inner(&mut self, mzml: &MzML) -> IonResult<()> {
         let (global_meta, global_counts) = self.collector.collect_global_meta(mzml);
         let raw_global = serialize_global_meta_with_counts(&global_counts, &global_meta);
@@ -395,12 +545,12 @@ impl<'out> IonWriter<'out> {
 
         let spec = std::mem::replace(
             &mut self.spec_stream,
-            ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, self.config)?,
+            ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, self.config, true)?,
         )
         .finish()?;
         let chrom = std::mem::replace(
             &mut self.chrom_stream,
-            ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, self.config)?,
+            ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, self.config, false)?,
         )
         .finish()?;
 
@@ -426,6 +576,8 @@ impl<'out> IonWriter<'out> {
         let off_spec_meta = write_chunk(self.output, spec.grouped.section)?.0;
         let off_chrom_meta = write_chunk(self.output, chrom.grouped.section)?.0;
         let off_global_meta = write_aligned(self.output, &global_bytes)?;
+
+        let extensions = self.write_extensions(spec.piece_bounds)?;
 
         self.output.write_bytes(&FILE_TRAILER)?;
         let total_file_size = self.output.current_byte_position()?;
@@ -479,6 +631,8 @@ impl<'out> IonWriter<'out> {
             meta_group_size: METADATA_GROUP_SIZE,
             spec_meta_group_count: spec.grouped.group_count,
             chrom_meta_group_count: chrom.grouped.group_count,
+
+            extensions,
 
             off_spec_summary,
             len_spec_summary: spec_summary_len,

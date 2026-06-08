@@ -23,7 +23,10 @@ use ionic::{
     ion::{
         DecoderConfig, FileEncoderOutput, Ion, TempFile,
         encoder::{
-            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            encode::{
+                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_PIECE_BYTES, EncodingConfig,
+                TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            },
             ion_writer::{IonWriter, stream_to_ion},
             utilities::SectionChunkMode,
         },
@@ -155,6 +158,20 @@ struct ConvertArgs {
 
     #[arg(long = "section-chunk", value_enum, default_value_t = SectionChunkArg::Memory)]
     section_chunk: SectionChunkArg,
+
+    #[arg(
+        long = "target-piece-kb",
+        default_value_t = (DEFAULT_TARGET_PIECE_BYTES / 1024) as u32,
+        value_name = "KB"
+    )]
+    target_piece_kb: u32,
+
+    #[arg(
+        long = "min-split-kb",
+        default_value_t = (DEFAULT_MIN_SPLIT_BYTES / 1024) as u32,
+        value_name = "KB"
+    )]
+    min_split_kb: u32,
 
     #[command(flatten)]
     which: ConvertWhich,
@@ -664,6 +681,8 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
                 parallel: matches!(encoding, Encoding::Parallel),
                 section_chunk: cmd.section_chunk.mode(),
+                target_piece_bytes: cmd.target_piece_kb as usize * 1024,
+                min_split_bytes: cmd.min_split_kb as usize * 1024,
             };
             if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {
                 had_failed.store(true, Ordering::Relaxed);

@@ -1,0 +1,162 @@
+use std::sync::Arc;
+
+use crate::ion::{
+    IonError, IonResult,
+    decoder::utilities::{
+        byte_source::ByteSource,
+        common::decompress_zstd,
+        decompression_budget::DecompressionBudget,
+    },
+    extensions::{ExtensionRecord, PIECE_BOUND_SIZE},
+    format::{CODEC_NONE, CODEC_ZSTD},
+};
+
+pub(crate) struct PieceBound {
+    pub(crate) a2_ref_index: u64,
+    pub(crate) low: f64,
+    pub(crate) high: f64,
+}
+
+pub(crate) struct PieceBoundsIndex {
+    rows: Vec<PieceBound>,
+}
+
+impl PieceBoundsIndex {
+    pub(crate) fn get(&self, a2_ref_index: u64) -> Option<(f64, f64)> {
+        self.rows
+            .binary_search_by_key(&a2_ref_index, |row| row.a2_ref_index)
+            .ok()
+            .map(|index| {
+                let row = &self.rows[index];
+                (row.low, row.high)
+            })
+    }
+
+    pub(crate) fn load(
+        source: &Arc<dyn ByteSource>,
+        record: &ExtensionRecord,
+        spec_array_ref_count: u64,
+        compression_codec: u8,
+        budget: DecompressionBudget,
+    ) -> IonResult<Self> {
+        let plain_length = usize::try_from(record.plain_length)
+            .map_err(|_| IonError::from("piece bounds: plain_length overflow"))?;
+        if plain_length % PIECE_BOUND_SIZE != 0 {
+            return Err("piece bounds: plain_length not divisible by 24".into());
+        }
+
+        let stored = source.read(record.offset, record.stored_length)?;
+        if crc32fast::hash(&stored) != record.checksum {
+            return Err("piece bounds: checksum mismatch".into());
+        }
+
+        let plain = match compression_codec {
+            CODEC_NONE => {
+                if stored.len() != plain_length {
+                    return Err("piece bounds: stored length mismatch".into());
+                }
+                stored
+            }
+            CODEC_ZSTD => decompress_zstd(&stored, plain_length, budget)?,
+            other => return Err(format!("piece bounds: unsupported codec {other}").into()),
+        };
+
+        Self::from_bytes(&plain, spec_array_ref_count)
+    }
+
+    pub(crate) fn from_bytes(bytes: &[u8], spec_array_ref_count: u64) -> IonResult<Self> {
+        if !bytes.len().is_multiple_of(PIECE_BOUND_SIZE) {
+            return Err("piece bounds: plain_length not divisible by 24".into());
+        }
+
+        let row_count = bytes.len() / PIECE_BOUND_SIZE;
+        let mut rows: Vec<PieceBound> = Vec::with_capacity(row_count);
+
+        for i in 0..row_count {
+            let offset = i * PIECE_BOUND_SIZE;
+            let a2_ref_index = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+            let low = f64::from_le_bytes(bytes[offset + 8..offset + 16].try_into().unwrap());
+            let high = f64::from_le_bytes(bytes[offset + 16..offset + 24].try_into().unwrap());
+
+            if i > 0 && rows[i - 1].a2_ref_index >= a2_ref_index {
+                return Err("piece bounds: keys not strictly ascending".into());
+            }
+            if a2_ref_index >= spec_array_ref_count {
+                return Err("piece bounds: a2_ref_index out of range".into());
+            }
+            if !low.is_finite() || !high.is_finite() || low > high {
+                return Err("piece bounds: invalid low/high value".into());
+            }
+
+            rows.push(PieceBound {
+                a2_ref_index,
+                low,
+                high,
+            });
+        }
+
+        Ok(PieceBoundsIndex { rows })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row_bytes(a2_ref_index: u64, low: f64, high: f64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(PIECE_BOUND_SIZE);
+        buf.extend_from_slice(&a2_ref_index.to_le_bytes());
+        buf.extend_from_slice(&low.to_le_bytes());
+        buf.extend_from_slice(&high.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn from_bytes_parses_sorted_rows() {
+        let mut bytes = row_bytes(0, 100.0, 200.0);
+        bytes.extend(row_bytes(3, 200.0, 300.0));
+        let index = PieceBoundsIndex::from_bytes(&bytes, 4).unwrap();
+        assert_eq!(index.get(0), Some((100.0, 200.0)));
+        assert_eq!(index.get(3), Some((200.0, 300.0)));
+        assert_eq!(index.get(1), None);
+    }
+
+    #[test]
+    fn from_bytes_rejects_unaligned_length() {
+        let bytes = vec![0u8; 23];
+        assert!(PieceBoundsIndex::from_bytes(&bytes, 4).is_err());
+    }
+
+    #[test]
+    fn from_bytes_rejects_non_ascending_keys() {
+        let mut bytes = row_bytes(2, 1.0, 2.0);
+        bytes.extend(row_bytes(2, 3.0, 4.0));
+        assert!(PieceBoundsIndex::from_bytes(&bytes, 8).is_err());
+    }
+
+    #[test]
+    fn from_bytes_rejects_index_out_of_range() {
+        let bytes = row_bytes(5, 1.0, 2.0);
+        assert!(PieceBoundsIndex::from_bytes(&bytes, 5).is_err());
+    }
+
+    #[test]
+    fn from_bytes_rejects_low_above_high() {
+        let bytes = row_bytes(0, 9.0, 1.0);
+        assert!(PieceBoundsIndex::from_bytes(&bytes, 4).is_err());
+    }
+
+    #[test]
+    fn from_bytes_rejects_non_finite_values() {
+        let nan = row_bytes(0, f64::NAN, 1.0);
+        assert!(PieceBoundsIndex::from_bytes(&nan, 4).is_err());
+        let inf = row_bytes(0, 1.0, f64::INFINITY);
+        assert!(PieceBoundsIndex::from_bytes(&inf, 4).is_err());
+    }
+
+    #[test]
+    fn get_returns_none_on_empty() {
+        let index = PieceBoundsIndex::from_bytes(&[], 0).unwrap();
+        assert_eq!(index.get(0), None);
+    }
+}

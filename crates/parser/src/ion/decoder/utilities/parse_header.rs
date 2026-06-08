@@ -1,12 +1,15 @@
 use crate::ion::{
     IonResult,
+    extensions::ExtensionLocation,
     format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, allow_compression, allow_version},
 };
 
-const RESERVED_EXT_SIZE: usize = 632;
+const RESERVED_EXT_SIZE: usize = 616;
 const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
 
 pub const HEADER_FORMAT_VERSION_OFFSET: usize = 9;
+pub const HEADER_OFFSET_EXTENSIONS: usize = 376;
+pub const HEADER_LENGTH_EXTENSIONS: usize = 384;
 
 #[inline]
 pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
@@ -229,7 +232,20 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
             .unwrap(),
     );
 
-    let reserved_ext = <[u8; RESERVED_EXT_SIZE]>::try_from(&h[376..1008]).unwrap();
+    let ext_offset = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_OFFSET_EXTENSIONS..HEADER_OFFSET_EXTENSIONS + 8]).unwrap(),
+    );
+    let ext_length = u64::from_le_bytes(
+        <[u8; 8]>::try_from(&h[HEADER_LENGTH_EXTENSIONS..HEADER_LENGTH_EXTENSIONS + 8]).unwrap(),
+    );
+
+    let extensions = match (ext_offset, ext_length) {
+        (0, 0) => None,
+        (0, _) | (_, 0) => return Err("header: extension pointer must be both zero or both non-zero".into()),
+        (offset, length) => Some(ExtensionLocation { offset, length }),
+    };
+
+    let reserved_ext = <[u8; RESERVED_EXT_SIZE]>::try_from(&h[392..1008]).unwrap();
     if reserved_ext.iter().any(|&b| b != 0) {
         return Err("header: reserved_ext must be all zeros".into());
     }
@@ -298,6 +314,7 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         meta_group_size,
         spec_meta_group_count,
         chrom_meta_group_count,
+        extensions,
         reserved_ext,
         spec_meta_crc32,
         chrom_meta_crc32,
@@ -320,7 +337,7 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
     Ok(header)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Header {
     pub(crate) file_signature: [u8; 8],
     pub(crate) endianness_flag: u8,
@@ -373,6 +390,7 @@ pub(crate) struct Header {
     pub(crate) meta_group_size: u32,
     pub(crate) spec_meta_group_count: u64,
     pub(crate) chrom_meta_group_count: u64,
+    pub(crate) extensions: Option<ExtensionLocation>,
     pub(crate) reserved_ext: [u8; RESERVED_EXT_SIZE],
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
@@ -642,6 +660,56 @@ mod inline_tests {
     use super::*;
     use crate::ion::format::CURRENT_VERSION;
 
+    fn valid_header_bytes() -> [u8; HEADER_SIZE] {
+        let mut h = [0u8; HEADER_SIZE];
+        h[0..8].copy_from_slice(&FILE_SIGNATURE);
+        h[HEADER_FORMAT_VERSION_OFFSET..HEADER_FORMAT_VERSION_OFFSET + 2]
+            .copy_from_slice(&CURRENT_VERSION.to_le_bytes());
+        h
+    }
+
+    #[test]
+    fn valid_header_with_no_extensions_parses() {
+        let h = valid_header_bytes();
+        let header = parse_header(&h).unwrap();
+        assert!(header.extensions.is_none());
+    }
+
+    #[test]
+    fn both_set_extension_pointer_parses() {
+        let mut h = valid_header_bytes();
+        h[HEADER_OFFSET_EXTENSIONS..HEADER_OFFSET_EXTENSIONS + 8].copy_from_slice(&4096u64.to_le_bytes());
+        h[HEADER_LENGTH_EXTENSIONS..HEADER_LENGTH_EXTENSIONS + 8].copy_from_slice(&48u64.to_le_bytes());
+        let header = parse_header(&h).unwrap();
+        let location = header.extensions.unwrap();
+        assert_eq!(location.offset, 4096);
+        assert_eq!(location.length, 48);
+    }
+
+    #[test]
+    fn half_set_extension_pointer_is_rejected() {
+        let mut offset_only = valid_header_bytes();
+        offset_only[HEADER_OFFSET_EXTENSIONS..HEADER_OFFSET_EXTENSIONS + 8]
+            .copy_from_slice(&4096u64.to_le_bytes());
+        assert!(parse_header(&offset_only).is_err());
+
+        let mut length_only = valid_header_bytes();
+        length_only[HEADER_LENGTH_EXTENSIONS..HEADER_LENGTH_EXTENSIONS + 8]
+            .copy_from_slice(&48u64.to_le_bytes());
+        assert!(parse_header(&length_only).is_err());
+    }
+
+    #[test]
+    fn corrupt_reserved_area_is_rejected() {
+        let mut h = valid_header_bytes();
+        h[400] = 1;
+        assert!(parse_header(&h).is_err());
+
+        let mut at_end = valid_header_bytes();
+        at_end[1007] = 1;
+        assert!(parse_header(&at_end).is_err());
+    }
+
     #[test]
     fn get_version_returns_none_on_short_buffer() {
         let too_short = [0u8; HEADER_FORMAT_VERSION_OFFSET + 1];
@@ -721,6 +789,8 @@ mod inline_tests {
         assert_eq!(HEADER_META_GROUP_SIZE, 352);
         assert_eq!(HEADER_SPEC_META_GROUP_COUNT, 360);
         assert_eq!(HEADER_CHROM_META_GROUP_COUNT, 368);
+        assert_eq!(HEADER_OFFSET_EXTENSIONS, 376);
+        assert_eq!(HEADER_LENGTH_EXTENSIONS, 384);
         assert_eq!(HEADER_SPEC_META_CRC32, 1008);
         assert_eq!(HEADER_CHROM_META_CRC32, 1012);
         assert_eq!(HEADER_GLOBAL_META_CRC32, 1016);

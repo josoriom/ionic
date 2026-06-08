@@ -245,6 +245,30 @@ impl SectionChunk {
         }
     }
 
+    pub(crate) fn into_vec(self) -> IonResult<Vec<u8>> {
+        match self {
+            SectionChunk::Memory(buffer) => Ok(buffer),
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            SectionChunk::Disk(disk) => {
+                let DiskSectionChunk {
+                    writer,
+                    temp,
+                    len: _,
+                } = disk;
+                let mut file = writer
+                    .into_inner()
+                    .map_err(|err| IonError::from(format!("section chunk flush error: {err}")))?;
+                file.seek(SeekFrom::Start(0))
+                    .map_err(|err| IonError::from(format!("section chunk seek error: {err}")))?;
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer)
+                    .map_err(|err| IonError::from(format!("section chunk read error: {err}")))?;
+                drop(temp);
+                Ok(buffer)
+            }
+        }
+    }
+
     pub(crate) fn copy_into(self, output: &mut dyn EncoderOutput) -> IonResult<u64> {
         let position = output.current_byte_position()?;
         let aligned = (position + 7) & !7;

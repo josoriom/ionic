@@ -23,6 +23,9 @@ use crate::{
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, parse_accession_tail,
         },
+        extensions::{
+            EXTENSION_KIND_A3_SPEC_PIECE_BOUNDS, ExtensionTable, read_extension_table,
+        },
         decoder::async_reader::AsyncReader,
         decoder::utilities::byte_source::{
             AsyncByteSource, ByteSource, Query, QueryCallbackSource, QueryPromise, QueryPayload,
@@ -47,6 +50,7 @@ use crate::{
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
             parse_header::{Header, parse_header},
+            piece_bounds::PieceBoundsIndex,
             parse_instrument_list, parse_referenceable_param_group_list, parse_sample_list,
             parse_scan_settings_list, parse_software_list, parse_spectrum, parse_spectrum_list,
             spectrum_source::{
@@ -148,6 +152,15 @@ pub struct ArrayRef {
     pub dtype: u8,
     pub array_filter: u8,
     pub encoded_len: u32,
+    pub continues_previous: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArrayGroup {
+    pub array_type: u32,
+    pub dtype: u8,
+    pub array_filter: u8,
+    pub refs: Vec<ArrayRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,8 +182,17 @@ impl Default for DecoderConfig {
     }
 }
 
+enum PieceBoundsCache {
+    Unloaded,
+    Absent,
+    Loaded(PieceBoundsIndex),
+}
+
 pub struct Decoder {
     header: Header,
+    source: Arc<dyn ByteSource>,
+    extension_table: Option<ExtensionTable>,
+    spec_piece_bounds: PieceBoundsCache,
     spec_summary_buf: Arc<[u8]>,
     chrom_summary_buf: Arc<[u8]>,
     spec_entries_buf: Arc<[u8]>,
@@ -186,6 +208,27 @@ pub struct Decoder {
     int_values: Vec<f64>,
     parallel: bool,
     decompression_budget: DecompressionBudget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayWindow {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+}
+
+impl ArrayWindow {
+    fn empty() -> Self {
+        Self {
+            x: Vec::new(),
+            y: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpectrumWindow {
+    pub mz: Vec<f64>,
+    pub intensity: Vec<f64>,
 }
 
 impl Decoder {
@@ -211,6 +254,14 @@ impl Decoder {
         let header_buf = source.read(0, 1024)?;
         let header = parse_header(&header_buf)?;
         let block_packing_id = PackingId::from_byte(header.default_array_filter)?;
+
+        let extension_table = match &header.extensions {
+            Some(location) => {
+                let table_bytes = source.read(location.offset, location.length)?;
+                read_extension_table(&table_bytes).ok()
+            }
+            None => None,
+        };
 
         let spec_summary_buf = source.read(header.off_spec_summary, header.len_spec_summary)?;
         let chrom_summary_buf = source.read(header.off_chrom_summary, header.len_chrom_summary)?;
@@ -290,6 +341,9 @@ impl Decoder {
 
         Ok(Self {
             header,
+            source,
+            extension_table,
+            spec_piece_bounds: PieceBoundsCache::Unloaded,
             spec_summary_buf: Arc::from(spec_summary_buf),
             chrom_summary_buf: Arc::from(chrom_summary_buf),
             spec_entries_buf: Arc::from(spec_entries_buf),
@@ -462,6 +516,20 @@ impl Decoder {
         decode_into(out, raw, array_ref.dtype, array_ref.array_filter)
     }
 
+    fn read_group_values(&mut self, group: &ArrayGroup, out: &mut Vec<f64>) -> IonResult<()> {
+        let Some((first, rest)) = group.refs.split_first() else {
+            out.clear();
+            return Ok(());
+        };
+        self.read_spectrum_array(first, out)?;
+        let mut piece = Vec::new();
+        for array_ref in rest {
+            self.read_spectrum_array(array_ref, &mut piece)?;
+            out.extend_from_slice(&piece);
+        }
+        Ok(())
+    }
+
     pub(crate) fn global_metadata(&self) -> IonResult<Vec<Metadatum>> {
         parse_global_metadata(
             &self.global_meta_buf,
@@ -511,24 +579,288 @@ impl Decoder {
         if let Some(array_refs) =
             read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, index)
         {
+            let groups = group_arrays(array_refs.as_slice())?;
             let bd_list = spectrum
                 .binary_data_array_list
                 .get_or_insert_with(BinaryDataArrayList::default);
-            for array_ref in array_refs.as_slice() {
-                let (eo, count, stride) = aref_read_params(array_ref);
-                let raw = self.spec_container.get_array_bytes_from_block(
-                    array_ref.block_id,
-                    eo,
-                    count,
-                    stride,
-                    "spectrum_at",
-                )?;
-                attach_array(bd_list, array_ref.array_type, array_ref.dtype, raw, array_ref.array_filter)?;
+            for group in groups {
+                let decoded = read_group_decoded_bytes(&group, &mut self.spec_container)?;
+                attach_logical_array(bd_list, group.array_type, group.dtype, &decoded)?;
             }
             bd_list.count = Some(bd_list.binary_data_arrays.len());
         }
         Ok(Some(spectrum))
     }
+
+    pub fn read_spectrum_logical_array(
+        &mut self,
+        spectrum_index: usize,
+        array_type: u32,
+    ) -> IonResult<Vec<f64>> {
+        if spectrum_index >= self.header.spectrum_count as usize {
+            return Err("spectrum index out of range".into());
+        }
+
+        let Some(array_refs) =
+            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, spectrum_index)
+        else {
+            return Ok(Vec::new());
+        };
+
+        let groups = group_arrays(array_refs.as_slice())?;
+
+        for group in groups {
+            if group.array_type != array_type {
+                continue;
+            }
+
+            let mut values = Vec::new();
+            self.read_group_values(&group, &mut values)?;
+            return Ok(values);
+        }
+
+        Ok(Vec::new())
+    }
+
+    pub fn read_spectrum_window(
+        &mut self,
+        index: usize,
+        x_array_accession: u32,
+        y_array_accession: u32,
+        low: f64,
+        high: f64,
+    ) -> IonResult<ArrayWindow> {
+        self.read_spectrum_window_inner(index, x_array_accession, y_array_accession, low, high)
+    }
+
+    pub fn read_spectrum_mz_window(
+        &mut self,
+        index: usize,
+        low: f64,
+        high: f64,
+    ) -> IonResult<SpectrumWindow> {
+        let window = self.read_spectrum_window(
+            index,
+            crate::accessions::MZ_ARRAY,
+            ACC_INT,
+            low,
+            high,
+        )?;
+
+        Ok(SpectrumWindow {
+            mz: window.x,
+            intensity: window.y,
+        })
+    }
+
+    fn read_spectrum_window_inner(
+        &mut self,
+        index: usize,
+        x_array_accession: u32,
+        y_array_accession: u32,
+        low: f64,
+        high: f64,
+    ) -> IonResult<ArrayWindow> {
+        if index >= self.header.spectrum_count as usize {
+            return Err("spectrum index out of range".into());
+        }
+
+        if low > high {
+            return Ok(ArrayWindow::empty());
+        }
+
+        let Some(array_refs) =
+            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, index)
+        else {
+            return Ok(ArrayWindow::empty());
+        };
+        let Some(ref_start) = array_ref_start_for_item(&self.spec_entries_buf, index) else {
+            return Ok(ArrayWindow::empty());
+        };
+
+        let groups = group_arrays(array_refs.as_slice())?;
+
+        let mut x_group = None;
+        let mut y_group = None;
+        let mut position = 0u64;
+        for group in &groups {
+            if group.array_type == x_array_accession && x_group.is_none() {
+                x_group = Some((position, group));
+            } else if group.array_type == y_array_accession && y_group.is_none() {
+                y_group = Some((position, group));
+            }
+            position += group.refs.len() as u64;
+        }
+
+        let (Some((x_position, x_group)), Some((_, y_group))) =
+            (x_group, y_group)
+        else {
+            return Ok(ArrayWindow::empty());
+        };
+
+        if x_group.refs.len() == y_group.refs.len() {
+            self.ensure_spec_piece_bounds();
+            if let Some(window) = self.try_fast_window(
+                ref_start + x_position,
+                x_group,
+                y_group,
+                low,
+                high,
+            )? {
+                return Ok(window);
+            }
+        }
+
+        self.read_full_window(x_group, y_group, low, high)
+    }
+
+    fn try_fast_window(
+        &mut self,
+        x_ref_base: u64,
+        x_group: &ArrayGroup,
+        y_group: &ArrayGroup,
+        low: f64,
+        high: f64,
+    ) -> IonResult<Option<ArrayWindow>> {
+        let kept_pieces = {
+            let PieceBoundsCache::Loaded(bounds) = &self.spec_piece_bounds else {
+                return Ok(None);
+            };
+            let mut kept = Vec::with_capacity(x_group.refs.len());
+            for piece_index in 0..x_group.refs.len() {
+                let global_ref_index = x_ref_base + piece_index as u64;
+                let Some((piece_low, piece_high)) = bounds.get(global_ref_index) else {
+                    return Ok(None);
+                };
+                let overlaps_window = piece_low <= high && piece_high >= low;
+                if overlaps_window {
+                    kept.push(piece_index);
+                }
+            }
+            kept
+        };
+
+        let mut x_out = Vec::new();
+        let mut y_out = Vec::new();
+        let mut x_piece = Vec::new();
+        let mut y_piece = Vec::new();
+        for piece_index in kept_pieces {
+            self.read_spectrum_array(&x_group.refs[piece_index], &mut x_piece)?;
+            self.read_spectrum_array(&y_group.refs[piece_index], &mut y_piece)?;
+            keep_pairs_in_range_sorted(
+                &x_piece,
+                &y_piece,
+                low,
+                high,
+                &mut x_out,
+                &mut y_out,
+            );
+        }
+
+        Ok(Some(ArrayWindow {
+            x: x_out,
+            y: y_out,
+        }))
+    }
+
+    fn read_full_window(
+        &mut self,
+        x_group: &ArrayGroup,
+        y_group: &ArrayGroup,
+        low: f64,
+        high: f64,
+    ) -> IonResult<ArrayWindow> {
+        let mut x = Vec::new();
+        let mut y = Vec::new();
+        self.read_group_values(x_group, &mut x)?;
+        self.read_group_values(y_group, &mut y)?;
+
+        let mut x_out = Vec::new();
+        let mut y_out = Vec::new();
+        keep_pairs_in_range(&x, &y, low, high, &mut x_out, &mut y_out);
+        Ok(ArrayWindow {
+            x: x_out,
+            y: y_out,
+        })
+    }
+
+    fn ensure_spec_piece_bounds(&mut self) {
+        if !matches!(self.spec_piece_bounds, PieceBoundsCache::Unloaded) {
+            return;
+        }
+        self.spec_piece_bounds = match self.load_spec_piece_bounds() {
+            Some(index) => PieceBoundsCache::Loaded(index),
+            None => PieceBoundsCache::Absent,
+        };
+    }
+
+    fn load_spec_piece_bounds(&self) -> Option<PieceBoundsIndex> {
+        let record = self
+            .extension_table
+            .as_ref()?
+            .get(EXTENSION_KIND_A3_SPEC_PIECE_BOUNDS)?;
+        let spec_array_ref_count = self.spec_array_refs.len() as u64 / ARRAY_REF_BYTES as u64;
+        PieceBoundsIndex::load(
+            &self.source,
+            record,
+            spec_array_ref_count,
+            self.header.compression_codec,
+            self.decompression_budget,
+        )
+        .ok()
+    }
+}
+
+fn slice_is_non_decreasing(values: &[f64]) -> bool {
+    values.windows(2).all(|pair| pair[0] <= pair[1])
+}
+
+fn keep_pairs_in_range_sorted(
+    x: &[f64],
+    y: &[f64],
+    low: f64,
+    high: f64,
+    x_out: &mut Vec<f64>,
+    y_out: &mut Vec<f64>,
+) {
+    let paired = x.len().min(y.len());
+    let x = &x[..paired];
+    let y = &y[..paired];
+    let start = x.partition_point(|&value| value < low);
+    let end = x.partition_point(|&value| value <= high);
+    x_out.extend_from_slice(&x[start..end]);
+    y_out.extend_from_slice(&y[start..end]);
+}
+
+fn keep_pairs_in_range(
+    x: &[f64],
+    y: &[f64],
+    low: f64,
+    high: f64,
+    x_out: &mut Vec<f64>,
+    y_out: &mut Vec<f64>,
+) {
+    let paired = x.len().min(y.len());
+    let x = &x[..paired];
+    let y = &y[..paired];
+
+    if slice_is_non_decreasing(x) {
+        keep_pairs_in_range_sorted(x, y, low, high, x_out, y_out);
+        return;
+    }
+    for (position, &value) in x.iter().enumerate() {
+        if value >= low && value <= high {
+            x_out.push(value);
+            y_out.push(y[position]);
+        }
+    }
+}
+
+fn array_ref_start_for_item(entries_buf: &[u8], index: usize) -> Option<u64> {
+    let entry_offset = index.checked_mul(INDEX_ENTRY_BYTES)?;
+    let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
+    let entry = entries_buf.get(entry_offset..entry_end)?;
+    Some(u64::from_le_bytes(entry[0..8].try_into().unwrap()))
 }
 
 fn build_one_spectrum(rows: &[Metadatum], fallback_index: usize) -> Option<Spectrum> {
@@ -820,6 +1152,57 @@ impl Ion {
                 )
             })
             .and_then(|d| d.read_chromatogram_array(array_ref, out))
+    }
+
+    pub fn read_spectrum_window(
+        &mut self,
+        index: usize,
+        x_array_accession: u32,
+        y_array_accession: u32,
+        low: f64,
+        high: f64,
+    ) -> IonResult<ArrayWindow> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| {
+                IonError::from(
+                    "read_spectrum_window needs a sync source; for an async-backed Ion use the decoder directly",
+                )
+            })
+            .and_then(|d| {
+                d.read_spectrum_window(index, x_array_accession, y_array_accession, low, high)
+            })
+    }
+
+    pub fn read_spectrum_mz_window(
+        &mut self,
+        index: usize,
+        low: f64,
+        high: f64,
+    ) -> IonResult<SpectrumWindow> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| {
+                IonError::from(
+                    "read_spectrum_mz_window needs a sync source; for an async-backed Ion use the decoder directly",
+                )
+            })
+            .and_then(|d| d.read_spectrum_mz_window(index, low, high))
+    }
+
+    pub fn read_spectrum_logical_array(
+        &mut self,
+        index: usize,
+        array_type: u32,
+    ) -> IonResult<Vec<f64>> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| {
+                IonError::from(
+                    "read_spectrum_logical_array needs a sync source; for an async-backed Ion use the decoder directly",
+                )
+            })
+            .and_then(|d| d.read_spectrum_logical_array(index, array_type))
     }
 
     pub async fn read_spectrum_array_async(
@@ -1562,8 +1945,103 @@ fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
         dtype: bytes[24],
         array_filter: bytes[25],
         encoded_len: u32::from_le_bytes(bytes[26..30].try_into().unwrap()),
+        continues_previous: bytes[30],
     }
 }
+
+pub(crate) fn group_arrays(refs: &[ArrayRef]) -> IonResult<Vec<ArrayGroup>> {
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if refs[0].continues_previous != 0 {
+        return Err("array grouping: first ref must have continues_previous = 0".into());
+    }
+
+    let mut groups = Vec::new();
+    let mut current_group_refs = Vec::new();
+    let mut current_type = refs[0].array_type;
+    let mut current_dtype = refs[0].dtype;
+    let mut current_filter = refs[0].array_filter;
+
+    for aref in refs {
+        if aref.continues_previous != 0 && aref.continues_previous != 1 {
+            return Err(format!(
+                "array grouping: invalid continues_previous value {}, must be 0 or 1",
+                aref.continues_previous
+            )
+            .into());
+        }
+
+        if aref.continues_previous == 0 {
+            if !current_group_refs.is_empty() {
+                groups.push(ArrayGroup {
+                    array_type: current_type,
+                    dtype: current_dtype,
+                    array_filter: current_filter,
+                    refs: current_group_refs,
+                });
+                current_group_refs = Vec::new();
+            }
+            current_type = aref.array_type;
+            current_dtype = aref.dtype;
+            current_filter = aref.array_filter;
+        } else if aref.array_type != current_type || aref.dtype != current_dtype || aref.array_filter != current_filter {
+            return Err(
+                "array grouping: continuation ref has different array_type, dtype, or filter".into()
+            );
+        }
+
+        current_group_refs.push(*aref);
+    }
+
+    if !current_group_refs.is_empty() {
+        groups.push(ArrayGroup {
+            array_type: current_type,
+            dtype: current_dtype,
+            array_filter: current_filter,
+            refs: current_group_refs,
+        });
+    }
+
+    for group in &groups {
+        if group.refs.len() > 1 {
+            for aref in &group.refs {
+                if aref.encoded_len > 0 {
+                    return Err(
+                        "array grouping: multi-ref group cannot contain variable-length arrays"
+                            .into(),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(groups)
+}
+
+pub(crate) fn read_group_decoded_bytes(
+    group: &ArrayGroup,
+    container: &mut ContainerView<DefaultBlockProcessor>,
+) -> IonResult<Vec<u8>> {
+    let mut decoded = Vec::new();
+
+    for array_ref in &group.refs {
+        let (element_offset, count, stride) = aref_read_params(array_ref);
+        let raw = container.get_array_bytes_from_block(
+            array_ref.block_id,
+            element_offset,
+            count,
+            stride,
+            "read_group_decoded_bytes",
+        )?;
+        let unfiltered = unfilter_array_bytes(raw, group.dtype, group.array_filter)?;
+        decoded.extend_from_slice(&unfiltered);
+    }
+
+    Ok(decoded)
+}
+
 
 #[inline]
 fn aref_read_params(array_ref: &ArrayRef) -> (u64, u64, usize) {
@@ -1807,44 +2285,53 @@ fn attach_binaries<E: BinaryArrayOwner>(
         .collect();
 
     for (index, item_refs) in refs {
+        let groups = group_arrays(item_refs.as_slice())?;
         let list = entries[index]
             .binary_data_array_list_mut()
             .get_or_insert_with(BinaryDataArrayList::default);
-        for array_ref in item_refs.as_slice() {
-            let block = data
-                .get(&array_ref.block_id)
-                .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", array_ref.block_id)))?;
-            let (start, end) = {
-                let (element_offset, count, stride) = aref_read_params(array_ref);
-                let s = usize::try_from(element_offset)
-                    .ok()
-                    .and_then(|offset| offset.checked_mul(stride))
-                    .ok_or_else(|| {
-                        IonError::from(format!(
-                            "{ctx}: item range overflow for block {}",
-                            array_ref.block_id
-                        ))
-                    })?;
-                let e = usize::try_from(count)
-                    .ok()
-                    .and_then(|c| c.checked_mul(stride))
-                    .and_then(|len| s.checked_add(len))
-                    .ok_or_else(|| {
-                        IonError::from(format!(
-                            "{ctx}: item range overflow for block {}",
-                            array_ref.block_id
-                        ))
-                    })?;
-                (s, e)
-            };
-            let raw = block.get(start..end).ok_or_else(|| {
-                IonError::from(format!(
-                    "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
-                    array_ref.block_id,
-                    block.len()
-                ))
-            })?;
-            attach_array(list, array_ref.array_type, array_ref.dtype, raw, array_ref.array_filter)?;
+
+        for group in groups {
+            let mut concatenated = Vec::new();
+
+            for array_ref in &group.refs {
+                let block = data
+                    .get(&array_ref.block_id)
+                    .ok_or_else(|| IonError::from(format!("{ctx}: missing block {}", array_ref.block_id)))?;
+                let (start, end) = {
+                    let (element_offset, count, stride) = aref_read_params(array_ref);
+                    let s = usize::try_from(element_offset)
+                        .ok()
+                        .and_then(|offset| offset.checked_mul(stride))
+                        .ok_or_else(|| {
+                            IonError::from(format!(
+                                "{ctx}: item range overflow for block {}",
+                                array_ref.block_id
+                            ))
+                        })?;
+                    let e = usize::try_from(count)
+                        .ok()
+                        .and_then(|c| c.checked_mul(stride))
+                        .and_then(|len| s.checked_add(len))
+                        .ok_or_else(|| {
+                            IonError::from(format!(
+                                "{ctx}: item range overflow for block {}",
+                                array_ref.block_id
+                            ))
+                        })?;
+                    (s, e)
+                };
+                let raw = block.get(start..end).ok_or_else(|| {
+                    IonError::from(format!(
+                        "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
+                        array_ref.block_id,
+                        block.len()
+                    ))
+                })?;
+                let unfiltered = unfilter_array_bytes(raw, group.dtype, group.array_filter)?;
+                concatenated.extend_from_slice(&unfiltered);
+            }
+
+            attach_logical_array(list, group.array_type, group.dtype, &concatenated)?;
         }
         list.count = Some(list.binary_data_arrays.len());
     }
@@ -1852,28 +2339,29 @@ fn attach_binaries<E: BinaryArrayOwner>(
     Ok(())
 }
 
-fn attach_array(
+fn attach_logical_array(
     binary_array_list: &mut BinaryDataArrayList,
     array_type: u32,
     dtype: u8,
-    raw: &[u8],
-    array_filter: u8,
+    decoded_bytes: &[u8],
 ) -> IonResult<()> {
-    let binary = raw_to_binary_data(raw, dtype, array_filter)?;
+    let binary = decoded_bytes_to_binary_data(decoded_bytes, dtype)?;
     let numeric_type = dtype_to_numeric_type(dtype)?;
-    let found = binary_array_list
+
+    let empty_index = binary_array_list
         .binary_data_arrays
-        .iter_mut()
-        .find(|array| binary_array_has_type(array, array_type));
-    let binary_array = match found {
-        Some(existing) => existing,
-        None => {
-            binary_array_list
-                .binary_data_arrays
-                .push(make_binary_array_stub(array_type));
-            binary_array_list.binary_data_arrays.last_mut().unwrap()
-        }
+        .iter()
+        .position(|array| binary_array_has_type(array, array_type) && array.binary.is_none());
+
+    let binary_array = if let Some(index) = empty_index {
+        &mut binary_array_list.binary_data_arrays[index]
+    } else {
+        binary_array_list
+            .binary_data_arrays
+            .push(make_binary_array_stub(array_type));
+        binary_array_list.binary_data_arrays.last_mut().unwrap()
     };
+
     binary_array.binary = Some(binary);
     sync_numeric_meta(binary_array, numeric_type);
     Ok(())
@@ -1891,25 +2379,24 @@ fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> Ion
     Ok(out)
 }
 
-fn raw_to_binary_data(raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<BinaryData> {
-    let bytes = unfilter_array_bytes(raw, dtype, array_filter)?;
+fn decoded_bytes_to_binary_data(bytes: &[u8], dtype: u8) -> IonResult<BinaryData> {
     match dtype {
-        FILE_DTYPE_F64 => Ok(BinaryData::F64(raw_to_vec(&bytes, 8, |c| {
+        FILE_DTYPE_F64 => Ok(BinaryData::F64(raw_to_vec(bytes, 8, |c| {
             f64::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(&bytes, 4, |c| {
+        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(bytes, 4, |c| {
             f32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(&bytes, 2, |c| {
+        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(bytes, 2, |c| {
             u16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(&bytes, 2, |c| {
+        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(bytes, 2, |c| {
             i16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(&bytes, 4, |c| {
+        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(bytes, 4, |c| {
             i32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(&bytes, 8, |c| {
+        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(bytes, 8, |c| {
             i64::from_le_bytes(c.try_into().unwrap())
         })?)),
         _ => Err(IonError::from(format!(
@@ -2035,6 +2522,72 @@ mod tests {
     use crate::ion::encoder::utilities::SectionChunkMode;
 
     const BYTES: &[u8] = include_bytes!("../../../data/ion/test.ion");
+
+    fn ref_with(array_type: u32, continues_previous: u8, encoded_len: u32) -> ArrayRef {
+        ArrayRef {
+            block_id: 0,
+            element_offset: 0,
+            element_count: 4,
+            array_type,
+            dtype: FILE_DTYPE_F64,
+            array_filter: 0,
+            encoded_len,
+            continues_previous,
+        }
+    }
+
+    #[test]
+    fn group_arrays_keeps_same_accession_logical_arrays_separate() {
+        let refs = [ref_with(1000514, 0, 0), ref_with(1000514, 0, 0)];
+        let groups = group_arrays(&refs).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].refs.len(), 1);
+        assert_eq!(groups[1].refs.len(), 1);
+    }
+
+    #[test]
+    fn group_arrays_joins_continuation_pieces_into_one_group() {
+        let refs = [ref_with(1000514, 0, 0), ref_with(1000514, 1, 0)];
+        let groups = group_arrays(&refs).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].refs.len(), 2);
+    }
+
+    #[test]
+    fn group_arrays_errors_on_leading_continuation() {
+        let refs = [ref_with(1000514, 1, 0)];
+        assert!(group_arrays(&refs).is_err());
+    }
+
+    #[test]
+    fn group_arrays_errors_on_invalid_continues_value() {
+        let refs = [ref_with(1000514, 0, 0), ref_with(1000514, 2, 0)];
+        assert!(group_arrays(&refs).is_err());
+    }
+
+    #[test]
+    fn group_arrays_errors_on_multi_ref_variable_length() {
+        let refs = [ref_with(1000514, 0, 8), ref_with(1000514, 1, 8)];
+        assert!(group_arrays(&refs).is_err());
+    }
+
+    #[test]
+    fn group_arrays_errors_on_type_mismatch_in_continuation() {
+        let mut second = ref_with(1000514, 1, 0);
+        second.array_type = 1000515;
+        let refs = [ref_with(1000514, 0, 0), second];
+        assert!(group_arrays(&refs).is_err());
+    }
+
+    #[test]
+    fn new_reader_opens_old_fixture_with_no_extensions() {
+        let decoder = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
+        assert!(decoder.header.extensions.is_none());
+        assert!(matches!(
+            decoder.spec_piece_bounds,
+            PieceBoundsCache::Unloaded
+        ));
+    }
 
     #[test]
     fn spectrum_at_lazy_matches_full_conversion() {
@@ -2378,6 +2931,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
                 section_chunk: SectionChunkMode::Memory,
+                target_piece_bytes: 128 * 1024,
+                min_split_bytes: 512 * 1024,
             },
             &mut encoded,
         )
@@ -2494,6 +3049,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
                 section_chunk: SectionChunkMode::Memory,
+                target_piece_bytes: 128 * 1024,
+                min_split_bytes: 512 * 1024,
             },
             &mut encoded,
         )
@@ -2605,6 +3162,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: false,
                 section_chunk: SectionChunkMode::Memory,
+                target_piece_bytes: 128 * 1024,
+                min_split_bytes: 512 * 1024,
             },
             &mut encoded,
         )
@@ -2652,4 +3211,475 @@ mod tests {
         assert_eq!(mz_vec, &mz_data);
         assert_eq!(int_vec, &int_data);
     }
+
+    fn make_split_bda(accession: &str, name: &str, data: Vec<f64>) -> crate::mzml::structs::BinaryDataArray {
+        use crate::mzml::structs::{BinaryData, BinaryDataArray, CvParam};
+        BinaryDataArray {
+            cv_params: vec![CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some(accession.to_string()),
+                name: name.to_string(),
+                value: None,
+                unit_cv_ref: None,
+                unit_name: None,
+                unit_accession: None,
+            }],
+            binary: Some(BinaryData::F64(data)),
+            ..Default::default()
+        }
+    }
+
+    fn encode_one_spectrum_with_split(
+        mz: Vec<f64>,
+        int: Vec<f64>,
+        target_piece_bytes: usize,
+        min_split_bytes: usize,
+    ) -> Vec<u8> {
+        use crate::ion::encoder::utilities::encoder_output::SectionChunkMode;
+        encode_one_spectrum_with_split_mode(
+            mz,
+            int,
+            target_piece_bytes,
+            min_split_bytes,
+            SectionChunkMode::Memory,
+        )
+    }
+
+    fn encode_one_spectrum_with_split_mode(
+        mz: Vec<f64>,
+        int: Vec<f64>,
+        target_piece_bytes: usize,
+        min_split_bytes: usize,
+        mode: crate::ion::encoder::utilities::encoder_output::SectionChunkMode,
+    ) -> Vec<u8> {
+        use crate::ion::encoder::{
+            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            ion_writer::write_mzml_to_ion,
+        };
+        use crate::mzml::structs::{BinaryDataArrayList, MzML, Run, Spectrum, SpectrumList};
+
+        let spectrum = Spectrum {
+            id: "split_ms1".to_string(),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![
+                    make_split_bda("MS:1000514", "m/z array", mz),
+                    make_split_bda("MS:1000515", "intensity array", int),
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        write_mzml_to_ion(
+            &mzml_in,
+            EncodingConfig {
+                compression_level: 3,
+                force_f32: false,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: true,
+                section_chunk: mode,
+                target_piece_bytes,
+                min_split_bytes,
+            },
+            &mut encoded,
+        )
+        .unwrap();
+        encoded
+    }
+
+    #[test]
+    fn split_mz_array_roundtrips_through_to_mzml() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| (i % 1000) as f64).collect();
+
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.header.extensions.is_some(), "A3 extension must be present");
+        assert!(
+            decoder.header.spec_block_count >= 4,
+            "splitting must produce several piece blocks, got {}",
+            decoder.header.spec_block_count
+        );
+
+        let mzml_out = decoder.to_mzml().unwrap();
+        let spectra = mzml_out.run.spectrum_list.unwrap().spectra;
+        assert_eq!(spectra.len(), 1);
+
+        let arrays = &spectra[0].binary_data_array_list.as_ref().unwrap().binary_data_arrays;
+        let mz_arrays: Vec<_> = arrays
+            .iter()
+            .filter(|a| a.cv_params.iter().any(|cv| cv.accession.as_deref() == Some("MS:1000514")))
+            .collect();
+        assert_eq!(mz_arrays.len(), 1, "split pieces must reconstruct one logical m/z array");
+
+        let BinaryData::F64(mz_out) = mz_arrays[0].binary.as_ref().unwrap() else {
+            panic!("expected F64 mz");
+        };
+        assert_eq!(mz_out, &mz);
+    }
+
+    #[test]
+    fn split_mz_array_roundtrips_through_spectrum_at() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| (i % 777) as f64).collect();
+
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let spectrum = decoder.spectrum_at(0).unwrap().unwrap();
+        let arrays = &spectrum.binary_data_array_list.as_ref().unwrap().binary_data_arrays;
+
+        let mz_arrays: Vec<_> = arrays
+            .iter()
+            .filter(|a| a.cv_params.iter().any(|cv| cv.accession.as_deref() == Some("MS:1000514")))
+            .collect();
+        assert_eq!(mz_arrays.len(), 1);
+        let BinaryData::F64(mz_out) = mz_arrays[0].binary.as_ref().unwrap() else {
+            panic!("expected F64 mz");
+        };
+        assert_eq!(mz_out, &mz);
+
+        let int_arrays: Vec<_> = arrays
+            .iter()
+            .filter(|a| a.cv_params.iter().any(|cv| cv.accession.as_deref() == Some("MS:1000515")))
+            .collect();
+        assert_eq!(int_arrays.len(), 1);
+        let BinaryData::F64(int_out) = int_arrays[0].binary.as_ref().unwrap() else {
+            panic!("expected F64 intensity");
+        };
+        assert_eq!(int_out, &int);
+    }
+
+    #[test]
+    fn read_spectrum_logical_array_joins_split_pieces() {
+        let n = 40_000;
+        let mz: Vec<f64> = (0..n).map(|i| 200.0 + i as f64 * 0.002).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 32 * 1024, 64 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mz_out = decoder
+            .read_spectrum_logical_array(0, crate::accessions::MZ_ARRAY)
+            .unwrap();
+        assert_eq!(mz_out, mz);
+    }
+
+    #[test]
+    fn centroided_small_arrays_emit_no_extension() {
+        let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
+        let int: Vec<f64> = (0..10).map(|i| i as f64).collect();
+
+        let encoded = encode_one_spectrum_with_split(mz, int, 128 * 1024, 512 * 1024);
+
+        let decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.header.extensions.is_none(), "small arrays must not split");
+    }
+
+    #[test]
+    fn split_mz_array_roundtrips_with_disk_staged_bounds() {
+        use crate::ion::encoder::utilities::encoder_output::SectionChunkMode;
+
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| (i % 1000) as f64).collect();
+
+        let encoded = encode_one_spectrum_with_split_mode(
+            mz.clone(),
+            int.clone(),
+            64 * 1024,
+            128 * 1024,
+            SectionChunkMode::Disk,
+        );
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.header.extensions.is_some());
+
+        let mz_out = decoder
+            .read_spectrum_logical_array(0, crate::accessions::MZ_ARRAY)
+            .unwrap();
+        assert_eq!(mz_out, mz);
+    }
+
+    fn brute_force_window(mz: &[f64], int: &[f64], low: f64, high: f64) -> (Vec<f64>, Vec<f64>) {
+        let mut mz_out = Vec::new();
+        let mut int_out = Vec::new();
+        for (index, &value) in mz.iter().enumerate() {
+            if value >= low && value <= high {
+                mz_out.push(value);
+                int_out.push(int[index]);
+            }
+        }
+        (mz_out, int_out)
+    }
+
+    #[test]
+    fn window_fast_path_matches_brute_force() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+
+        let windows = [
+            (120.0, 130.0),
+            (100.0, 149.999),
+            (100.0001, 100.0009),
+            (130.5, 130.5),
+            (200.0, 300.0),
+            (0.0, 50.0),
+        ];
+        for (low, high) in windows {
+            let got = decoder.read_spectrum_mz_window(0, low, high).unwrap();
+            let (expected_mz, expected_int) = brute_force_window(&mz, &int, low, high);
+            assert_eq!(got.mz, expected_mz, "mz mismatch for window {low}..{high}");
+            assert_eq!(
+                got.intensity, expected_int,
+                "intensity mismatch for window {low}..{high}"
+            );
+        }
+
+        assert!(
+            matches!(decoder.spec_piece_bounds, PieceBoundsCache::Loaded(_)),
+            "fast path should have loaded A3"
+        );
+    }
+
+    #[test]
+    fn window_fallback_matches_fast_path_on_split_file() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        decoder.spec_piece_bounds = PieceBoundsCache::Absent;
+
+        for (low, high) in [(120.0, 130.0), (100.0, 149.999), (130.5, 130.5)] {
+            let got = decoder.read_spectrum_mz_window(0, low, high).unwrap();
+            let (expected_mz, expected_int) = brute_force_window(&mz, &int, low, high);
+            assert_eq!(got.mz, expected_mz);
+            assert_eq!(got.intensity, expected_int);
+        }
+    }
+
+    #[test]
+    fn window_on_unsplit_array_uses_fallback_and_is_correct() {
+        let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
+        let int: Vec<f64> = (0..10).map(|i| (i * 7) as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 128 * 1024, 512 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.header.extensions.is_none());
+
+        let got = decoder.read_spectrum_mz_window(0, 102.0, 105.0).unwrap();
+        let (expected_mz, expected_int) = brute_force_window(&mz, &int, 102.0, 105.0);
+        assert_eq!(got.mz, expected_mz);
+        assert_eq!(got.intensity, expected_int);
+    }
+
+    #[test]
+    fn window_empty_when_low_above_high() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz, int, 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let got = decoder.read_spectrum_mz_window(0, 130.0, 120.0).unwrap();
+        assert!(got.mz.is_empty());
+        assert!(got.intensity.is_empty());
+    }
+
+    #[test]
+    fn window_inverted_range_inside_data_unsplit_does_not_panic() {
+        let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
+        let int: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz, int, 128 * 1024, 512 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.header.extensions.is_none());
+        let got = decoder.read_spectrum_mz_window(0, 105.0, 102.0).unwrap();
+        assert!(got.mz.is_empty());
+        assert!(got.intensity.is_empty());
+    }
+
+    #[test]
+    fn window_out_of_range_index_errors() {
+        let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
+        let int: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz, int, 128 * 1024, 512 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.read_spectrum_mz_window(5, 100.0, 200.0).is_err());
+    }
+
+    #[test]
+    fn window_forwards_through_ion() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let bytes_arc: Arc<[u8]> = Arc::from(encoded.as_slice());
+        let mut ion = Ion::open_arc(bytes_arc, DecoderConfig::default()).unwrap();
+        let got = ion.read_spectrum_mz_window(0, 120.0, 130.0).unwrap();
+        let (expected_mz, expected_int) = brute_force_window(&mz, &int, 120.0, 130.0);
+        assert_eq!(got.mz, expected_mz);
+        assert_eq!(got.intensity, expected_int);
+    }
+
+    #[test]
+    fn a3_is_sparse_rows_for_mz_pieces_none_for_intensity() {
+        use crate::ion::axes::{Axis, axis_of};
+
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz, int, 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let _ = decoder.read_spectrum_mz_window(0, 120.0, 130.0).unwrap();
+        let PieceBoundsCache::Loaded(index) = &decoder.spec_piece_bounds else {
+            panic!("A3 should be loaded");
+        };
+
+        let array_refs =
+            read_array_refs_from_buffers(&decoder.spec_entries_buf, &decoder.spec_array_refs, 0)
+                .unwrap();
+        let groups = group_arrays(array_refs.as_slice()).unwrap();
+
+        let mut position = 0u64;
+        let mut mz_range = None;
+        let mut intensity_range = None;
+        for group in &groups {
+            let count = group.refs.len() as u64;
+            if matches!(axis_of(group.array_type), Some(Axis::Mz)) {
+                mz_range = Some((position, count));
+            } else if group.array_type == ACC_INT {
+                intensity_range = Some((position, count));
+            }
+            position += count;
+        }
+
+        let (mz_base, mz_count) = mz_range.unwrap();
+        let (intensity_base, intensity_count) = intensity_range.unwrap();
+        assert!(mz_count >= 2, "expected the m/z array to be split");
+        assert_eq!(mz_count, intensity_count);
+
+        for i in 0..mz_count {
+            assert!(index.get(mz_base + i).is_some(), "missing A3 row for m/z piece {i}");
+        }
+        for i in 0..intensity_count {
+            assert!(
+                index.get(intensity_base + i).is_none(),
+                "intensity piece {i} must not have an A3 row"
+            );
+        }
+    }
+
+    #[test]
+    fn window_on_non_monotonic_mz_emits_no_a3_and_scans_correctly() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + (i % 1000) as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(
+            decoder.header.extensions.is_none(),
+            "non-monotonic m/z must not emit A3 rows"
+        );
+
+        for (low, high) in [(100.2, 100.5), (100.0, 100.999), (100.45, 100.45)] {
+            let got = decoder.read_spectrum_mz_window(0, low, high).unwrap();
+            let (expected_mz, expected_int) = brute_force_window(&mz, &int, low, high);
+            assert_eq!(got.mz, expected_mz, "mz mismatch for window {low}..{high}");
+            assert_eq!(
+                got.intensity, expected_int,
+                "intensity mismatch for window {low}..{high}"
+            );
+        }
+    }
+
+    #[test]
+    fn window_corrupt_a3_checksum_falls_back_correctly() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let mut encoded =
+            encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+
+        let location = {
+            let header = parse_header(&encoded[..1024]).unwrap();
+            header.extensions.unwrap()
+        };
+        let table_bytes = encoded[location.offset as usize
+            ..location.offset as usize + location.length as usize]
+            .to_vec();
+        let table = read_extension_table(&table_bytes).unwrap();
+        let record = table.get(EXTENSION_KIND_A3_SPEC_PIECE_BOUNDS).unwrap();
+        let a3_byte = record.offset as usize;
+        encoded[a3_byte] ^= 0xFF;
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let got = decoder.read_spectrum_mz_window(0, 120.0, 130.0).unwrap();
+        let (expected_mz, expected_int) = brute_force_window(&mz, &int, 120.0, 130.0);
+        assert_eq!(got.mz, expected_mz);
+        assert_eq!(got.intensity, expected_int);
+        assert!(matches!(decoder.spec_piece_bounds, PieceBoundsCache::Absent));
+    }
+
+    #[test]
+    fn generic_window_matches_mz_wrapper() {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz, int, 64 * 1024, 128 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+
+        let generic = decoder
+            .read_spectrum_window(0, crate::accessions::MZ_ARRAY, ACC_INT, 120.0, 130.0)
+            .unwrap();
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        let mz_window = decoder.read_spectrum_mz_window(0, 120.0, 130.0).unwrap();
+
+        assert_eq!(generic.x, mz_window.mz);
+        assert_eq!(generic.y, mz_window.intensity);
+    }
+
+    #[test]
+    fn generic_window_missing_accession_returns_empty() {
+        let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
+        let int: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz, int, 128 * 1024, 512 * 1024);
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+
+        let got = decoder
+            .read_spectrum_window(0, 99_999_999, ACC_INT, 1.0, 2.0)
+            .unwrap();
+
+        assert!(got.x.is_empty());
+        assert!(got.y.is_empty());
+    }
+
 }

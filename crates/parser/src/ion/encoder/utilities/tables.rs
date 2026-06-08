@@ -59,6 +59,7 @@ impl ArrayRefTable {
         dtype: u8,
         array_filter: u8,
         encoded_len: u32,
+        continues_previous: u8,
     ) -> IonResult<()> {
         let mut record = [0u8; 32];
         record[0..8].copy_from_slice(&element_offset.to_le_bytes());
@@ -68,6 +69,35 @@ impl ArrayRefTable {
         record[24] = dtype;
         record[25] = array_filter;
         record[26..30].copy_from_slice(&encoded_len.to_le_bytes());
+        record[30] = continues_previous;
+        self.section_chunk.write(&record)
+    }
+
+    pub(crate) fn finish(self) -> SectionChunk {
+        self.section_chunk
+    }
+}
+
+pub(crate) struct PieceBound {
+    pub(crate) a2_ref_index: u64,
+    pub(crate) low: f64,
+    pub(crate) high: f64,
+}
+
+pub(crate) struct PieceBoundsTable {
+    section_chunk: SectionChunk,
+}
+
+impl PieceBoundsTable {
+    pub(crate) fn new(section_chunk: SectionChunk) -> Self {
+        Self { section_chunk }
+    }
+
+    pub(crate) fn push(&mut self, bound: PieceBound) -> IonResult<()> {
+        let mut record = [0u8; 24];
+        record[0..8].copy_from_slice(&bound.a2_ref_index.to_le_bytes());
+        record[8..16].copy_from_slice(&bound.low.to_le_bytes());
+        record[16..24].copy_from_slice(&bound.high.to_le_bytes());
         self.section_chunk.write(&record)
     }
 

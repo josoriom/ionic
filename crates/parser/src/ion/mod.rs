@@ -1,4 +1,6 @@
+pub(crate) mod axes;
 pub(crate) mod byte_transpose;
+pub(crate) mod extensions;
 pub mod filter_summary;
 pub(crate) mod meta_groups;
 pub(crate) mod packing;
@@ -6,7 +8,7 @@ pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
 pub mod decoder;
 pub mod format;
 pub(crate) mod version_generated;
-pub use decoder::decode::{Decoder, DecoderConfig, Ion, OwnedIon};
+pub use decoder::decode::{ArrayWindow, Decoder, DecoderConfig, Ion, OwnedIon, SpectrumWindow};
 pub(crate) use decoder::utilities;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub use decoder::utilities::byte_source::MmapSource;
