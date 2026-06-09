@@ -46,7 +46,7 @@ pub const ZSTD_LEVEL_MAX: u8 = 22;
 pub fn allow_compression(codec: u8, level: u8) -> IonResult<()> {
     match codec {
         CODEC_NONE if level == 0 => Ok(()),
-        CODEC_ZSTD if level >= ZSTD_LEVEL_MIN && level <= ZSTD_LEVEL_MAX => Ok(()),
+        CODEC_ZSTD if (ZSTD_LEVEL_MIN..=ZSTD_LEVEL_MAX).contains(&level) => Ok(()),
         CODEC_NONE | CODEC_ZSTD => Err(IonError::from(format!(
             "compression level {level} does not match codec {codec}"
         ))),

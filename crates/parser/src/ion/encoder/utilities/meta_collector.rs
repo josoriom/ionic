@@ -72,11 +72,12 @@ impl MetaCollector {
         let mut buffer = MetaParamBuffer::new();
         {
             let mut writer = buffer.as_writer();
-            if metadata_writer.is_first_item_in_group() && list_node_id != 0 {
-                if let Some(schema) = list_schema {
-                    writer.touch(T::list_tag(), list_node_id, 0);
-                    writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
-                }
+            if metadata_writer.is_first_item_in_group()
+                && list_node_id != 0
+                && let Some(schema) = list_schema
+            {
+                writer.touch(T::list_tag(), list_node_id, 0);
+                writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
             }
             let item_id = self.context.alloc();
             writer.push_schema_attrs(T::item_tag(), item_id, list_node_id, item);
@@ -2083,7 +2084,10 @@ mod tests {
 
     #[test]
     fn group_local_node_ids_across_group_boundaries() {
-        use crate::ion::encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES};
+        use crate::ion::encoder::encode::{
+            DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+            TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        };
         use crate::ion::encoder::ion_writer::write_mzml_to_ion;
         use crate::ion::encoder::utilities::SectionChunkMode;
         use crate::mzml::structs::{
@@ -2124,16 +2128,20 @@ mod tests {
             spectra.push(spectrum);
         }
 
-        let mut run = Run::default();
-        run.id = "run1".to_string();
-        run.spectrum_list = Some(SpectrumList {
-            count: Some(spectra.len()),
-            spectra,
+        let run = Run {
+            id: "run1".to_string(),
+            spectrum_list: Some(SpectrumList {
+                count: Some(spectra.len()),
+                spectra,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
 
-        let mut mzml = MzML::default();
-        mzml.run = run;
+        let mzml = MzML {
+            run,
+            ..Default::default()
+        };
 
         let mut output = Vec::new();
         write_mzml_to_ion(
@@ -2144,8 +2152,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: false,
                 section_chunk: SectionChunkMode::Memory,
-                target_segment_bytes: 128 * 1024,
-                min_split_bytes: 512 * 1024,
+                target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
+                min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
             },
             &mut output,
         )

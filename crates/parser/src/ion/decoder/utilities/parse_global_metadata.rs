@@ -12,6 +12,7 @@ use crate::{
 
 const GLOBAL_SECTION_HEADER_BYTE_SIZE: usize = 32;
 
+#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
 pub(crate) fn parse_global_metadata(
     bytes: &[u8],
     item_count: u64,

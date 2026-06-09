@@ -20,10 +20,10 @@ pub(crate) struct AsyncReader {
 
 impl AsyncReader {
     pub async fn open_with_async_query(
-        read: impl Fn(Query) -> QueryPromise<'static> + 'static,
+        read: impl Fn(Query) -> QueryPromise<'static> + Send + Sync + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
-        let source = Arc::new(AsyncQueryCallbackSource::new(read)) as Arc<dyn AsyncByteSource>;
+        let source: Arc<dyn AsyncByteSource> = Arc::new(AsyncQueryCallbackSource::new(read));
         Self::open_with_async_source(source, config).await
     }
 
@@ -62,7 +62,7 @@ impl AsyncReader {
         fetch_missing(self.source.as_ref(), self.cache.as_ref(), ranges).await
     }
 
-    pub async fn to_mzml(&mut self) -> IonResult<MzML> {
+    pub async fn read_mzml(&mut self) -> IonResult<MzML> {
         let ranges = self.decoder.mzml_block_ranges();
         self.fetch_ranges(&ranges).await?;
         self.decoder.to_mzml()
@@ -277,7 +277,7 @@ mod tests {
         let mut reader = open_async(RangeServer::new(BYTES));
 
         let from_sync = sync.to_mzml().unwrap();
-        let from_async = block_on(reader.to_mzml()).unwrap();
+        let from_async = block_on(reader.read_mzml()).unwrap();
 
         assert_eq!(format!("{from_sync:?}"), format!("{from_async:?}"));
     }
@@ -311,12 +311,14 @@ mod tests {
 
     #[test]
     fn async_open_with_zero_cache() {
-        let mut config = DecoderConfig::default();
-        config.max_cached_bytes = 0;
+        let config = DecoderConfig {
+            max_cached_bytes: 0,
+            ..Default::default()
+        };
         let source = RangeServer::new(BYTES) as Arc<dyn AsyncByteSource>;
         let mut reader = block_on(AsyncReader::open_with_async_source(source, config)).unwrap();
-        let mzml = block_on(reader.to_mzml()).unwrap();
-        assert!(mzml.run.spectrum_list.unwrap().spectra.len() > 0);
+        let mzml = block_on(reader.read_mzml()).unwrap();
+        assert!(!mzml.run.spectrum_list.unwrap().spectra.is_empty());
     }
 
     #[test]

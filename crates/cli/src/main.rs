@@ -121,7 +121,7 @@ struct ConvertArgs {
 
     #[arg(
         long = "level",
-        default_value_t = 18,
+        default_value_t = 22,
         value_parser = clap::value_parser!(u8).range(0..=22)
     )]
     compression_level: u8,
@@ -437,11 +437,13 @@ impl FilterExpr {
     }
 }
 
+type NameFilter = Box<dyn Fn(&str) -> bool>;
+
 fn build_name_filter(
     pattern: Option<&str>,
     pattern_exact: Option<&str>,
     regex: Option<&str>,
-) -> Result<Option<Box<dyn Fn(&str) -> bool>>, String> {
+) -> Result<Option<NameFilter>, String> {
     let tree = if let Some(p) = pattern {
         Some(FilterExpr::parse(p)?)
     } else {
@@ -1080,9 +1082,7 @@ fn has_valid_trailer(path: &Path, file_len: u64) -> bool {
 
 #[inline]
 fn basename(p: &Path) -> std::borrow::Cow<'_, str> {
-    p.file_name()
-        .unwrap_or_else(|| p.as_os_str())
-        .to_string_lossy()
+    p.file_name().unwrap_or(p.as_os_str()).to_string_lossy()
 }
 
 #[inline]

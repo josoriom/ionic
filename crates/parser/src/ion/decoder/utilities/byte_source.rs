@@ -12,11 +12,11 @@ pub trait ByteSource: Send + Sync {
     fn read(&self, offset: u64, length: u64) -> IonResult<Vec<u8>>;
 }
 
-pub trait AsyncByteSource {
+pub trait AsyncByteSource: Send + Sync {
     fn read(&self, query: Query) -> QueryPromise<'_>;
 }
 
-pub type QueryPromise<'a> = Pin<Box<dyn Future<Output = IonResult<QueryPayload>> + 'a>>;
+pub type QueryPromise<'a> = Pin<Box<dyn Future<Output = IonResult<QueryPayload>> + Send + 'a>>;
 
 pub struct SliceSource {
     data: Arc<[u8]>,
@@ -164,14 +164,14 @@ impl AsyncByteSource for QueryCallbackSource {
     }
 }
 
-pub type AsyncQueryReader = dyn Fn(Query) -> QueryPromise<'static>;
+pub type AsyncQueryReader = dyn Fn(Query) -> QueryPromise<'static> + Send + Sync;
 
 pub struct AsyncQueryCallbackSource {
     read: Box<AsyncQueryReader>,
 }
 
 impl AsyncQueryCallbackSource {
-    pub fn new(read: impl Fn(Query) -> QueryPromise<'static> + 'static) -> Self {
+    pub fn new(read: impl Fn(Query) -> QueryPromise<'static> + Send + Sync + 'static) -> Self {
         Self {
             read: Box::new(read),
         }

@@ -21,7 +21,6 @@ pub(crate) fn parse_chromatogram_list<R: BufRead>(
         count,
         default_data_processing_ref: attr(start, b"defaultDataProcessingRef"),
         chromatograms: Vec::with_capacity(count.unwrap_or(0)),
-        ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();

@@ -29,9 +29,9 @@ use crate::{
         BinaryData, BinaryDataArray, Chromatogram, CvParam, MzML, NumericType, Spectrum,
     },
 };
-pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
-pub const DEFAULT_TARGET_SEGMENT_BYTES: usize = 128 * 1024;
-pub const DEFAULT_MIN_SPLIT_BYTES: usize = 512 * 1024;
+pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_TARGET_SEGMENT_BYTES: usize = 256 * 1024;
+pub const DEFAULT_MIN_SPLIT_BYTES: usize = 1024 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
@@ -627,14 +627,15 @@ pub(crate) fn write_array_segments(
     let mut refs = Vec::with_capacity(plan.count());
     for (segment_index, range) in plan.iter().enumerate() {
         let segment = data.slice(range.start, range.end);
+        let segment_element_count = range.element_count();
         let (block_id, _) = container.add_array_as_block(
-            segment.element_count() * elem_bytes,
+            segment_element_count * elem_bytes,
             elem_bytes,
             |buf| write_fixed_array_payload(buf, segment, dtype, dtype_enum, packing),
         )?;
         refs.push(EncodedArrayRef {
             element_offset: 0,
-            element_count: segment.element_count() as u64,
+            element_count: segment_element_count as u64,
             block_id,
             accession,
             dtype,
@@ -775,10 +776,15 @@ mod tests {
 
     #[test]
     fn declared_float_precision_prefers_numeric_type_field() {
-        let mut bda = BinaryDataArray::default();
-        bda.numeric_type = Some(NumericType::Float64);
+        let bda = BinaryDataArray {
+            numeric_type: Some(NumericType::Float64),
+            ..Default::default()
+        };
         assert_eq!(declared_float_precision_is_64bit(&bda), Some(true));
-        bda.numeric_type = Some(NumericType::Float32);
+        let bda = BinaryDataArray {
+            numeric_type: Some(NumericType::Float32),
+            ..Default::default()
+        };
         assert_eq!(declared_float_precision_is_64bit(&bda), Some(false));
     }
 

@@ -12,6 +12,7 @@ use crate::{
 
 pub(crate) use crate::ion::format::{CODEC_NONE, CODEC_ZSTD};
 
+#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
 pub(crate) fn parse_metadata(
     bytes: &[u8],
     item_count: u64,

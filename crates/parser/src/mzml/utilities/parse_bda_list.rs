@@ -26,7 +26,6 @@ pub(crate) fn parse_bda_list<R: BufRead>(
     let mut list = BinaryDataArrayList {
         count,
         binary_data_arrays: Vec::with_capacity(count.unwrap_or(0)),
-        ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();

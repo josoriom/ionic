@@ -81,6 +81,7 @@ pub(crate) struct ContainerView<P: BlockProcessor> {
 }
 
 impl<P: BlockProcessor> ContainerView<P> {
+    #[allow(clippy::too_many_arguments)] //TODO: Need to fix this
     pub(crate) fn new(
         source: Arc<dyn ByteSource>,
         container_offset: u64,

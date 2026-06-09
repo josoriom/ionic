@@ -2,18 +2,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::mzml::structs::CvParam;
 use crate::{
-    ion::{
-        decoder::decode::Metadatum,
-        utilities::{
-            children_lookup::{ChildrenLookup, OwnerRows},
-            parse_binary_data_array_list,
-        },
+    ion::utilities::{
+        children_lookup::{ChildrenLookup, OwnerRows},
+        parse_binary_data_array_list,
     },
     mzml::schema::TagId,
 };
 
 const PATH: &str = "data/ion/test.ion";
 
+#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
 fn assert_cv_param(
     p: &CvParam,
     cv_ref: Option<&str>,

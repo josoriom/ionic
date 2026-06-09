@@ -310,6 +310,7 @@ impl ItemStream {
         })
     }
 
+    #[allow(clippy::too_many_arguments)] //TODO: Need to fix this
     fn add<T, L>(
         &mut self,
         item: &T,

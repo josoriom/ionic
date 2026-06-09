@@ -14,7 +14,9 @@ use rayon::prelude::*;
 use crate::ion::decoder::utilities::byte_source::MmapSource;
 
 use crate::{
-    accessions::format_accession,
+    accessions::{
+        FLOAT_16BIT, FLOAT_32BIT, FLOAT_64BIT, INT_16BIT, INT_32BIT, INT_64BIT, format_accession,
+    },
     encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
     ion::{
         IonError, IonResult,
@@ -84,25 +86,6 @@ pub struct Metadatum {
     pub(crate) accession: Option<String>,
     pub(crate) unit_accession: Option<String>,
     pub(crate) value: MetadatumValue,
-}
-
-#[inline]
-pub(crate) fn slice_at<'a>(
-    bytes: &'a [u8],
-    off: u64,
-    len: u64,
-    context: &str,
-) -> IonResult<&'a [u8]> {
-    let end = off
-        .checked_add(len)
-        .ok_or_else(|| IonError::from(format!("{context}: range error")))?;
-    let start =
-        usize::try_from(off).map_err(|_| IonError::from(format!("{context}: range error")))?;
-    let end =
-        usize::try_from(end).map_err(|_| IonError::from(format!("{context}: range error")))?;
-    bytes
-        .get(start..end)
-        .ok_or_else(|| IonError::from(format!("{context}: range error")))
 }
 
 pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<(u64, u64)>> {
@@ -1070,7 +1053,7 @@ impl Ion {
     }
 
     pub async fn open_with_async_query(
-        read: impl Fn(Query) -> QueryPromise<'static> + 'static,
+        read: impl Fn(Query) -> QueryPromise<'static> + Send + Sync + 'static,
         config: DecoderConfig,
     ) -> IonResult<Self> {
         let reader = AsyncReader::open_with_async_query(read, config).await?;
@@ -1375,7 +1358,7 @@ impl Ion {
     pub async fn to_mzml_async(&mut self) -> IonResult<MzML> {
         match &mut self.backend {
             IonBackend::Decoder(decoder) => decoder.to_mzml(),
-            IonBackend::Async(reader) => reader.to_mzml().await,
+            IonBackend::Async(reader) => reader.read_mzml().await,
             IonBackend::Data => Ok(self.clone_as_mzml()),
         }
     }
@@ -2035,35 +2018,6 @@ fn read_array_refs_from_buffers(
     Some(refs)
 }
 
-fn read_array_refs_at(
-    bytes: &[u8],
-    entry_base: usize,
-    aref_base: usize,
-    index: usize,
-) -> Option<ArrayRefList> {
-    let entry_offset = index
-        .checked_mul(INDEX_ENTRY_BYTES)?
-        .checked_add(entry_base)?;
-    let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
-    let entry = bytes.get(entry_offset..entry_end)?;
-    let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
-    let ref_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
-    let max_refs = bytes.len().saturating_sub(aref_base) / ARRAY_REF_BYTES;
-    if ref_count > max_refs {
-        return None;
-    }
-    let mut refs = ArrayRefList::with_capacity(ref_count);
-    for offset in 0..ref_count {
-        let pos = ref_start
-            .checked_add(offset)?
-            .checked_mul(ARRAY_REF_BYTES)?
-            .checked_add(aref_base)?;
-        let end = pos.checked_add(ARRAY_REF_BYTES)?;
-        refs.push(parse_array_ref(bytes.get(pos..end)?));
-    }
-    Some(refs)
-}
-
 #[inline]
 fn parse_array_ref(bytes: &[u8]) -> ArrayRef {
     ArrayRef {
@@ -2186,30 +2140,6 @@ fn aref_read_params(array_ref: &ArrayRef) -> (u64, u64, usize) {
             dtype_stride(array_ref.dtype),
         )
     }
-}
-
-fn array_byte_range(array_ref: &ArrayRef, ctx: &'static str) -> IonResult<(usize, usize)> {
-    let (element_offset, count, stride) = aref_read_params(array_ref);
-    let start = usize::try_from(element_offset)
-        .ok()
-        .and_then(|offset| offset.checked_mul(stride))
-        .ok_or_else(|| {
-            IonError::from(format!(
-                "{ctx}: item range overflow for block {}",
-                array_ref.block_id
-            ))
-        })?;
-    let end = usize::try_from(count)
-        .ok()
-        .and_then(|count| count.checked_mul(stride))
-        .and_then(|len| start.checked_add(len))
-        .ok_or_else(|| {
-            IonError::from(format!(
-                "{ctx}: item range overflow for block {}",
-                array_ref.block_id
-            ))
-        })?;
-    Ok((start, end))
 }
 
 #[inline]
@@ -2506,7 +2436,7 @@ fn attach_logical_array(
 }
 
 fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> IonResult<Vec<T>> {
-    if raw.len() % elem_size != 0 {
+    if !raw.len().is_multiple_of(elem_size) {
         return Err(IonError::from(format!(
             "array: length {} not a multiple of {elem_size}",
             raw.len()
@@ -2601,7 +2531,10 @@ fn sync_numeric_meta(binary_array: &mut BinaryDataArray, numeric_type: NumericTy
 
 #[inline]
 fn is_numeric_acc(tail: AccessionTail) -> bool {
-    matches!(tail.raw(), 1_000_518..=1_000_523)
+    matches!(
+        tail.raw(),
+        INT_16BIT | INT_32BIT | INT_64BIT | FLOAT_16BIT | FLOAT_32BIT | FLOAT_64BIT
+    )
 }
 
 #[inline]
@@ -2732,14 +2665,14 @@ mod tests {
         let mut decoder = Decoder::open(BYTES, DecoderConfig::default()).unwrap();
         let full = decoder.to_mzml().unwrap();
         let full_spectra = full.run.spectrum_list.expect("spectrum list").spectra;
-        for index in 0..full_spectra.len() {
+        for (index, full_spectrum) in full_spectra.iter().enumerate() {
             let lazy = decoder
                 .spectrum_at(index)
                 .unwrap()
                 .expect("spectrum present");
             assert_eq!(
                 format!("{lazy:?}"),
-                format!("{:?}", full_spectra[index]),
+                format!("{full_spectrum:?}"),
                 "spectrum {index} differs between lazy and full paths"
             );
         }
@@ -2834,7 +2767,7 @@ mod tests {
             count += 1;
         });
         let expected = (0..d.spectrum_count() as usize)
-            .filter(|&i| d.spec_summary(i).map_or(false, |r| r.ms_level == 1))
+            .filter(|&i| d.spec_summary(i).is_some_and(|r| r.ms_level == 1))
             .count();
         assert_eq!(count, expected);
     }
@@ -2976,7 +2909,7 @@ mod tests {
         let mut d = Decoder::open_with_source(source, DecoderConfig::default()).unwrap();
         assert!(d.spectrum_count() > 0);
         let mzml = d.to_mzml().unwrap();
-        assert!(mzml.run.spectrum_list.unwrap().spectra.len() > 0);
+        assert!(!mzml.run.spectrum_list.unwrap().spectra.is_empty());
     }
 
     #[test]
@@ -3069,8 +3002,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
                 section_chunk: SectionChunkMode::Memory,
-                target_segment_bytes: 128 * 1024,
-                min_split_bytes: 512 * 1024,
+                target_segment_bytes: 256 * 1024,
+                min_split_bytes: 1024 * 1024,
             },
             &mut encoded,
         )
@@ -3187,8 +3120,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: true,
                 section_chunk: SectionChunkMode::Memory,
-                target_segment_bytes: 128 * 1024,
-                min_split_bytes: 512 * 1024,
+                target_segment_bytes: 256 * 1024,
+                min_split_bytes: 1024 * 1024,
             },
             &mut encoded,
         )
@@ -3300,8 +3233,8 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: false,
                 section_chunk: SectionChunkMode::Memory,
-                target_segment_bytes: 128 * 1024,
-                min_split_bytes: 512 * 1024,
+                target_segment_bytes: 256 * 1024,
+                min_split_bytes: 1024 * 1024,
             },
             &mut encoded,
         )
@@ -3548,7 +3481,7 @@ mod tests {
 
         let encoded = encode_one_spectrum_with_split(mz, int, 128 * 1024, 512 * 1024);
 
-        let decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        Decoder::open(&encoded, DecoderConfig::default()).unwrap();
     }
 
     #[test]

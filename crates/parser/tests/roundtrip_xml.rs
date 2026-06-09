@@ -24,7 +24,6 @@ fn tiny2_exposes_known_unresolved_precursor_ref() {
 
 #[test]
 fn small_zlib_decodes_nonempty_compressed_arrays() {
-    use common::BinaryDataExt;
     let mzml = test_files::small_zlib_pwiz_11();
     let first_spectrum = common::spectra(mzml)
         .first()

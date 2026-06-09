@@ -163,10 +163,7 @@ fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
     order.sort_by_key(|&i| sections[i].offset);
     for pair in order.windows(2) {
         let (l, r) = (pair[0], pair[1]);
-        let end = sections[l]
-            .offset
-            .checked_add(sections[l].size)
-            .unwrap_or(u64::MAX);
+        let end = sections[l].offset.saturating_add(sections[l].size);
         if end > sections[r].offset {
             sections[l].ok = false;
             sections[r].ok = false;

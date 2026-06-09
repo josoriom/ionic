@@ -1,5 +1,6 @@
 use crate::ion::{IonError, IonResult};
 
+#[allow(dead_code)]
 pub(crate) trait DeltaWord: Copy + Default {
     const BYTES: usize;
     fn wrapping_sub(self, rhs: Self) -> Self;
@@ -134,6 +135,7 @@ impl Dtype {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn byte_stride(self) -> usize {
         match self {
             Self::F64 | Self::I64 => 8,
@@ -162,6 +164,7 @@ impl PackingId {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) enum PackingInput<'a> {
     F32(&'a [f32]),
     F64(&'a [f64]),
@@ -171,6 +174,7 @@ pub(crate) enum PackingInput<'a> {
     Bytes(&'a [u8]),
 }
 
+#[allow(dead_code)]
 pub(crate) trait Packing: Send + Sync {
     fn id(&self) -> PackingId;
 
@@ -208,15 +212,15 @@ pub(crate) fn packing_for(
         | RAW_ION_MOBILITY_DRIFT_TIME_ARRAY => Some("IONIC_ION_MOBILITY_CODEC"),
         _ => None,
     };
-    if let Some(key) = env_key {
-        if let Ok(v) = std::env::var(key) {
-            return match v.as_str() {
-                "raw" => &raw::RAW,
-                "byte_shuffle" => &byte_shuffle::BYTE_SHUFFLE,
-                "delta_shuffle" => &delta_shuffle::DELTA_SHUFFLE,
-                _ => &delta_shuffle::DELTA_SHUFFLE,
-            };
-        }
+
+    if let Some(key) = env_key
+        && let Ok(v) = std::env::var(key)
+    {
+        return match v.as_str() {
+            "raw" => &raw::RAW,
+            "byte_shuffle" => &byte_shuffle::BYTE_SHUFFLE,
+            _ => &delta_shuffle::DELTA_SHUFFLE,
+        };
     }
     match dtype {
         Dtype::F64 => &delta_shuffle::DELTA_SHUFFLE,
@@ -224,6 +228,7 @@ pub(crate) fn packing_for(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
     use byte_shuffle::BYTE_SHUFFLE;
     use delta_shuffle::DELTA_SHUFFLE;

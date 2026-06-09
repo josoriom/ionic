@@ -9,7 +9,10 @@ use ionic::{
         Ion,
         decoder::decode::DecoderConfig,
         encoder::{
-            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            encode::{
+                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+                TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            },
             ion_writer::stream_to_ion,
             utilities::SectionChunkMode,
         },
@@ -24,8 +27,8 @@ fn config() -> EncodingConfig {
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_chunk: SectionChunkMode::Memory,
-        target_segment_bytes: 128 * 1024,
-        min_split_bytes: 512 * 1024,
+        target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
+        min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
     }
 }
 

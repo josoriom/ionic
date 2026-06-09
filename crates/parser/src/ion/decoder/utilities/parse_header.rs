@@ -224,11 +224,13 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
     pub(crate) file_signature: [u8; 8],
+    #[allow(dead_code)]
     pub(crate) endianness_flag: u8,
     pub(crate) format_version: u16,
     pub(crate) compression_codec: u8,
     pub(crate) compression_level: u8,
     pub(crate) default_array_filter: u8,
+    #[allow(dead_code)]
     pub(crate) target_block_uncompressed_bytes: u64,
     pub(crate) off_spec_summary: u64,
     pub(crate) len_spec_summary: u64,
@@ -274,6 +276,7 @@ pub(crate) struct Header {
     pub(crate) meta_group_size: u32,
     pub(crate) spec_meta_group_count: u64,
     pub(crate) chrom_meta_group_count: u64,
+    #[allow(dead_code)]
     pub(crate) reserved: [u8; RESERVED_BLOCK_SIZE],
     pub(crate) spec_directory_crc32: u32,
     pub(crate) chrom_directory_crc32: u32,
@@ -396,8 +399,7 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         ));
     }
 
-    if bytes.len() < FILE_TRAILER.len()
-        || &bytes[bytes.len() - FILE_TRAILER.len()..] != FILE_TRAILER
+    if bytes.len() < FILE_TRAILER.len() || bytes[bytes.len() - FILE_TRAILER.len()..] != FILE_TRAILER
     {
         failures.push("condition 3: missing or invalid file trailer".to_string());
     }
