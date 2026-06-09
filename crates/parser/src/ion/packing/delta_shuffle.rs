@@ -12,6 +12,7 @@ fn encode_delta<W: DeltaWord>(bits: impl Iterator<Item = W>, out: &mut Vec<u8>) 
     }
 }
 
+#[allow(dead_code)]
 fn decode_delta<W: DeltaWord>(input: &[u8], mut emit: impl FnMut(W)) {
     let mut prev = W::default();
     for chunk in input.chunks_exact(W::BYTES) {

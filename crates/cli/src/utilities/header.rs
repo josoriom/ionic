@@ -126,7 +126,8 @@ impl<'a> HeaderView<'a> {
         let offset = self.read_header_u64(off_at) as usize;
         let len = self.read_header_u64(len_at) as usize;
         let stored = self.read_header_u32(stored_at);
-        offset.checked_add(len)
+        offset
+            .checked_add(len)
             .and_then(|end| self.bytes.get(offset..end))
             .is_some_and(|slice| crc32fast::hash(slice) == stored)
     }
@@ -162,10 +163,7 @@ fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
     order.sort_by_key(|&i| sections[i].offset);
     for pair in order.windows(2) {
         let (l, r) = (pair[0], pair[1]);
-        let end = sections[l]
-            .offset
-            .checked_add(sections[l].size)
-            .unwrap_or(u64::MAX);
+        let end = sections[l].offset.saturating_add(sections[l].size);
         if end > sections[r].offset {
             sections[l].ok = false;
             sections[r].ok = false;
@@ -213,7 +211,11 @@ fn print_summary(view: &HeaderView<'_>) {
         ),
         None,
     );
-    field("spectrum_count", &view.read_header_u64(216).to_string(), None);
+    field(
+        "spectrum_count",
+        &view.read_header_u64(216).to_string(),
+        None,
+    );
     field("chrom_count", &view.read_header_u64(224).to_string(), None);
     let actual = view.bytes.len() as u64;
     field(

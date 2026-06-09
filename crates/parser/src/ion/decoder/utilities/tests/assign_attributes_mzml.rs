@@ -74,7 +74,7 @@ pub(crate) fn tail_to_field_key(tail: AccessionTail) -> Option<&'static str> {
     }
 }
 
-fn find_by_tail<'a>(meta: &'a [Metadatum], tail: AccessionTail) -> Option<&'a Metadatum> {
+fn find_by_tail(meta: &[Metadatum], tail: AccessionTail) -> Option<&Metadatum> {
     meta.iter().find(|m| {
         m.accession
             .as_deref()

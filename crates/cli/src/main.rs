@@ -23,7 +23,10 @@ use ionic::{
     ion::{
         DecoderConfig, FileEncoderOutput, Ion, TempFile,
         encoder::{
-            encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            encode::{
+                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+                TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            },
             ion_writer::{IonWriter, stream_to_ion},
             utilities::SectionChunkMode,
         },
@@ -118,17 +121,17 @@ struct ConvertArgs {
 
     #[arg(
         long = "level",
-        default_value_t = 18,
+        default_value_t = 22,
         value_parser = clap::value_parser!(u8).range(0..=22)
     )]
     compression_level: u8,
 
     #[arg(
         long = "block-size",
-        default_value_t = (TARGET_BLOCK_UNCOMPRESSED_BYTES / (1024 * 1024)) as u32,
+        default_value_t = TARGET_BLOCK_UNCOMPRESSED_BYTES as f64 / (1024.0 * 1024.0),
         value_name = "MB"
     )]
-    block_size_mb: u32,
+    block_size_mb: f64,
 
     #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
     overwrite: bool,
@@ -155,6 +158,20 @@ struct ConvertArgs {
 
     #[arg(long = "section-chunk", value_enum, default_value_t = SectionChunkArg::Memory)]
     section_chunk: SectionChunkArg,
+
+    #[arg(
+        long = "segment-size",
+        default_value_t = DEFAULT_TARGET_SEGMENT_BYTES as f64 / 1024.0,
+        value_name = "KB"
+    )]
+    segment_size_kb: f64,
+
+    #[arg(
+        long = "min-split-kb",
+        default_value_t = (DEFAULT_MIN_SPLIT_BYTES / 1024) as u32,
+        value_name = "KB"
+    )]
+    min_split_kb: u32,
 
     #[command(flatten)]
     which: ConvertWhich,
@@ -420,11 +437,13 @@ impl FilterExpr {
     }
 }
 
+type NameFilter = Box<dyn Fn(&str) -> bool>;
+
 fn build_name_filter(
     pattern: Option<&str>,
     pattern_exact: Option<&str>,
     regex: Option<&str>,
-) -> Result<Option<Box<dyn Fn(&str) -> bool>>, String> {
+) -> Result<Option<NameFilter>, String> {
     let tree = if let Some(p) = pattern {
         Some(FilterExpr::parse(p)?)
     } else {
@@ -505,6 +524,20 @@ fn collect_files_with_exts(
     Ok(out)
 }
 
+fn size_to_bytes(value: f64, unit_bytes: f64, flag: &str) -> Result<usize, String> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(format!("{flag} must be a positive finite number"));
+    }
+    let bytes = value * unit_bytes;
+    if bytes < 1.0 {
+        return Err(format!("{flag} is too small; it rounds to zero bytes"));
+    }
+    if bytes > usize::MAX as f64 {
+        return Err(format!("{flag} is too large"));
+    }
+    Ok(bytes as usize)
+}
+
 fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
 
@@ -520,6 +553,9 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     )?;
 
     const MB: f64 = 1024.0 * 1024.0;
+
+    let block_size = size_to_bytes(cmd.block_size_mb, MB, "--block-size")?;
+    let segment_size = size_to_bytes(cmd.segment_size_kb, 1024.0, "--segment-size")?;
 
     let cores = match cmd.cores {
         0 => std::thread::available_parallelism()
@@ -661,9 +697,11 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             let config = EncodingConfig {
                 compression_level: cmd.compression_level,
                 force_f32: f32_compress,
-                uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
+                uncompressed_block_size: block_size,
                 parallel: matches!(encoding, Encoding::Parallel),
                 section_chunk: cmd.section_chunk.mode(),
+                target_segment_bytes: segment_size,
+                min_split_bytes: cmd.min_split_kb as usize * 1024,
             };
             if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {
                 had_failed.store(true, Ordering::Relaxed);
@@ -1044,9 +1082,7 @@ fn has_valid_trailer(path: &Path, file_len: u64) -> bool {
 
 #[inline]
 fn basename(p: &Path) -> std::borrow::Cow<'_, str> {
-    p.file_name()
-        .unwrap_or_else(|| p.as_os_str())
-        .to_string_lossy()
+    p.file_name().unwrap_or(p.as_os_str()).to_string_lossy()
 }
 
 #[inline]

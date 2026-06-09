@@ -3,8 +3,8 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::MzML,
     utilities::test::{
-        CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_by_id, spectrum_description,
-        spectrum_precursor_list, spectrum_scan_list,
+        CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_by_id,
+        spectrum_description, spectrum_precursor_list, spectrum_scan_list,
     },
 };
 

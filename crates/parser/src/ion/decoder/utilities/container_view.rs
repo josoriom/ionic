@@ -81,11 +81,13 @@ pub(crate) struct ContainerView<P: BlockProcessor> {
 }
 
 impl<P: BlockProcessor> ContainerView<P> {
+    #[allow(clippy::too_many_arguments)] //TODO: Need to fix this
     pub(crate) fn new(
         source: Arc<dyn ByteSource>,
         container_offset: u64,
         container_len: u64,
         block_count: u64,
+        directory_crc32: u32,
         compression_level: u8,
         block_packing_id: PackingId,
         verify_checksums: bool,
@@ -98,6 +100,10 @@ impl<P: BlockProcessor> ContainerView<P> {
         let (directory_offset, directory_byte_count) =
             container_directory_range(container_offset, container_len, block_count, ctx)?;
         let directory_bytes = source.read(directory_offset, directory_byte_count)?;
+
+        if verify_checksums {
+            verify_directory_crc(&directory_bytes, directory_crc32, ctx)?;
+        }
 
         let entries = read_entries(&directory_bytes, block_count, ctx)?;
 
@@ -127,13 +133,21 @@ impl<P: BlockProcessor> ContainerView<P> {
 
     pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<(u64, u64)> {
         let entry = self.entries.get(block_id as usize)?;
-        Some((self.container_offset + entry.payload_offset, entry.payload_size))
+        Some((
+            self.container_offset + entry.payload_offset,
+            entry.payload_size,
+        ))
     }
 
     pub(crate) fn all_block_ranges(&self) -> Vec<(u64, u64)> {
         self.entries
             .iter()
-            .map(|entry| (self.container_offset + entry.payload_offset, entry.payload_size))
+            .map(|entry| {
+                (
+                    self.container_offset + entry.payload_offset,
+                    entry.payload_size,
+                )
+            })
             .collect()
     }
 
@@ -426,6 +440,17 @@ fn validate_block_count(
     }
     usize::try_from(block_count)
         .map_err(|_| IonError::from(format!("{ctx}: block count too large for this platform")))
+}
+
+fn verify_directory_crc(bytes: &[u8], expected: u32, ctx: &'static str) -> IonResult<()> {
+    let found = crc32fast::hash(bytes);
+    if found != expected {
+        return Err(format!(
+            "{ctx}: block directory checksum mismatch (stored={expected:#010x}, computed={found:#010x})"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn read_entries(

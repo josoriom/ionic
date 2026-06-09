@@ -139,6 +139,11 @@ pub(crate) struct BlockDirEntry {
     pub(crate) checksum: u32,
 }
 
+fn block_id_from_count(count: usize) -> IonResult<u32> {
+    u32::try_from(count)
+        .map_err(|_| IonError::from("container: block count exceeds the u32 block id limit"))
+}
+
 impl BlockDirEntry {
     fn write_to_buffer(&self, buffer: &mut Vec<u8>) {
         buffer.extend_from_slice(&self.payload_offset.to_le_bytes());
@@ -160,10 +165,11 @@ impl BlockDirectory {
         }
     }
 
-    fn reserve_next_block_id(&mut self) -> u32 {
-        let new_block_id = self.entries.len() as u32;
+    fn reserve_next_block_id(&mut self) -> IonResult<u32> {
+        let count = self.entries.len();
+        let block_id = block_id_from_count(count)?;
         self.entries.push(BlockDirEntry::default());
-        new_block_id
+        Ok(block_id)
     }
 
     fn seal_block(&mut self, block_id: u32, entry: BlockDirEntry) -> IonResult<()> {
@@ -188,7 +194,7 @@ impl BlockDirectory {
 struct ActiveBlock {
     block_id: u32,
     accumulated_data: Vec<u8>,
-    is_dedicated: bool,
+    compress_sequentially: bool,
 }
 
 struct StrideSlots([Option<ActiveBlock>; 4]);
@@ -243,18 +249,19 @@ impl BlockStore {
             && current + additional_bytes > self.max_block_size
     }
 
-    fn ensure_open_block(&mut self, stride: Stride, capacity_hint: usize) {
+    fn ensure_open_block(&mut self, stride: Stride, capacity_hint: usize) -> IonResult<()> {
         if !self.slots.is_open(stride) {
-            let block_id = self.directory.reserve_next_block_id();
+            let block_id = self.directory.reserve_next_block_id()?;
             self.slots.insert(
                 stride,
                 ActiveBlock {
                     block_id,
                     accumulated_data: Vec::with_capacity(capacity_hint),
-                    is_dedicated: false,
+                    compress_sequentially: false,
                 },
             );
         }
+        Ok(())
     }
 
     fn append_to_block<W>(
@@ -278,17 +285,22 @@ impl BlockStore {
         Ok((block_id, element_offset))
     }
 
-    fn open_dedicated_block(&mut self, stride: Stride, capacity: usize) -> u32 {
-        let block_id = self.directory.reserve_next_block_id();
+    fn open_isolated_block(
+        &mut self,
+        stride: Stride,
+        capacity: usize,
+        compress_sequentially: bool,
+    ) -> IonResult<u32> {
+        let block_id = self.directory.reserve_next_block_id()?;
         self.slots.insert(
             stride,
             ActiveBlock {
                 block_id,
                 accumulated_data: Vec::with_capacity(capacity),
-                is_dedicated: true,
+                compress_sequentially,
             },
         );
-        block_id
+        Ok(block_id)
     }
 
     fn take_open_block(&mut self, stride: Stride) -> Option<ActiveBlock> {
@@ -312,7 +324,7 @@ struct PendingBlock {
     block_id: u32,
     stride: Stride,
     data: Vec<u8>,
-    is_dedicated: bool,
+    compress_sequentially: bool,
 }
 
 struct ReadyBlock {
@@ -352,6 +364,13 @@ fn merge_sorted_by_block_id(left: Vec<ReadyBlock>, right: Vec<ReadyBlock>) -> Ve
             (None, None) => return out,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContainerSummary {
+    pub(crate) block_count: u32,
+    pub(crate) total_bytes: u64,
+    pub(crate) directory_crc32: u32,
 }
 
 pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
@@ -402,16 +421,30 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
     {
         let stride = Stride::from_size(element_size.max(1));
         if item_byte_size > self.store.max_block_size {
-            self.add_oversized_item(item_byte_size, stride, write_action)
+            self.add_isolated_block(item_byte_size, stride, true, write_action)
         } else {
             self.add_normal_item(item_byte_size, stride, write_action)
         }
     }
 
-    fn add_oversized_item<WriteAction>(
+    pub(crate) fn add_array_as_block<WriteAction>(
+        &mut self,
+        item_byte_size: usize,
+        element_size: usize,
+        write_action: WriteAction,
+    ) -> IonResult<(u32, u64)>
+    where
+        WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
+    {
+        let stride = Stride::from_size(element_size.max(1));
+        self.add_isolated_block(item_byte_size, stride, false, write_action)
+    }
+
+    fn add_isolated_block<WriteAction>(
         &mut self,
         item_byte_size: usize,
         stride: Stride,
+        compress_sequentially: bool,
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
@@ -419,14 +452,16 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
     {
         self.seal_open_block_for_stride(stride)?;
 
-        let block_id = self.store.open_dedicated_block(stride, item_byte_size);
+        let block_id =
+            self.store
+                .open_isolated_block(stride, item_byte_size, compress_sequentially)?;
 
         write_action(
             &mut self
                 .store
                 .slots
                 .get_mut(stride)
-                .expect("dedicated block was just inserted")
+                .expect("isolated block was just inserted")
                 .accumulated_data,
         )?;
 
@@ -447,7 +482,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
             self.seal_open_block_for_stride(stride)?;
         }
 
-        self.store.ensure_open_block(stride, item_byte_size);
+        self.store.ensure_open_block(stride, item_byte_size)?;
         let (block_id, element_offset) =
             self.store
                 .append_to_block(stride, item_byte_size, write_action)?;
@@ -467,7 +502,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
             block_id: active_block.block_id,
             stride,
             data: active_block.accumulated_data,
-            is_dedicated: active_block.is_dedicated,
+            compress_sequentially: active_block.compress_sequentially,
         });
         self.pending_bytes += data_len;
         if self.pending_bytes >= self.max_pending_bytes {
@@ -575,9 +610,10 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         }
         let batch = std::mem::take(&mut self.pending);
         self.pending_bytes = 0;
-        let (dedicated, shared): (Vec<_>, Vec<_>) = batch.into_iter().partition(|b| b.is_dedicated);
+        let (sequential, shared): (Vec<_>, Vec<_>) =
+            batch.into_iter().partition(|b| b.compress_sequentially);
 
-        let dedicated_ready = self.finish_seq(dedicated)?;
+        let sequential_ready = self.finish_seq(sequential)?;
 
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
         let shared_ready = {
@@ -591,7 +627,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let shared_ready = self.finish_seq(shared)?;
 
-        let ready = merge_sorted_by_block_id(dedicated_ready, shared_ready);
+        let ready = merge_sorted_by_block_id(sequential_ready, shared_ready);
 
         for block in ready {
             self.output.write_bytes(&block.bytes)?;
@@ -609,7 +645,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)> {
+    pub(crate) fn finish(mut self) -> IonResult<ContainerSummary> {
         for stride in Stride::all_variants() {
             self.seal_open_block_for_stride(stride)?;
         }
@@ -619,10 +655,15 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         let mut directory_bytes =
             Vec::with_capacity(block_count as usize * BLOCK_DIRECTORY_ENTRY_SIZE);
         self.store.write_directory(&mut directory_bytes);
+        let directory_crc32 = crc32fast::hash(&directory_bytes);
         self.output.write_bytes(&directory_bytes)?;
 
-        let total_bytes_written = self.payload_bytes + directory_bytes.len() as u64;
-        Ok((block_count, total_bytes_written))
+        let total_bytes = self.payload_bytes + directory_bytes.len() as u64;
+        Ok(ContainerSummary {
+            block_count,
+            total_bytes,
+            directory_crc32,
+        })
     }
 }
 
@@ -648,16 +689,16 @@ mod tests {
     #[test]
     fn block_directory_allocate_increments() {
         let mut directory = BlockDirectory::new();
-        assert_eq!(directory.reserve_next_block_id(), 0);
-        assert_eq!(directory.reserve_next_block_id(), 1);
-        assert_eq!(directory.reserve_next_block_id(), 2);
+        assert_eq!(directory.reserve_next_block_id().unwrap(), 0);
+        assert_eq!(directory.reserve_next_block_id().unwrap(), 1);
+        assert_eq!(directory.reserve_next_block_id().unwrap(), 2);
         assert_eq!(directory.block_count(), 3);
     }
 
     #[test]
     fn block_directory_seal_fills_placeholder() {
         let mut directory = BlockDirectory::new();
-        let block_id = directory.reserve_next_block_id();
+        let block_id = directory.reserve_next_block_id().unwrap();
         directory
             .seal_block(
                 block_id,
@@ -717,7 +758,7 @@ mod tests {
             ActiveBlock {
                 block_id: 7,
                 accumulated_data: vec![1, 2, 3, 4],
-                is_dedicated: false,
+                compress_sequentially: false,
             },
         );
         assert!(slots.is_open(Stride::FourBytes));
@@ -736,7 +777,7 @@ mod tests {
             ActiveBlock {
                 block_id: 0,
                 accumulated_data: vec![0u8; 12],
-                is_dedicated: false,
+                compress_sequentially: false,
             },
         );
         assert_eq!(slots.byte_len(Stride::FourBytes), 12);
@@ -746,7 +787,7 @@ mod tests {
     fn block_store_ensure_open_block_creates_new() {
         let mut store = BlockStore::new(1024);
         assert_eq!(store.block_count(), 0);
-        store.ensure_open_block(Stride::FourBytes, 16);
+        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
         assert_eq!(store.block_count(), 1);
         assert!(store.slots.is_open(Stride::FourBytes));
     }
@@ -754,8 +795,8 @@ mod tests {
     #[test]
     fn block_store_ensure_open_block_is_idempotent() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::FourBytes, 16);
-        store.ensure_open_block(Stride::FourBytes, 16);
+        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
+        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
         assert_eq!(store.block_count(), 1);
     }
 
@@ -768,7 +809,7 @@ mod tests {
     #[test]
     fn block_store_would_overflow_detects_threshold() {
         let mut store = BlockStore::new(16);
-        store.ensure_open_block(Stride::FourBytes, 12);
+        store.ensure_open_block(Stride::FourBytes, 12).unwrap();
         store
             .append_to_block(Stride::FourBytes, 12, |buf| {
                 buf.extend_from_slice(&[0u8; 12]);
@@ -782,7 +823,7 @@ mod tests {
     #[test]
     fn block_store_append_returns_correct_element_offsets() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::EightBytes, 24);
+        store.ensure_open_block(Stride::EightBytes, 24).unwrap();
         let (_, off0) = store
             .append_to_block(Stride::EightBytes, 8, |b| {
                 b.extend_from_slice(&[0u8; 8]);
@@ -807,22 +848,24 @@ mod tests {
     }
 
     #[test]
-    fn block_store_open_dedicated_block_replaces_slot() {
+    fn block_store_open_isolated_block_replaces_slot() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::FourBytes, 8);
+        store.ensure_open_block(Stride::FourBytes, 8).unwrap();
         let first_id = store.slots.get_mut(Stride::FourBytes).unwrap().block_id;
-        let dedicated_id = store.open_dedicated_block(Stride::FourBytes, 256);
-        assert_ne!(first_id, dedicated_id);
+        let isolated_id = store
+            .open_isolated_block(Stride::FourBytes, 256, true)
+            .unwrap();
+        assert_ne!(first_id, isolated_id);
         assert_eq!(
             store.slots.get_mut(Stride::FourBytes).unwrap().block_id,
-            dedicated_id
+            isolated_id
         );
     }
 
     #[test]
     fn block_store_seal_and_directory_roundtrip() {
         let mut store = BlockStore::new(1024);
-        let bid = store.directory.reserve_next_block_id();
+        let bid = store.directory.reserve_next_block_id().unwrap();
         store
             .seal(
                 bid,
@@ -842,8 +885,8 @@ mod tests {
     #[test]
     fn block_store_different_strides_independent() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::TwoBytes, 8);
-        store.ensure_open_block(Stride::EightBytes, 8);
+        store.ensure_open_block(Stride::TwoBytes, 8).unwrap();
+        store.ensure_open_block(Stride::EightBytes, 8).unwrap();
         assert_eq!(store.block_count(), 2);
         assert!(store.slots.is_open(Stride::TwoBytes));
         assert!(store.slots.is_open(Stride::EightBytes));
@@ -901,10 +944,58 @@ mod tests {
             .unwrap();
         assert_eq!(block_id, 0);
         assert_eq!(element_offset, 0);
-        let (block_count, total_bytes) = builder.finish().unwrap();
+        let ContainerSummary {
+            block_count,
+            total_bytes,
+            ..
+        } = builder.finish().unwrap();
         assert_eq!(block_count, 1);
         assert!(total_bytes > 0);
         assert!(output.0.starts_with(&item_data));
+    }
+
+    #[test]
+    fn add_array_as_block_stays_on_parallel_path() {
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            64 * 1024 * 1024,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder
+            .add_array_as_block(8, 8, |buf| {
+                buf.extend_from_slice(&[1u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(builder.pending.len(), 1);
+        assert!(
+            !builder.pending[0].compress_sequentially,
+            "split segment blocks must stay on the parallel path"
+        );
+    }
+
+    #[test]
+    fn oversized_item_uses_sequential_path() {
+        let mut output = VecOutput(Vec::new());
+        let mut builder = ContainerBuilder::new(
+            &mut output,
+            16,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder
+            .add_item_to_box(64, 8, |buf| {
+                buf.extend_from_slice(&[2u8; 64]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(builder.pending.len(), 1);
+        assert!(
+            builder.pending[0].compress_sequentially,
+            "oversized blocks must stay on the sequential path"
+        );
     }
 
     #[test]
@@ -989,7 +1080,7 @@ mod tests {
             first_block_id, second_block_id,
             "overflow should have triggered a new block"
         );
-        let (total_block_count, _) = builder.finish().unwrap();
+        let total_block_count = builder.finish().unwrap().block_count;
         assert_eq!(total_block_count, 2);
     }
 
@@ -1008,7 +1099,11 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let (block_count, total_bytes) = builder.finish().unwrap();
+        let ContainerSummary {
+            block_count,
+            total_bytes,
+            ..
+        } = builder.finish().unwrap();
         assert_eq!(block_count, 1);
         let expected_directory_size = BLOCK_DIRECTORY_ENTRY_SIZE as u64;
         assert_eq!(total_bytes, 8 + expected_directory_size);
@@ -1023,7 +1118,11 @@ mod tests {
             CompressionMode::<PassthroughCompressor>::Raw,
             PackingId::Raw,
         );
-        let (block_count, total_bytes) = builder.finish().unwrap();
+        let ContainerSummary {
+            block_count,
+            total_bytes,
+            ..
+        } = builder.finish().unwrap();
         assert_eq!(block_count, 0);
         assert_eq!(total_bytes, 0);
         assert!(output.0.is_empty());
@@ -1080,7 +1179,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(element_offset, 0);
-        let (block_count, _) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 1);
         assert_eq!(block_id, 0);
         assert!(output.0.starts_with(&[0xABu8; 64]));
@@ -1117,7 +1216,7 @@ mod tests {
         assert_eq!(off_oversized, 0);
         assert_ne!(bid_before, bid_oversized);
         assert_ne!(bid_oversized, bid_after);
-        let (block_count, _) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 3);
     }
 
@@ -1146,7 +1245,7 @@ mod tests {
         assert_eq!(off_a, 0);
         assert_eq!(off_b, 0);
         assert_ne!(bid_a, bid_b);
-        let (block_count, _) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 2);
     }
 
@@ -1167,7 +1266,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let (block_count, _total_bytes) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 1);
         let directory_start = output.0.len() - BLOCK_DIRECTORY_ENTRY_SIZE;
         let uncomp_bytes = u64::from_le_bytes(
@@ -1252,7 +1351,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let (block_count, _total) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count as usize, item_count);
 
         let raw = output.0;
@@ -1263,5 +1362,17 @@ mod tests {
             let size = u64::from_le_bytes(raw[at + 8..at + 16].try_into().unwrap()) as usize;
             assert_eq!(&raw[offset..offset + size], &[i as u8; 8]);
         }
+    }
+
+    #[test]
+    fn block_id_fits_under_limit() {
+        assert_eq!(block_id_from_count(0).unwrap(), 0);
+        assert_eq!(block_id_from_count(1).unwrap(), 1);
+        assert_eq!(block_id_from_count(u32::MAX as usize).unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn block_id_over_limit_errors() {
+        assert!(block_id_from_count(u32::MAX as usize + 1).is_err());
     }
 }

@@ -493,6 +493,5 @@ pub fn full_mzml_all_optional_fields() -> MzML {
             }),
             ..Default::default()
         },
-        ..Default::default()
     }
 }

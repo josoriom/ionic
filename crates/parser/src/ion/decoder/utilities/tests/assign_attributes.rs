@@ -7,7 +7,7 @@ fn parse_accession(tail: AccessionTail) -> String {
     format!("{CV_REF_ATTR}:{:07}", tail.raw())
 }
 
-fn find_by_tail<'a>(xs: &'a [Metadatum], tail: AccessionTail) -> Option<&'a Metadatum> {
+fn find_by_tail(xs: &[Metadatum], tail: AccessionTail) -> Option<&Metadatum> {
     let acc = parse_accession(tail);
     xs.iter()
         .find(|m| m.accession.as_deref() == Some(acc.as_str()))
@@ -43,16 +43,17 @@ fn assert_num(xs: &[Metadatum], tail: AccessionTail, n: f64) {
 
 #[test]
 fn assign_attrs_spectrum_emits_all_fields() {
-    let mut s = Spectrum::default();
-
-    s.id = "scan=1".to_string();
-    s.index = Some(0);
-    s.default_array_length = Some(340032);
-    s.native_id = Some("controllerType=0 controllerNumber=1 scan=1".to_string());
-    s.data_processing_ref = Some("dp1".to_string());
-    s.source_file_ref = Some("sf1".to_string());
-    s.spot_id = Some("spotA".to_string());
-    s.ms_level = Some(2);
+    let s = Spectrum {
+        id: "scan=1".to_string(),
+        index: Some(0),
+        default_array_length: Some(340032),
+        native_id: Some("controllerType=0 controllerNumber=1 scan=1".to_string()),
+        data_processing_ref: Some("dp1".to_string()),
+        source_file_ref: Some("sf1".to_string()),
+        spot_id: Some("spotA".to_string()),
+        ms_level: Some(2),
+        ..Default::default()
+    };
 
     let id = 1u32;
     let parent_index = 0u32;
@@ -106,8 +107,10 @@ fn assign_attrs_emits_only_parse_accessions() {
 
 #[test]
 fn assign_attrs_spectrum_id_is_preserved() {
-    let mut s = Spectrum::default();
-    s.id = "ok".to_string();
+    let s = Spectrum {
+        id: "ok".to_string(),
+        ..Default::default()
+    };
 
     let id = 1u32;
     let parent_index = 0u32;
@@ -120,13 +123,14 @@ fn assign_attrs_spectrum_id_is_preserved() {
 
 #[test]
 fn assign_attrs_chromatogram_emits_schema_attr_only() {
-    let mut c = Chromatogram::default();
-
-    c.id = "TIC".to_string();
-    c.index = Some(0);
-    c.default_array_length = Some(3476);
-    c.native_id = Some("nativeX".to_string());
-    c.data_processing_ref = Some("dpX".to_string());
+    let c = Chromatogram {
+        id: "TIC".to_string(),
+        index: Some(0),
+        default_array_length: Some(3476),
+        native_id: Some("nativeX".to_string()),
+        data_processing_ref: Some("dpX".to_string()),
+        ..Default::default()
+    };
 
     let id = 7u32;
     let parent_index = 0u32;

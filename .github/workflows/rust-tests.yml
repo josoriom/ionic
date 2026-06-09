@@ -10,6 +10,10 @@ jobs:
     name: test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
 
+    env:
+      CARGO_NET_RETRY: 10
+      CARGO_HTTP_TIMEOUT: 120
+
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +45,7 @@ jobs:
           rustflags: ""
 
       - name: Run tests
-        run: cargo test --all-features --target ${{ matrix.target }}
+        run: cargo test --locked --all-features --target ${{ matrix.target }}
 
   version:
     name: version sync

@@ -7,7 +7,7 @@ use crate::{
     decoder::utilities::{
         common::decompress_zstd_allow_aligned_padding,
         decompression_budget::DecompressionBudget,
-        parse_metadata::{HDR_CODEC_NONE, HDR_CODEC_ZSTD, parse_metadata},
+        parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
     },
     ion::{
         IonError, IonResult,
@@ -187,8 +187,8 @@ impl MetaGroupReader {
             return Err(IonError::from("metadata groups: group checksum mismatch"));
         }
         match self.compression_codec {
-            HDR_CODEC_NONE => Ok(Cow::Borrowed(payload)),
-            HDR_CODEC_ZSTD => {
+            CODEC_NONE => Ok(Cow::Borrowed(payload)),
+            CODEC_ZSTD => {
                 let size = usize::try_from(entry.uncompressed_size).map_err(|_| {
                     IonError::from("metadata groups: uncompressed size out of range")
                 })?;
@@ -211,7 +211,7 @@ impl MetaGroupReader {
             meta_count as u64,
             numeric_count as u64,
             string_count as u64,
-            HDR_CODEC_NONE,
+            CODEC_NONE,
             0,
             self.budget,
         )?;
@@ -286,9 +286,9 @@ fn read_directory(section: &[u8], group_count: u64) -> IonResult<Vec<MetaGroupEn
 #[cfg(test)]
 mod tests {
     use super::MetaGroupReader;
-    use crate::ion::DecompressionBudget;
     use crate::ion::format::CODEC_NONE;
     use crate::ion::meta_groups::MetaTotals;
+    use crate::ion::{DecompressionBudget, IonResult};
     use std::sync::Arc;
 
     fn no_totals() -> MetaTotals {
@@ -300,7 +300,7 @@ mod tests {
         }
     }
 
-    fn new_reader(group_count: u64, group_size: u32, item_count: u64) -> crate::ion::IonResult<()> {
+    fn new_reader(group_count: u64, group_size: u32, item_count: u64) -> IonResult<()> {
         MetaGroupReader::new(
             Arc::from(&[][..]),
             group_count,

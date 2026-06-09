@@ -1,3 +1,12 @@
+#![cfg_attr(
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "wasm32"
+    ),
+    allow(dead_code)
+)]
+
 pub(super) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
     match stride {
         2 => shuffle2(input, output),

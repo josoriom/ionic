@@ -10,8 +10,9 @@ use crate::{
     mzml::schema::TagId,
 };
 
-pub(crate) use crate::ion::format::{CODEC_NONE as HDR_CODEC_NONE, CODEC_ZSTD as HDR_CODEC_ZSTD};
+pub(crate) use crate::ion::format::{CODEC_NONE, CODEC_ZSTD};
 
+#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
 pub(crate) fn parse_metadata(
     bytes: &[u8],
     item_count: u64,
@@ -24,8 +25,8 @@ pub(crate) fn parse_metadata(
 ) -> IonResult<Vec<Metadatum>> {
     let owned;
     let bytes = match compression_codec {
-        HDR_CODEC_NONE => bytes,
-        HDR_CODEC_ZSTD => {
+        CODEC_NONE => bytes,
+        CODEC_ZSTD => {
             owned = decompress_zstd_allow_aligned_padding(
                 bytes,
                 expected_uncompressed_bytes,
@@ -121,7 +122,7 @@ fn validate_trailing_bytes(
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
 ) -> IonResult<()> {
-    if compression_codec == HDR_CODEC_ZSTD {
+    if compression_codec == CODEC_ZSTD {
         if pos != bytes.len() {
             return Err("trailing bytes in decompressed metadata section".into());
         }

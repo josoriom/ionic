@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use ionic::{
     ion::{
-        encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+        encoder::encode::{
+            DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+            TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        },
         encoder::ion_writer::write_mzml_to_ion,
         encoder::utilities::SectionChunkMode,
     },
@@ -36,6 +39,8 @@ fn config(mode: SectionChunkMode, compression_level: u8) -> EncodingConfig {
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_chunk: mode,
+        target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
+        min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
     }
 }
 

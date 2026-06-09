@@ -24,8 +24,9 @@ use crate::{
     mzml::{
         schema::TagId,
         structs::{
-            BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, Precursor, Product,
-            ReferenceableParamGroupRef, ScanList, Spectrum, SpectrumDescription, UserParam,
+            BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, Precursor,
+            PrecursorList, Product, ProductList, ReferenceableParamGroupRef, ScanList, Spectrum,
+            SpectrumDescription, UserParam,
         },
     },
 };
@@ -34,6 +35,8 @@ use super::encoder_output::SectionChunk;
 use crate::ion::meta_groups::{META_GROUP_ENTRY_SIZE, MetaGroupEntry, write_group_header};
 
 const USER_PARAM_NAME_VALUE_SEPARATOR: char = '\0';
+pub(crate) const LOCAL_LIST_NODE_ID: u32 = 1;
+pub(crate) const FIRST_LOCAL_ITEM_NODE_ID: u32 = 2;
 
 pub(crate) struct MetaCollector {
     context: TraversalContext,
@@ -44,11 +47,6 @@ impl MetaCollector {
         Self {
             context: TraversalContext::new(),
         }
-    }
-
-    #[inline]
-    pub(crate) fn alloc(&mut self) -> u32 {
-        self.context.alloc()
     }
 
     pub(crate) fn collect_global_meta(&mut self, mzml: &MzML) -> (PackedMeta, GlobalCounts) {
@@ -66,16 +64,20 @@ impl MetaCollector {
     ) -> IonResult<()>
     where
         T: MzmlListItem,
-        L: crate::ion::utilities::EmitAttributes,
+        L: EmitAttributes,
     {
+        if metadata_writer.is_first_item_in_group() {
+            self.context.reset_for_item_group();
+        }
         let mut buffer = MetaParamBuffer::new();
         {
             let mut writer = buffer.as_writer();
-            if item_index == 0 && list_node_id != 0 {
-                if let Some(schema) = list_schema {
-                    writer.touch(T::list_tag(), list_node_id, 0);
-                    writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
-                }
+            if metadata_writer.is_first_item_in_group()
+                && list_node_id != 0
+                && let Some(schema) = list_schema
+            {
+                writer.touch(T::list_tag(), list_node_id, 0);
+                writer.push_schema_attrs(T::list_tag(), list_node_id, 0, schema);
             }
             let item_id = self.context.alloc();
             writer.push_schema_attrs(T::item_tag(), item_id, list_node_id, item);
@@ -251,6 +253,9 @@ impl MetadataWriter for MetaGrouper {
         }
         Ok(())
     }
+    fn is_first_item_in_group(&self) -> bool {
+        self.items_in_group == 0
+    }
 }
 
 fn serialize_group(meta: &PackedMeta, item_start: usize, item_end: usize) -> Vec<u8> {
@@ -327,6 +332,9 @@ impl IdAllocator {
         self.0 += 1;
         id
     }
+    fn reset_to(&mut self, next: u32) {
+        self.0 = next;
+    }
 }
 
 pub(crate) struct TraversalContext {
@@ -342,6 +350,9 @@ impl TraversalContext {
     #[inline]
     fn alloc(&mut self) -> u32 {
         self.nodes.next()
+    }
+    fn reset_for_item_group(&mut self) {
+        self.nodes.reset_to(FIRST_LOCAL_ITEM_NODE_ID);
     }
 }
 
@@ -876,6 +887,9 @@ pub(crate) fn compress_bytes_if_enabled(bytes: Vec<u8>, level: u8) -> Vec<u8> {
 
 pub(crate) trait MetadataWriter {
     fn write_metadata_item(&mut self, buffer: &MetaParamBuffer) -> IonResult<()>;
+    fn is_first_item_in_group(&self) -> bool {
+        false
+    }
 }
 
 impl MetadataWriter for PackedMetaBuilder {
@@ -982,7 +996,12 @@ fn flatten_spectrum_children(
         flatten_legacy_spectrum_description(writer, desc, spectrum_id, context);
     }
     flatten_scan_list_opt(writer, spectrum.scan_list.as_ref(), spectrum_id, context);
-    flatten_precursor_list_opt(writer, spectrum.precursor_list.as_ref(), spectrum_id, context);
+    flatten_precursor_list_opt(
+        writer,
+        spectrum.precursor_list.as_ref(),
+        spectrum_id,
+        context,
+    );
     flatten_product_list_opt(writer, spectrum.product_list.as_ref(), spectrum_id, context);
     flatten_binary_data_array_list(
         writer,
@@ -1052,7 +1071,7 @@ fn flatten_scan_list_opt(
 
 fn flatten_precursor_list_opt(
     writer: &mut MetaParamWriter<'_>,
-    pl: Option<&crate::mzml::structs::PrecursorList>,
+    pl: Option<&PrecursorList>,
     parent: u32,
     context: &mut TraversalContext,
 ) {
@@ -1073,7 +1092,7 @@ fn flatten_precursor_list_opt(
 
 fn flatten_product_list_opt(
     writer: &mut MetaParamWriter<'_>,
-    pl: Option<&crate::mzml::structs::ProductList>,
+    pl: Option<&ProductList>,
     parent: u32,
     context: &mut TraversalContext,
 ) {
@@ -1250,7 +1269,11 @@ fn append_file_description_meta(
 
         writer.touch(TagId::FileDescription, fd_id, 0);
         writer.touch(TagId::FileContent, fc_id, fd_id);
-        writer.push_ref_group_params(fc_id, &fd.file_content.referenceable_param_group_refs, context);
+        writer.push_ref_group_params(
+            fc_id,
+            &fd.file_content.referenceable_param_group_refs,
+            context,
+        );
         writer.push_cv_and_user_params(
             fc_id,
             fd_id,
@@ -1292,7 +1315,11 @@ fn append_file_description_meta(
     1
 }
 
-fn append_run_meta(mzml: &MzML, context: &mut TraversalContext, buffers: &mut Vec<MetaParamBuffer>) -> u32 {
+fn append_run_meta(
+    mzml: &MzML,
+    context: &mut TraversalContext,
+    buffers: &mut Vec<MetaParamBuffer>,
+) -> u32 {
     let run = &mzml.run;
     append_meta_buffer(buffers, |writer| {
         let run_id = context.alloc();
@@ -1635,7 +1662,11 @@ fn append_scan_settings_list_meta(
                 for target in &tl.targets {
                     let t_id = context.alloc();
                     writer.touch(TagId::Target, t_id, ss_id);
-                    writer.push_ref_group_params(t_id, &target.referenceable_param_group_refs, context);
+                    writer.push_ref_group_params(
+                        t_id,
+                        &target.referenceable_param_group_refs,
+                        context,
+                    );
                     writer.push_cv_and_user_params(
                         t_id,
                         ss_id,
@@ -1860,14 +1891,6 @@ mod tests {
     }
 
     #[test]
-    fn collector_alloc_starts_at_one_and_increments() {
-        let mut collector = MetaCollector::new();
-        assert_eq!(collector.alloc(), 1);
-        assert_eq!(collector.alloc(), 2);
-        assert_eq!(collector.alloc(), 3);
-    }
-
-    #[test]
     fn collector_global_meta_on_empty_mzml_produces_run_buffer() {
         let mzml = MzML::default();
         let mut collector = MetaCollector::new();
@@ -2057,5 +2080,144 @@ mod tests {
             force_f32: false,
         };
         assert!(!policy.should_force_f32(MZ_ARRAY));
+    }
+
+    #[test]
+    fn group_local_node_ids_across_group_boundaries() {
+        use crate::ion::encoder::encode::{
+            DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+            TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        };
+        use crate::ion::encoder::ion_writer::write_mzml_to_ion;
+        use crate::ion::encoder::utilities::SectionChunkMode;
+        use crate::mzml::structs::{
+            BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+            SpectrumList,
+        };
+
+        fn make_array(accession: &str, data: Vec<f64>) -> BinaryDataArray {
+            BinaryDataArray {
+                cv_params: vec![CvParam {
+                    cv_ref: Some("MS".to_string()),
+                    accession: Some(accession.to_string()),
+                    name: String::new(),
+                    ..Default::default()
+                }],
+                binary: Some(BinaryData::F64(data)),
+                ..Default::default()
+            }
+        }
+
+        let mut spectra = Vec::new();
+        for i in 0..9000 {
+            let mz_data: Vec<f64> = (0..10).map(|j| 100.0 + i as f64 + j as f64 * 0.1).collect();
+            let intensity_data: Vec<f64> = (0..10).map(|j| 1000.0 + i as f64 + j as f64).collect();
+
+            let spectrum = Spectrum {
+                id: format!("spectrum={}", i),
+                index: Some(i as u32),
+                binary_data_array_list: Some(BinaryDataArrayList {
+                    count: Some(2),
+                    binary_data_arrays: vec![
+                        make_array("MS:1000514", mz_data),
+                        make_array("MS:1000515", intensity_data),
+                    ],
+                }),
+                ..Default::default()
+            };
+            spectra.push(spectrum);
+        }
+
+        let run = Run {
+            id: "run1".to_string(),
+            spectrum_list: Some(SpectrumList {
+                count: Some(spectra.len()),
+                spectra,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mzml = MzML {
+            run,
+            ..Default::default()
+        };
+
+        let mut output = Vec::new();
+        write_mzml_to_ion(
+            &mzml,
+            EncodingConfig {
+                compression_level: 0,
+                force_f32: false,
+                uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+                parallel: false,
+                section_chunk: SectionChunkMode::Memory,
+                target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
+                min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
+            },
+            &mut output,
+        )
+        .unwrap();
+
+        use crate::ion::decoder::decode::{Decoder, DecoderConfig, Metadatum};
+        use crate::mzml::schema::TagId;
+
+        fn find_row(rows: &[Metadatum], tag: TagId, id: u32) -> &Metadatum {
+            rows.iter()
+                .find(|row| row.tag_id == tag && row.id == id)
+                .unwrap_or_else(|| panic!("row not found: tag={:?}, id={}", tag, id))
+        }
+
+        let mut decoder =
+            Decoder::open(&output, DecoderConfig::default()).expect("failed to open decoder");
+
+        let first_rows = decoder
+            .spectrum_metadata_at(0)
+            .expect("failed to read first spectrum metadata");
+        let second_rows = decoder
+            .spectrum_metadata_at(8192)
+            .expect("failed to read second spectrum metadata");
+
+        let first_list = find_row(&first_rows, TagId::SpectrumList, LOCAL_LIST_NODE_ID);
+        let second_list = find_row(&second_rows, TagId::SpectrumList, LOCAL_LIST_NODE_ID);
+
+        assert_eq!(
+            first_list.parent_id, 0,
+            "first group list should have parent_id=0"
+        );
+        assert_eq!(
+            second_list.parent_id, 0,
+            "second group list should have parent_id=0"
+        );
+
+        let first_spectrum = find_row(&first_rows, TagId::Spectrum, FIRST_LOCAL_ITEM_NODE_ID);
+        let second_spectrum = find_row(&second_rows, TagId::Spectrum, FIRST_LOCAL_ITEM_NODE_ID);
+
+        assert_eq!(
+            first_spectrum.parent_id, LOCAL_LIST_NODE_ID,
+            "first group spectrum should parent to list id=1"
+        );
+        assert_eq!(
+            second_spectrum.parent_id, LOCAL_LIST_NODE_ID,
+            "second group spectrum should parent to list id=1"
+        );
+
+        let first_bda_list = first_rows
+            .iter()
+            .find(|row| row.tag_id == TagId::BinaryDataArrayList)
+            .expect("first group should have BinaryDataArrayList");
+        let second_bda_list = second_rows
+            .iter()
+            .find(|row| row.tag_id == TagId::BinaryDataArrayList)
+            .expect("second group should have BinaryDataArrayList");
+
+        assert_eq!(
+            first_bda_list.parent_id, FIRST_LOCAL_ITEM_NODE_ID,
+            "first group BinaryDataArrayList should parent to spectrum id=2"
+        );
+        assert_eq!(
+            second_bda_list.parent_id, FIRST_LOCAL_ITEM_NODE_ID,
+            "second group BinaryDataArrayList should parent to spectrum id=2"
+        );
     }
 }

@@ -1,16 +1,14 @@
 use crate::{
-    ion::{
-        decoder::decode::Metadatum,
-        utilities::{
-            children_lookup::{ChildrenLookup, OwnerRows},
-            parse_scan_list,
-        },
+    ion::utilities::{
+        children_lookup::{ChildrenLookup, OwnerRows},
+        parse_scan_list,
     },
     mzml::{schema::TagId, structs::CvParam},
 };
 
 const PATH: &str = "data/ion/test.ion";
 
+#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
 fn assert_cv_param(
     p: &CvParam,
     cv_ref: Option<&str>,

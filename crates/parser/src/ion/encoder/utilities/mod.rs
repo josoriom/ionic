@@ -9,4 +9,5 @@ pub(crate) mod file_header_writer;
 pub(crate) use file_header_writer::FileHeader;
 pub(crate) mod le_writers;
 pub(crate) mod meta_collector;
+pub(crate) mod segments;
 pub(crate) mod tables;
