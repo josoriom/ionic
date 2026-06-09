@@ -5,7 +5,7 @@ use crate::{
         utilities::{
             common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
             decompression_budget::DecompressionBudget,
-            parse_metadata::{HDR_CODEC_NONE, HDR_CODEC_ZSTD, parse_metadata},
+            parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
         },
     },
 };
@@ -27,7 +27,7 @@ pub(crate) fn parse_global_metadata(
 
     let owned;
     let bytes = match compression_codec {
-        HDR_CODEC_NONE => {
+        CODEC_NONE => {
             if expected_byte_count == 0 {
                 bytes
             } else if bytes.len() < expected_byte_count {
@@ -42,7 +42,7 @@ pub(crate) fn parse_global_metadata(
                 bytes
             }
         }
-        HDR_CODEC_ZSTD => {
+        CODEC_ZSTD => {
             owned = decompress_zstd_allow_aligned_padding(
                 bytes,
                 expected_byte_count,
@@ -111,7 +111,7 @@ pub(crate) fn parse_global_metadata(
         meta_count,
         num_count,
         str_count,
-        HDR_CODEC_NONE,
+        CODEC_NONE,
         0,
         decompression_budget,
     )
@@ -147,7 +147,7 @@ mod tests {
             0,
             0,
             0,
-            HDR_CODEC_NONE,
+            CODEC_NONE,
             0,
             DecompressionBudget::default(),
         );
@@ -167,7 +167,7 @@ mod tests {
             0,
             0,
             0,
-            HDR_CODEC_NONE,
+            CODEC_NONE,
             0,
             DecompressionBudget::default(),
         );
@@ -187,7 +187,7 @@ mod tests {
             0,
             0,
             0,
-            HDR_CODEC_NONE,
+            CODEC_NONE,
             0,
             DecompressionBudget::default(),
         );
@@ -216,7 +216,7 @@ mod tests {
             0,
             0,
             0,
-            HDR_CODEC_NONE,
+            CODEC_NONE,
             expected as u64,
             DecompressionBudget::default(),
         );
@@ -236,7 +236,7 @@ mod tests {
             0,
             0,
             0,
-            HDR_CODEC_NONE,
+            CODEC_NONE,
             expected as u64,
             DecompressionBudget::default(),
         );

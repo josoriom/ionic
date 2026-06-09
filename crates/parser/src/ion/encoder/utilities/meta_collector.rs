@@ -24,8 +24,9 @@ use crate::{
     mzml::{
         schema::TagId,
         structs::{
-            BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, Precursor, Product,
-            ReferenceableParamGroupRef, ScanList, Spectrum, SpectrumDescription, UserParam,
+            BinaryDataArray, BinaryDataArrayList, Chromatogram, CvParam, MzML, Precursor,
+            PrecursorList, Product, ProductList, ReferenceableParamGroupRef, ScanList, Spectrum,
+            SpectrumDescription, UserParam,
         },
     },
 };
@@ -63,7 +64,7 @@ impl MetaCollector {
     ) -> IonResult<()>
     where
         T: MzmlListItem,
-        L: crate::ion::utilities::EmitAttributes,
+        L: EmitAttributes,
     {
         if metadata_writer.is_first_item_in_group() {
             self.context.reset_for_item_group();
@@ -994,7 +995,12 @@ fn flatten_spectrum_children(
         flatten_legacy_spectrum_description(writer, desc, spectrum_id, context);
     }
     flatten_scan_list_opt(writer, spectrum.scan_list.as_ref(), spectrum_id, context);
-    flatten_precursor_list_opt(writer, spectrum.precursor_list.as_ref(), spectrum_id, context);
+    flatten_precursor_list_opt(
+        writer,
+        spectrum.precursor_list.as_ref(),
+        spectrum_id,
+        context,
+    );
     flatten_product_list_opt(writer, spectrum.product_list.as_ref(), spectrum_id, context);
     flatten_binary_data_array_list(
         writer,
@@ -1064,7 +1070,7 @@ fn flatten_scan_list_opt(
 
 fn flatten_precursor_list_opt(
     writer: &mut MetaParamWriter<'_>,
-    pl: Option<&crate::mzml::structs::PrecursorList>,
+    pl: Option<&PrecursorList>,
     parent: u32,
     context: &mut TraversalContext,
 ) {
@@ -1085,7 +1091,7 @@ fn flatten_precursor_list_opt(
 
 fn flatten_product_list_opt(
     writer: &mut MetaParamWriter<'_>,
-    pl: Option<&crate::mzml::structs::ProductList>,
+    pl: Option<&ProductList>,
     parent: u32,
     context: &mut TraversalContext,
 ) {
@@ -1262,7 +1268,11 @@ fn append_file_description_meta(
 
         writer.touch(TagId::FileDescription, fd_id, 0);
         writer.touch(TagId::FileContent, fc_id, fd_id);
-        writer.push_ref_group_params(fc_id, &fd.file_content.referenceable_param_group_refs, context);
+        writer.push_ref_group_params(
+            fc_id,
+            &fd.file_content.referenceable_param_group_refs,
+            context,
+        );
         writer.push_cv_and_user_params(
             fc_id,
             fd_id,
@@ -1304,7 +1314,11 @@ fn append_file_description_meta(
     1
 }
 
-fn append_run_meta(mzml: &MzML, context: &mut TraversalContext, buffers: &mut Vec<MetaParamBuffer>) -> u32 {
+fn append_run_meta(
+    mzml: &MzML,
+    context: &mut TraversalContext,
+    buffers: &mut Vec<MetaParamBuffer>,
+) -> u32 {
     let run = &mzml.run;
     append_meta_buffer(buffers, |writer| {
         let run_id = context.alloc();
@@ -1647,7 +1661,11 @@ fn append_scan_settings_list_meta(
                 for target in &tl.targets {
                     let t_id = context.alloc();
                     writer.touch(TagId::Target, t_id, ss_id);
-                    writer.push_ref_group_params(t_id, &target.referenceable_param_group_refs, context);
+                    writer.push_ref_group_params(
+                        t_id,
+                        &target.referenceable_param_group_refs,
+                        context,
+                    );
                     writer.push_cv_and_user_params(
                         t_id,
                         ss_id,
@@ -2126,7 +2144,7 @@ mod tests {
                 uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
                 parallel: false,
                 section_chunk: SectionChunkMode::Memory,
-                target_piece_bytes: 128 * 1024,
+                target_segment_bytes: 128 * 1024,
                 min_split_bytes: 512 * 1024,
             },
             &mut output,
@@ -2142,8 +2160,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("row not found: tag={:?}, id={}", tag, id))
         }
 
-        let mut decoder = Decoder::open(&output, DecoderConfig::default())
-            .expect("failed to open decoder");
+        let mut decoder =
+            Decoder::open(&output, DecoderConfig::default()).expect("failed to open decoder");
 
         let first_rows = decoder
             .spectrum_metadata_at(0)

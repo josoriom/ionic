@@ -1,6 +1,5 @@
 pub(crate) mod axes;
 pub(crate) mod byte_transpose;
-pub(crate) mod extensions;
 pub mod filter_summary;
 pub(crate) mod meta_groups;
 pub(crate) mod packing;
@@ -14,7 +13,7 @@ pub(crate) use decoder::utilities;
 pub use decoder::utilities::byte_source::MmapSource;
 pub use decoder::utilities::byte_source::{
     AsyncByteSource, AsyncQueryCallbackSource, AsyncQueryReader, ByteSource, Query,
-    QueryCallbackSource, QueryPromise, QueryReader, QueryPayload, SliceSource,
+    QueryCallbackSource, QueryPayload, QueryPromise, QueryReader, SliceSource,
 };
 pub use decoder::utilities::decompression_budget::{
     DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionBudget,

@@ -54,7 +54,8 @@ pub(crate) fn spectrum_by_id<'a>(mzml: &'a MzML, id: &str) -> &'a Spectrum {
         .spectrum_list
         .as_ref()
         .expect("spectrumList parsed");
-    spectrum_list.spectra
+    spectrum_list
+        .spectra
         .iter()
         .find(|spectrum| spectrum.id == id)
         .unwrap_or_else(|| panic!("spectrum {id} not found"))
@@ -67,14 +68,16 @@ pub(crate) fn spectrum_by_index(mzml: &MzML, index: usize) -> &Spectrum {
         .spectrum_list
         .as_ref()
         .expect("spectrumList parsed");
-    spectrum_list.spectra
+    spectrum_list
+        .spectra
         .get(index)
         .unwrap_or_else(|| panic!("spectrum index {index} not found"))
 }
 
 #[allow(dead_code)]
 pub(crate) fn spectrum_description(spectrum: &Spectrum) -> &SpectrumDescription {
-    spectrum.spectrum_description
+    spectrum
+        .spectrum_description
         .as_ref()
         .expect("spectrumDescription parsed")
 }
@@ -107,8 +110,12 @@ pub(crate) fn chromatogram_list(run: &Run) -> &ChromatogramList {
 }
 
 #[allow(dead_code)]
-pub(crate) fn chromatogram<'a>(chromatogram_list: &'a ChromatogramList, id: &str) -> &'a Chromatogram {
-    chromatogram_list.chromatograms
+pub(crate) fn chromatogram<'a>(
+    chromatogram_list: &'a ChromatogramList,
+    id: &str,
+) -> &'a Chromatogram {
+    chromatogram_list
+        .chromatograms
         .iter()
         .find(|c| c.id == id)
         .unwrap_or_else(|| panic!("chromatogram {id} not found"))

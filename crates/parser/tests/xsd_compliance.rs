@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 mod common;
 
 use common::helpers::{

@@ -1,15 +1,11 @@
 use crate::ion::{
     IonResult,
-    extensions::ExtensionLocation,
     format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, allow_compression, allow_version},
 };
 
-const RESERVED_EXT_SIZE: usize = 616;
 const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
 
 pub const HEADER_FORMAT_VERSION_OFFSET: usize = 9;
-pub const HEADER_OFFSET_EXTENSIONS: usize = 376;
-pub const HEADER_LENGTH_EXTENSIONS: usize = 384;
 
 #[inline]
 pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
@@ -20,6 +16,16 @@ pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
     let mut buf = [0u8; 2];
     buf.copy_from_slice(&bytes[HEADER_FORMAT_VERSION_OFFSET..end]);
     Some(u16::from_le_bytes(buf))
+}
+
+#[inline]
+fn read_u32_at(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(<[u8; 4]>::try_from(&bytes[offset..offset + 4]).unwrap())
+}
+
+#[inline]
+fn read_u64_at(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[offset..offset + 8]).unwrap())
 }
 
 pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
@@ -50,217 +56,86 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         return Err("header: reserved[2] at 14..16 must be zero".into());
     }
 
-    let target_block_uncompressed_bytes = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_TARGET_BLOCK_SIZE..HEADER_TARGET_BLOCK_SIZE + 8]).unwrap(),
-    );
+    let target_block_uncompressed_bytes = read_u64_at(h, HEADER_TARGET_BLOCK_SIZE);
 
-    let off_spec_entries = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_SPEC_ENTRIES..HEADER_OFFSET_SPEC_ENTRIES + 8])
-            .unwrap(),
-    );
-    let len_spec_entries = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_SPEC_ENTRIES..HEADER_LEN_SPEC_ENTRIES + 8]).unwrap(),
-    );
-    let off_spec_arrayrefs = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_SPEC_ARRAYREFS..HEADER_OFFSET_SPEC_ARRAYREFS + 8])
-            .unwrap(),
-    );
-    let len_spec_arrayrefs = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_SPEC_ARRAYREFS..HEADER_LEN_SPEC_ARRAYREFS + 8]).unwrap(),
-    );
-    let off_chrom_entries = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_CHROM_ENTRIES..HEADER_OFFSET_CHROM_ENTRIES + 8])
-            .unwrap(),
-    );
-    let len_chrom_entries = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_CHROM_ENTRIES..HEADER_LEN_CHROM_ENTRIES + 8]).unwrap(),
-    );
-    let off_chrom_arrayrefs = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_CHROM_ARRAYREFS..HEADER_OFFSET_CHROM_ARRAYREFS + 8])
-            .unwrap(),
-    );
-    let len_chrom_arrayrefs = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_CHROM_ARRAYREFS..HEADER_LEN_CHROM_ARRAYREFS + 8])
-            .unwrap(),
-    );
-    let off_spec_meta = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_SPEC_META..HEADER_OFFSET_SPEC_META + 8]).unwrap(),
-    );
-    let len_spec_meta = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_SPEC_META..HEADER_LEN_SPEC_META + 8]).unwrap(),
-    );
-    let off_chrom_meta = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_CHROM_META..HEADER_OFFSET_CHROM_META + 8]).unwrap(),
-    );
-    let len_chrom_meta = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_CHROM_META..HEADER_LEN_CHROM_META + 8]).unwrap(),
-    );
-    let off_global_meta = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_GLOBAL_META..HEADER_OFFSET_GLOBAL_META + 8]).unwrap(),
-    );
-    let len_global_meta = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_GLOBAL_META..HEADER_LEN_GLOBAL_META + 8]).unwrap(),
-    );
-    let off_spec_container = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_PACKED_SPECTRA..HEADER_OFFSET_PACKED_SPECTRA + 8])
-            .unwrap(),
-    );
-    let len_spec_container = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_PACKED_SPECTRA..HEADER_LEN_PACKED_SPECTRA + 8]).unwrap(),
-    );
-    let off_chrom_container = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_PACKED_CHROMS..HEADER_OFFSET_PACKED_CHROMS + 8])
-            .unwrap(),
-    );
-    let len_chrom_container = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_PACKED_CHROMS..HEADER_LEN_PACKED_CHROMS + 8]).unwrap(),
-    );
+    let off_spec_entries = read_u64_at(h, HEADER_OFFSET_SPEC_ENTRIES);
+    let len_spec_entries = read_u64_at(h, HEADER_LEN_SPEC_ENTRIES);
+    let off_spec_arrayrefs = read_u64_at(h, HEADER_OFFSET_SPEC_ARRAYREFS);
+    let len_spec_arrayrefs = read_u64_at(h, HEADER_LEN_SPEC_ARRAYREFS);
+    let off_chrom_entries = read_u64_at(h, HEADER_OFFSET_CHROM_ENTRIES);
+    let len_chrom_entries = read_u64_at(h, HEADER_LEN_CHROM_ENTRIES);
+    let off_chrom_arrayrefs = read_u64_at(h, HEADER_OFFSET_CHROM_ARRAYREFS);
+    let len_chrom_arrayrefs = read_u64_at(h, HEADER_LEN_CHROM_ARRAYREFS);
+    let off_spec_meta = read_u64_at(h, HEADER_OFFSET_SPEC_META);
+    let len_spec_meta = read_u64_at(h, HEADER_LEN_SPEC_META);
+    let off_chrom_meta = read_u64_at(h, HEADER_OFFSET_CHROM_META);
+    let len_chrom_meta = read_u64_at(h, HEADER_LEN_CHROM_META);
+    let off_global_meta = read_u64_at(h, HEADER_OFFSET_GLOBAL_META);
+    let len_global_meta = read_u64_at(h, HEADER_LEN_GLOBAL_META);
+    let off_spec_container = read_u64_at(h, HEADER_OFFSET_PACKED_SPECTRA);
+    let len_spec_container = read_u64_at(h, HEADER_LEN_PACKED_SPECTRA);
+    let off_chrom_container = read_u64_at(h, HEADER_OFFSET_PACKED_CHROMS);
+    let len_chrom_container = read_u64_at(h, HEADER_LEN_PACKED_CHROMS);
 
-    let spec_block_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPECTRUM_BLOCK_COUNT..HEADER_SPECTRUM_BLOCK_COUNT + 8])
-            .unwrap(),
-    );
-    let chrom_block_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_CHROM_BLOCK_COUNT..HEADER_CHROM_BLOCK_COUNT + 8]).unwrap(),
-    );
-    let spectrum_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPECTRUM_COUNT..HEADER_SPECTRUM_COUNT + 8]).unwrap(),
-    );
-    let chrom_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_CHROM_COUNT..HEADER_CHROM_COUNT + 8]).unwrap(),
-    );
+    let spec_block_count = read_u64_at(h, HEADER_SPECTRUM_BLOCK_COUNT);
+    let chrom_block_count = read_u64_at(h, HEADER_CHROM_BLOCK_COUNT);
+    let spectrum_count = read_u64_at(h, HEADER_SPECTRUM_COUNT);
+    let chrom_count = read_u64_at(h, HEADER_CHROM_COUNT);
 
-    let spec_meta_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPEC_META_ROW_COUNT..HEADER_SPEC_META_ROW_COUNT + 8])
-            .unwrap(),
-    );
-    let spec_meta_numeric_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPEC_META_NUMERIC_COUNT..HEADER_SPEC_META_NUMERIC_COUNT + 8])
-            .unwrap(),
-    );
-    let spec_meta_string_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPEC_META_STRING_COUNT..HEADER_SPEC_META_STRING_COUNT + 8])
-            .unwrap(),
-    );
-    let chrom_meta_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_CHROM_META_ROW_COUNT..HEADER_CHROM_META_ROW_COUNT + 8])
-            .unwrap(),
-    );
-    let chrom_meta_numeric_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(
-            &h[HEADER_CHROM_META_NUMERIC_COUNT..HEADER_CHROM_META_NUMERIC_COUNT + 8],
-        )
-        .unwrap(),
-    );
-    let chrom_meta_string_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_CHROM_META_STRING_COUNT..HEADER_CHROM_META_STRING_COUNT + 8])
-            .unwrap(),
-    );
-    let global_meta_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_GLOBAL_META_ROW_COUNT..HEADER_GLOBAL_META_ROW_COUNT + 8])
-            .unwrap(),
-    );
-    let global_meta_numeric_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(
-            &h[HEADER_GLOBAL_META_NUMERIC_COUNT..HEADER_GLOBAL_META_NUMERIC_COUNT + 8],
-        )
-        .unwrap(),
-    );
-    let global_meta_string_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(
-            &h[HEADER_GLOBAL_META_STRING_COUNT..HEADER_GLOBAL_META_STRING_COUNT + 8],
-        )
-        .unwrap(),
-    );
-    let spec_array_type_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPEC_ARRAY_TYPE_COUNT..HEADER_SPEC_ARRAY_TYPE_COUNT + 8])
-            .unwrap(),
-    );
-    let chrom_array_type_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_CHROM_ARRAY_TYPE_COUNT..HEADER_CHROM_ARRAY_TYPE_COUNT + 8])
-            .unwrap(),
-    );
+    let spec_meta_count = read_u64_at(h, HEADER_SPEC_META_ROW_COUNT);
+    let spec_meta_numeric_count = read_u64_at(h, HEADER_SPEC_META_NUMERIC_COUNT);
+    let spec_meta_string_count = read_u64_at(h, HEADER_SPEC_META_STRING_COUNT);
+    let chrom_meta_count = read_u64_at(h, HEADER_CHROM_META_ROW_COUNT);
+    let chrom_meta_numeric_count = read_u64_at(h, HEADER_CHROM_META_NUMERIC_COUNT);
+    let chrom_meta_string_count = read_u64_at(h, HEADER_CHROM_META_STRING_COUNT);
+    let global_meta_count = read_u64_at(h, HEADER_GLOBAL_META_ROW_COUNT);
+    let global_meta_numeric_count = read_u64_at(h, HEADER_GLOBAL_META_NUMERIC_COUNT);
+    let global_meta_string_count = read_u64_at(h, HEADER_GLOBAL_META_STRING_COUNT);
+    let spec_array_type_count = read_u64_at(h, HEADER_SPEC_ARRAY_TYPE_COUNT);
+    let chrom_array_type_count = read_u64_at(h, HEADER_CHROM_ARRAY_TYPE_COUNT);
 
-    let spec_meta_uncompressed_bytes = u64::from_le_bytes(
-        <[u8; 8]>::try_from(
-            &h[HEADER_SPEC_META_UNCOMPRESSED_SIZE..HEADER_SPEC_META_UNCOMPRESSED_SIZE + 8],
-        )
-        .unwrap(),
-    );
-    let chrom_meta_uncompressed_bytes = u64::from_le_bytes(
-        <[u8; 8]>::try_from(
-            &h[HEADER_CHROM_META_UNCOMPRESSED_SIZE..HEADER_CHROM_META_UNCOMPRESSED_SIZE + 8],
-        )
-        .unwrap(),
-    );
-    let global_meta_uncompressed_bytes = u64::from_le_bytes(
-        <[u8; 8]>::try_from(
-            &h[HEADER_GLOBAL_META_UNCOMPRESSED_SIZE..HEADER_GLOBAL_META_UNCOMPRESSED_SIZE + 8],
-        )
-        .unwrap(),
-    );
+    let spec_meta_uncompressed_bytes = read_u64_at(h, HEADER_SPEC_META_UNCOMPRESSED_SIZE);
+    let chrom_meta_uncompressed_bytes = read_u64_at(h, HEADER_CHROM_META_UNCOMPRESSED_SIZE);
+    let global_meta_uncompressed_bytes = read_u64_at(h, HEADER_GLOBAL_META_UNCOMPRESSED_SIZE);
 
-    let off_spec_summary = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFF_SPEC_SUMMARY..HEADER_OFF_SPEC_SUMMARY + 8]).unwrap(),
-    );
-    let len_spec_summary = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_SPEC_SUMMARY..HEADER_LEN_SPEC_SUMMARY + 8]).unwrap(),
-    );
-    let off_chrom_summary = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFF_CHROM_SUMMARY..HEADER_OFF_CHROM_SUMMARY + 8]).unwrap(),
-    );
-    let len_chrom_summary = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LEN_CHROM_SUMMARY..HEADER_LEN_CHROM_SUMMARY + 8]).unwrap(),
-    );
-    let total_file_size = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_TOTAL_FILE_SIZE..HEADER_TOTAL_FILE_SIZE + 8]).unwrap(),
-    );
+    let off_spec_summary = read_u64_at(h, HEADER_OFFSET_SPEC_SUMMARY);
+    let len_spec_summary = read_u64_at(h, HEADER_LEN_SPEC_SUMMARY);
+    let off_chrom_summary = read_u64_at(h, HEADER_OFFSET_CHROM_SUMMARY);
+    let len_chrom_summary = read_u64_at(h, HEADER_LEN_CHROM_SUMMARY);
+    let total_file_size = read_u64_at(h, HEADER_TOTAL_FILE_SIZE);
 
-    let meta_group_size_stored = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_META_GROUP_SIZE..HEADER_META_GROUP_SIZE + 8]).unwrap(),
-    );
+    let meta_group_size_stored = read_u64_at(h, HEADER_META_GROUP_SIZE);
     if meta_group_size_stored > u32::MAX as u64 {
         return Err("header: meta_group_size exceeds u32 range".into());
     }
     let meta_group_size = meta_group_size_stored as u32;
-    let spec_meta_group_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_SPEC_META_GROUP_COUNT..HEADER_SPEC_META_GROUP_COUNT + 8])
-            .unwrap(),
-    );
-    let chrom_meta_group_count = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_CHROM_META_GROUP_COUNT..HEADER_CHROM_META_GROUP_COUNT + 8])
-            .unwrap(),
-    );
+    let spec_meta_group_count = read_u64_at(h, HEADER_SPEC_META_GROUP_COUNT);
+    let chrom_meta_group_count = read_u64_at(h, HEADER_CHROM_META_GROUP_COUNT);
 
-    let ext_offset = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_OFFSET_EXTENSIONS..HEADER_OFFSET_EXTENSIONS + 8]).unwrap(),
-    );
-    let ext_length = u64::from_le_bytes(
-        <[u8; 8]>::try_from(&h[HEADER_LENGTH_EXTENSIONS..HEADER_LENGTH_EXTENSIONS + 8]).unwrap(),
-    );
+    let off_spec_segment_bounds = read_u64_at(h, HEADER_OFFSET_SPEC_SEGMENT_BOUNDS);
+    let len_spec_segment_bounds = read_u64_at(h, HEADER_LEN_SPEC_SEGMENT_BOUNDS);
+    let off_chrom_segment_bounds = read_u64_at(h, HEADER_OFFSET_CHROM_SEGMENT_BOUNDS);
+    let len_chrom_segment_bounds = read_u64_at(h, HEADER_LEN_CHROM_SEGMENT_BOUNDS);
+    let spec_segment_bounds_crc32 = read_u32_at(h, HEADER_SPEC_SEGMENT_BOUNDS_CRC32);
+    let chrom_segment_bounds_crc32 = read_u32_at(h, HEADER_CHROM_SEGMENT_BOUNDS_CRC32);
 
-    let extensions = match (ext_offset, ext_length) {
-        (0, 0) => None,
-        (0, _) | (_, 0) => return Err("header: extension pointer must be both zero or both non-zero".into()),
-        (offset, length) => Some(ExtensionLocation { offset, length }),
-    };
+    let plain_len_spec_segment_bounds = read_u64_at(h, HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS);
+    let plain_len_chrom_segment_bounds = read_u64_at(h, HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS);
 
-    let reserved_ext = <[u8; RESERVED_EXT_SIZE]>::try_from(&h[392..1008]).unwrap();
-    if reserved_ext.iter().any(|&b| b != 0) {
-        return Err("header: reserved_ext must be all zeros".into());
+    let reserved = <[u8; RESERVED_BLOCK_SIZE]>::try_from(
+        &h[RESERVED_BLOCK_START..RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE],
+    )
+    .unwrap();
+    if reserved.iter().any(|&b| b != 0) {
+        return Err("header: reserved block 424..992 must be all zeros".into());
     }
 
-    let spec_meta_crc32 = u32::from_le_bytes(
-        <[u8; 4]>::try_from(&h[HEADER_SPEC_META_CRC32..HEADER_SPEC_META_CRC32 + 4]).unwrap(),
-    );
-    let chrom_meta_crc32 = u32::from_le_bytes(
-        <[u8; 4]>::try_from(&h[HEADER_CHROM_META_CRC32..HEADER_CHROM_META_CRC32 + 4]).unwrap(),
-    );
-    let global_meta_crc32 = u32::from_le_bytes(
-        <[u8; 4]>::try_from(&h[HEADER_GLOBAL_META_CRC32..HEADER_GLOBAL_META_CRC32 + 4]).unwrap(),
-    );
-    let header_crc32 =
-        u32::from_le_bytes(<[u8; 4]>::try_from(&h[HEADER_CRC32..HEADER_CRC32 + 4]).unwrap());
+    let spec_directory_crc32 = read_u32_at(h, HEADER_SPEC_DIRECTORY_CRC32);
+    let chrom_directory_crc32 = read_u32_at(h, HEADER_CHROM_DIRECTORY_CRC32);
+    let spec_meta_crc32 = read_u32_at(h, HEADER_SPEC_META_CRC32);
+    let chrom_meta_crc32 = read_u32_at(h, HEADER_CHROM_META_CRC32);
+    let global_meta_crc32 = read_u32_at(h, HEADER_GLOBAL_META_CRC32);
+    let header_crc32 = read_u32_at(h, HEADER_CRC32);
 
     let header = Header {
         file_signature,
@@ -314,8 +189,17 @@ pub(crate) fn parse_header(bytes: &[u8]) -> IonResult<Header> {
         meta_group_size,
         spec_meta_group_count,
         chrom_meta_group_count,
-        extensions,
-        reserved_ext,
+        reserved,
+        spec_directory_crc32,
+        chrom_directory_crc32,
+        off_spec_segment_bounds,
+        len_spec_segment_bounds,
+        off_chrom_segment_bounds,
+        len_chrom_segment_bounds,
+        plain_len_spec_segment_bounds,
+        plain_len_chrom_segment_bounds,
+        spec_segment_bounds_crc32,
+        chrom_segment_bounds_crc32,
         spec_meta_crc32,
         chrom_meta_crc32,
         global_meta_crc32,
@@ -390,8 +274,17 @@ pub(crate) struct Header {
     pub(crate) meta_group_size: u32,
     pub(crate) spec_meta_group_count: u64,
     pub(crate) chrom_meta_group_count: u64,
-    pub(crate) extensions: Option<ExtensionLocation>,
-    pub(crate) reserved_ext: [u8; RESERVED_EXT_SIZE],
+    pub(crate) reserved: [u8; RESERVED_BLOCK_SIZE],
+    pub(crate) spec_directory_crc32: u32,
+    pub(crate) chrom_directory_crc32: u32,
+    pub(crate) off_spec_segment_bounds: u64,
+    pub(crate) len_spec_segment_bounds: u64,
+    pub(crate) off_chrom_segment_bounds: u64,
+    pub(crate) len_chrom_segment_bounds: u64,
+    pub(crate) plain_len_spec_segment_bounds: u64,
+    pub(crate) plain_len_chrom_segment_bounds: u64,
+    pub(crate) spec_segment_bounds_crc32: u32,
+    pub(crate) chrom_segment_bounds_crc32: u32,
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
     pub(crate) global_meta_crc32: u32,
@@ -402,54 +295,87 @@ pub(crate) const HEADER_CODEC_ID: usize = 11;
 pub(crate) const HEADER_COMPRESSION_LEVEL: usize = 12;
 pub(crate) const HEADER_ARRAY_FILTER_ID: usize = 13;
 pub(crate) const HEADER_TARGET_BLOCK_SIZE: usize = 16;
-pub(crate) const HEADER_OFF_SPEC_SUMMARY: usize = 24;
+
+pub(crate) const HEADER_OFFSET_SPEC_SUMMARY: usize = 24;
 pub(crate) const HEADER_LEN_SPEC_SUMMARY: usize = 32;
 pub(crate) const HEADER_OFFSET_SPEC_ENTRIES: usize = 40;
 pub(crate) const HEADER_LEN_SPEC_ENTRIES: usize = 48;
 pub(crate) const HEADER_OFFSET_SPEC_ARRAYREFS: usize = 56;
 pub(crate) const HEADER_LEN_SPEC_ARRAYREFS: usize = 64;
-pub(crate) const HEADER_OFF_CHROM_SUMMARY: usize = 72;
-pub(crate) const HEADER_LEN_CHROM_SUMMARY: usize = 80;
-pub(crate) const HEADER_OFFSET_CHROM_ENTRIES: usize = 88;
-pub(crate) const HEADER_LEN_CHROM_ENTRIES: usize = 96;
-pub(crate) const HEADER_OFFSET_CHROM_ARRAYREFS: usize = 104;
-pub(crate) const HEADER_LEN_CHROM_ARRAYREFS: usize = 112;
-pub(crate) const HEADER_OFFSET_SPEC_META: usize = 120;
-pub(crate) const HEADER_LEN_SPEC_META: usize = 128;
-pub(crate) const HEADER_OFFSET_CHROM_META: usize = 136;
-pub(crate) const HEADER_LEN_CHROM_META: usize = 144;
-pub(crate) const HEADER_OFFSET_GLOBAL_META: usize = 152;
-pub(crate) const HEADER_LEN_GLOBAL_META: usize = 160;
-pub(crate) const HEADER_OFFSET_PACKED_SPECTRA: usize = 168;
-pub(crate) const HEADER_LEN_PACKED_SPECTRA: usize = 176;
-pub(crate) const HEADER_OFFSET_PACKED_CHROMS: usize = 184;
-pub(crate) const HEADER_LEN_PACKED_CHROMS: usize = 192;
-pub(crate) const HEADER_SPECTRUM_BLOCK_COUNT: usize = 200;
-pub(crate) const HEADER_CHROM_BLOCK_COUNT: usize = 208;
-pub(crate) const HEADER_SPECTRUM_COUNT: usize = 216;
-pub(crate) const HEADER_CHROM_COUNT: usize = 224;
-pub(crate) const HEADER_SPEC_META_ROW_COUNT: usize = 232;
-pub(crate) const HEADER_SPEC_META_NUMERIC_COUNT: usize = 240;
-pub(crate) const HEADER_SPEC_META_STRING_COUNT: usize = 248;
-pub(crate) const HEADER_CHROM_META_ROW_COUNT: usize = 256;
-pub(crate) const HEADER_CHROM_META_NUMERIC_COUNT: usize = 264;
-pub(crate) const HEADER_CHROM_META_STRING_COUNT: usize = 272;
-pub(crate) const HEADER_GLOBAL_META_ROW_COUNT: usize = 280;
-pub(crate) const HEADER_GLOBAL_META_NUMERIC_COUNT: usize = 288;
-pub(crate) const HEADER_GLOBAL_META_STRING_COUNT: usize = 296;
-pub(crate) const HEADER_SPEC_ARRAY_TYPE_COUNT: usize = 304;
-pub(crate) const HEADER_CHROM_ARRAY_TYPE_COUNT: usize = 312;
-pub(crate) const HEADER_SPEC_META_UNCOMPRESSED_SIZE: usize = 320;
-pub(crate) const HEADER_CHROM_META_UNCOMPRESSED_SIZE: usize = 328;
-pub(crate) const HEADER_GLOBAL_META_UNCOMPRESSED_SIZE: usize = 336;
-pub(crate) const HEADER_TOTAL_FILE_SIZE: usize = 344;
-pub(crate) const HEADER_META_GROUP_SIZE: usize = 352;
-pub(crate) const HEADER_SPEC_META_GROUP_COUNT: usize = 360;
-pub(crate) const HEADER_CHROM_META_GROUP_COUNT: usize = 368;
+pub(crate) const HEADER_OFFSET_SPEC_SEGMENT_BOUNDS: usize = 72;
+pub(crate) const HEADER_LEN_SPEC_SEGMENT_BOUNDS: usize = 80;
+
+pub(crate) const HEADER_OFFSET_CHROM_SUMMARY: usize = 88;
+pub(crate) const HEADER_LEN_CHROM_SUMMARY: usize = 96;
+pub(crate) const HEADER_OFFSET_CHROM_ENTRIES: usize = 104;
+pub(crate) const HEADER_LEN_CHROM_ENTRIES: usize = 112;
+pub(crate) const HEADER_OFFSET_CHROM_ARRAYREFS: usize = 120;
+pub(crate) const HEADER_LEN_CHROM_ARRAYREFS: usize = 128;
+pub(crate) const HEADER_OFFSET_CHROM_SEGMENT_BOUNDS: usize = 136;
+pub(crate) const HEADER_LEN_CHROM_SEGMENT_BOUNDS: usize = 144;
+
+pub(crate) const HEADER_OFFSET_SPEC_META: usize = 152;
+pub(crate) const HEADER_LEN_SPEC_META: usize = 160;
+pub(crate) const HEADER_OFFSET_CHROM_META: usize = 168;
+pub(crate) const HEADER_LEN_CHROM_META: usize = 176;
+pub(crate) const HEADER_OFFSET_GLOBAL_META: usize = 184;
+pub(crate) const HEADER_LEN_GLOBAL_META: usize = 192;
+
+pub(crate) const HEADER_OFFSET_PACKED_SPECTRA: usize = 200;
+pub(crate) const HEADER_LEN_PACKED_SPECTRA: usize = 208;
+pub(crate) const HEADER_OFFSET_PACKED_CHROMS: usize = 216;
+pub(crate) const HEADER_LEN_PACKED_CHROMS: usize = 224;
+
+pub(crate) const HEADER_SPECTRUM_BLOCK_COUNT: usize = 232;
+pub(crate) const HEADER_CHROM_BLOCK_COUNT: usize = 240;
+pub(crate) const HEADER_SPECTRUM_COUNT: usize = 248;
+pub(crate) const HEADER_CHROM_COUNT: usize = 256;
+
+pub(crate) const HEADER_SPEC_META_ROW_COUNT: usize = 264;
+pub(crate) const HEADER_SPEC_META_NUMERIC_COUNT: usize = 272;
+pub(crate) const HEADER_SPEC_META_STRING_COUNT: usize = 280;
+pub(crate) const HEADER_CHROM_META_ROW_COUNT: usize = 288;
+pub(crate) const HEADER_CHROM_META_NUMERIC_COUNT: usize = 296;
+pub(crate) const HEADER_CHROM_META_STRING_COUNT: usize = 304;
+pub(crate) const HEADER_SPEC_ARRAY_TYPE_COUNT: usize = 312;
+pub(crate) const HEADER_CHROM_ARRAY_TYPE_COUNT: usize = 320;
+
+pub(crate) const HEADER_SPEC_META_UNCOMPRESSED_SIZE: usize = 328;
+pub(crate) const HEADER_CHROM_META_UNCOMPRESSED_SIZE: usize = 336;
+pub(crate) const HEADER_GLOBAL_META_UNCOMPRESSED_SIZE: usize = 344;
+pub(crate) const HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS: usize = 352;
+pub(crate) const HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS: usize = 360;
+
+pub(crate) const HEADER_TOTAL_FILE_SIZE: usize = 368;
+pub(crate) const HEADER_META_GROUP_SIZE: usize = 376;
+pub(crate) const HEADER_SPEC_META_GROUP_COUNT: usize = 384;
+pub(crate) const HEADER_CHROM_META_GROUP_COUNT: usize = 392;
+
+pub(crate) const HEADER_GLOBAL_META_ROW_COUNT: usize = 400;
+pub(crate) const HEADER_GLOBAL_META_NUMERIC_COUNT: usize = 408;
+pub(crate) const HEADER_GLOBAL_META_STRING_COUNT: usize = 416;
+
+pub(crate) const RESERVED_BLOCK_START: usize = 424;
+pub(crate) const RESERVED_BLOCK_SIZE: usize = 568;
+
+pub(crate) const HEADER_SPEC_DIRECTORY_CRC32: usize = 992;
+pub(crate) const HEADER_CHROM_DIRECTORY_CRC32: usize = 996;
+pub(crate) const HEADER_SPEC_SEGMENT_BOUNDS_CRC32: usize = 1000;
+pub(crate) const HEADER_CHROM_SEGMENT_BOUNDS_CRC32: usize = 1004;
 pub(crate) const HEADER_SPEC_META_CRC32: usize = 1008;
 pub(crate) const HEADER_CHROM_META_CRC32: usize = 1012;
 pub(crate) const HEADER_GLOBAL_META_CRC32: usize = 1016;
 pub(crate) const HEADER_CRC32: usize = 1020;
+
+const _: () = assert!(HEADER_OFFSET_SPEC_SUMMARY == 24);
+const _: () = assert!(HEADER_OFFSET_SPEC_SEGMENT_BOUNDS == 72);
+const _: () = assert!(HEADER_OFFSET_CHROM_SEGMENT_BOUNDS == 136);
+const _: () = assert!(HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS == 352);
+const _: () = assert!(HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS == 360);
+const _: () = assert!(HEADER_SPEC_DIRECTORY_CRC32 == 992);
+const _: () = assert!(HEADER_SPEC_SEGMENT_BOUNDS_CRC32 == 1000);
+const _: () = assert!(HEADER_CRC32 == 1020);
+const _: () = assert!(RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE == 992);
 
 pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<String>) {
     let mut failures = Vec::new();
@@ -640,9 +566,6 @@ fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, file_len: u64) {
         ("chrom_meta_count", h.chrom_meta_count),
         ("chrom_meta_numeric_count", h.chrom_meta_numeric_count),
         ("chrom_meta_string_count", h.chrom_meta_string_count),
-        ("global_meta_count", h.global_meta_count),
-        ("global_meta_numeric_count", h.global_meta_numeric_count),
-        ("global_meta_string_count", h.global_meta_string_count),
         ("spec_array_type_count", h.spec_array_type_count),
         ("chrom_array_type_count", h.chrom_array_type_count),
     ];
@@ -669,44 +592,13 @@ mod inline_tests {
     }
 
     #[test]
-    fn valid_header_with_no_extensions_parses() {
-        let h = valid_header_bytes();
-        let header = parse_header(&h).unwrap();
-        assert!(header.extensions.is_none());
-    }
-
-    #[test]
-    fn both_set_extension_pointer_parses() {
-        let mut h = valid_header_bytes();
-        h[HEADER_OFFSET_EXTENSIONS..HEADER_OFFSET_EXTENSIONS + 8].copy_from_slice(&4096u64.to_le_bytes());
-        h[HEADER_LENGTH_EXTENSIONS..HEADER_LENGTH_EXTENSIONS + 8].copy_from_slice(&48u64.to_le_bytes());
-        let header = parse_header(&h).unwrap();
-        let location = header.extensions.unwrap();
-        assert_eq!(location.offset, 4096);
-        assert_eq!(location.length, 48);
-    }
-
-    #[test]
-    fn half_set_extension_pointer_is_rejected() {
-        let mut offset_only = valid_header_bytes();
-        offset_only[HEADER_OFFSET_EXTENSIONS..HEADER_OFFSET_EXTENSIONS + 8]
-            .copy_from_slice(&4096u64.to_le_bytes());
-        assert!(parse_header(&offset_only).is_err());
-
-        let mut length_only = valid_header_bytes();
-        length_only[HEADER_LENGTH_EXTENSIONS..HEADER_LENGTH_EXTENSIONS + 8]
-            .copy_from_slice(&48u64.to_le_bytes());
-        assert!(parse_header(&length_only).is_err());
-    }
-
-    #[test]
     fn corrupt_reserved_area_is_rejected() {
         let mut h = valid_header_bytes();
-        h[400] = 1;
+        h[424] = 1;
         assert!(parse_header(&h).is_err());
 
         let mut at_end = valid_header_bytes();
-        at_end[1007] = 1;
+        at_end[991] = 1;
         assert!(parse_header(&at_end).is_err());
     }
 
@@ -739,58 +631,69 @@ mod inline_tests {
     }
 
     #[test]
-    fn header_offsets_match_format_contract() {
+    fn header_offsets_match_clean_v1_layout() {
         assert_eq!(HEADER_FORMAT_VERSION_OFFSET, 9);
         assert_eq!(HEADER_CODEC_ID, 11);
         assert_eq!(HEADER_COMPRESSION_LEVEL, 12);
         assert_eq!(HEADER_ARRAY_FILTER_ID, 13);
         assert_eq!(HEADER_TARGET_BLOCK_SIZE, 16);
-        assert_eq!(HEADER_OFF_SPEC_SUMMARY, 24);
+        assert_eq!(HEADER_OFFSET_SPEC_SUMMARY, 24);
         assert_eq!(HEADER_LEN_SPEC_SUMMARY, 32);
         assert_eq!(HEADER_OFFSET_SPEC_ENTRIES, 40);
         assert_eq!(HEADER_LEN_SPEC_ENTRIES, 48);
         assert_eq!(HEADER_OFFSET_SPEC_ARRAYREFS, 56);
         assert_eq!(HEADER_LEN_SPEC_ARRAYREFS, 64);
-        assert_eq!(HEADER_OFF_CHROM_SUMMARY, 72);
-        assert_eq!(HEADER_LEN_CHROM_SUMMARY, 80);
-        assert_eq!(HEADER_OFFSET_CHROM_ENTRIES, 88);
-        assert_eq!(HEADER_LEN_CHROM_ENTRIES, 96);
-        assert_eq!(HEADER_OFFSET_CHROM_ARRAYREFS, 104);
-        assert_eq!(HEADER_LEN_CHROM_ARRAYREFS, 112);
-        assert_eq!(HEADER_OFFSET_SPEC_META, 120);
-        assert_eq!(HEADER_LEN_SPEC_META, 128);
-        assert_eq!(HEADER_OFFSET_CHROM_META, 136);
-        assert_eq!(HEADER_LEN_CHROM_META, 144);
-        assert_eq!(HEADER_OFFSET_GLOBAL_META, 152);
-        assert_eq!(HEADER_LEN_GLOBAL_META, 160);
-        assert_eq!(HEADER_OFFSET_PACKED_SPECTRA, 168);
-        assert_eq!(HEADER_LEN_PACKED_SPECTRA, 176);
-        assert_eq!(HEADER_OFFSET_PACKED_CHROMS, 184);
-        assert_eq!(HEADER_LEN_PACKED_CHROMS, 192);
-        assert_eq!(HEADER_SPECTRUM_BLOCK_COUNT, 200);
-        assert_eq!(HEADER_CHROM_BLOCK_COUNT, 208);
-        assert_eq!(HEADER_SPECTRUM_COUNT, 216);
-        assert_eq!(HEADER_CHROM_COUNT, 224);
-        assert_eq!(HEADER_SPEC_META_ROW_COUNT, 232);
-        assert_eq!(HEADER_SPEC_META_NUMERIC_COUNT, 240);
-        assert_eq!(HEADER_SPEC_META_STRING_COUNT, 248);
-        assert_eq!(HEADER_CHROM_META_ROW_COUNT, 256);
-        assert_eq!(HEADER_CHROM_META_NUMERIC_COUNT, 264);
-        assert_eq!(HEADER_CHROM_META_STRING_COUNT, 272);
-        assert_eq!(HEADER_GLOBAL_META_ROW_COUNT, 280);
-        assert_eq!(HEADER_GLOBAL_META_NUMERIC_COUNT, 288);
-        assert_eq!(HEADER_GLOBAL_META_STRING_COUNT, 296);
-        assert_eq!(HEADER_SPEC_ARRAY_TYPE_COUNT, 304);
-        assert_eq!(HEADER_CHROM_ARRAY_TYPE_COUNT, 312);
-        assert_eq!(HEADER_SPEC_META_UNCOMPRESSED_SIZE, 320);
-        assert_eq!(HEADER_CHROM_META_UNCOMPRESSED_SIZE, 328);
-        assert_eq!(HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, 336);
-        assert_eq!(HEADER_TOTAL_FILE_SIZE, 344);
-        assert_eq!(HEADER_META_GROUP_SIZE, 352);
-        assert_eq!(HEADER_SPEC_META_GROUP_COUNT, 360);
-        assert_eq!(HEADER_CHROM_META_GROUP_COUNT, 368);
-        assert_eq!(HEADER_OFFSET_EXTENSIONS, 376);
-        assert_eq!(HEADER_LENGTH_EXTENSIONS, 384);
+        assert_eq!(HEADER_OFFSET_SPEC_SEGMENT_BOUNDS, 72);
+        assert_eq!(HEADER_LEN_SPEC_SEGMENT_BOUNDS, 80);
+        assert_eq!(HEADER_OFFSET_CHROM_SUMMARY, 88);
+        assert_eq!(HEADER_LEN_CHROM_SUMMARY, 96);
+        assert_eq!(HEADER_OFFSET_CHROM_ENTRIES, 104);
+        assert_eq!(HEADER_LEN_CHROM_ENTRIES, 112);
+        assert_eq!(HEADER_OFFSET_CHROM_ARRAYREFS, 120);
+        assert_eq!(HEADER_LEN_CHROM_ARRAYREFS, 128);
+        assert_eq!(HEADER_OFFSET_CHROM_SEGMENT_BOUNDS, 136);
+        assert_eq!(HEADER_LEN_CHROM_SEGMENT_BOUNDS, 144);
+        assert_eq!(HEADER_OFFSET_SPEC_META, 152);
+        assert_eq!(HEADER_LEN_SPEC_META, 160);
+        assert_eq!(HEADER_OFFSET_CHROM_META, 168);
+        assert_eq!(HEADER_LEN_CHROM_META, 176);
+        assert_eq!(HEADER_OFFSET_GLOBAL_META, 184);
+        assert_eq!(HEADER_LEN_GLOBAL_META, 192);
+        assert_eq!(HEADER_OFFSET_PACKED_SPECTRA, 200);
+        assert_eq!(HEADER_LEN_PACKED_SPECTRA, 208);
+        assert_eq!(HEADER_OFFSET_PACKED_CHROMS, 216);
+        assert_eq!(HEADER_LEN_PACKED_CHROMS, 224);
+        assert_eq!(HEADER_SPECTRUM_BLOCK_COUNT, 232);
+        assert_eq!(HEADER_CHROM_BLOCK_COUNT, 240);
+        assert_eq!(HEADER_SPECTRUM_COUNT, 248);
+        assert_eq!(HEADER_CHROM_COUNT, 256);
+        assert_eq!(HEADER_SPEC_META_ROW_COUNT, 264);
+        assert_eq!(HEADER_SPEC_META_NUMERIC_COUNT, 272);
+        assert_eq!(HEADER_SPEC_META_STRING_COUNT, 280);
+        assert_eq!(HEADER_CHROM_META_ROW_COUNT, 288);
+        assert_eq!(HEADER_CHROM_META_NUMERIC_COUNT, 296);
+        assert_eq!(HEADER_CHROM_META_STRING_COUNT, 304);
+        assert_eq!(HEADER_GLOBAL_META_ROW_COUNT, 400);
+        assert_eq!(HEADER_GLOBAL_META_NUMERIC_COUNT, 408);
+        assert_eq!(HEADER_GLOBAL_META_STRING_COUNT, 416);
+        assert_eq!(HEADER_SPEC_ARRAY_TYPE_COUNT, 312);
+        assert_eq!(HEADER_CHROM_ARRAY_TYPE_COUNT, 320);
+        assert_eq!(HEADER_SPEC_META_UNCOMPRESSED_SIZE, 328);
+        assert_eq!(HEADER_CHROM_META_UNCOMPRESSED_SIZE, 336);
+        assert_eq!(HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, 344);
+        assert_eq!(HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS, 352);
+        assert_eq!(HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS, 360);
+        assert_eq!(HEADER_TOTAL_FILE_SIZE, 368);
+        assert_eq!(HEADER_META_GROUP_SIZE, 376);
+        assert_eq!(HEADER_SPEC_META_GROUP_COUNT, 384);
+        assert_eq!(HEADER_CHROM_META_GROUP_COUNT, 392);
+        assert_eq!(RESERVED_BLOCK_START, 424);
+        assert_eq!(RESERVED_BLOCK_SIZE, 568);
+        assert_eq!(RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE, 992);
+        assert_eq!(HEADER_SPEC_DIRECTORY_CRC32, 992);
+        assert_eq!(HEADER_CHROM_DIRECTORY_CRC32, 996);
+        assert_eq!(HEADER_SPEC_SEGMENT_BOUNDS_CRC32, 1000);
+        assert_eq!(HEADER_CHROM_SEGMENT_BOUNDS_CRC32, 1004);
         assert_eq!(HEADER_SPEC_META_CRC32, 1008);
         assert_eq!(HEADER_CHROM_META_CRC32, 1012);
         assert_eq!(HEADER_GLOBAL_META_CRC32, 1016);

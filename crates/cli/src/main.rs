@@ -24,7 +24,7 @@ use ionic::{
         DecoderConfig, FileEncoderOutput, Ion, TempFile,
         encoder::{
             encode::{
-                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_PIECE_BYTES, EncodingConfig,
+                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
                 TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
             ion_writer::{IonWriter, stream_to_ion},
@@ -128,10 +128,10 @@ struct ConvertArgs {
 
     #[arg(
         long = "block-size",
-        default_value_t = (TARGET_BLOCK_UNCOMPRESSED_BYTES / (1024 * 1024)) as u32,
+        default_value_t = TARGET_BLOCK_UNCOMPRESSED_BYTES as f64 / (1024.0 * 1024.0),
         value_name = "MB"
     )]
-    block_size_mb: u32,
+    block_size_mb: f64,
 
     #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
     overwrite: bool,
@@ -160,11 +160,11 @@ struct ConvertArgs {
     section_chunk: SectionChunkArg,
 
     #[arg(
-        long = "target-piece-kb",
-        default_value_t = (DEFAULT_TARGET_PIECE_BYTES / 1024) as u32,
+        long = "segment-size",
+        default_value_t = DEFAULT_TARGET_SEGMENT_BYTES as f64 / 1024.0,
         value_name = "KB"
     )]
-    target_piece_kb: u32,
+    segment_size_kb: f64,
 
     #[arg(
         long = "min-split-kb",
@@ -522,6 +522,20 @@ fn collect_files_with_exts(
     Ok(out)
 }
 
+fn size_to_bytes(value: f64, unit_bytes: f64, flag: &str) -> Result<usize, String> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(format!("{flag} must be a positive finite number"));
+    }
+    let bytes = value * unit_bytes;
+    if bytes < 1.0 {
+        return Err(format!("{flag} is too small; it rounds to zero bytes"));
+    }
+    if bytes > usize::MAX as f64 {
+        return Err(format!("{flag} is too large"));
+    }
+    Ok(bytes as usize)
+}
+
 fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
 
@@ -537,6 +551,9 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     )?;
 
     const MB: f64 = 1024.0 * 1024.0;
+
+    let block_size = size_to_bytes(cmd.block_size_mb, MB, "--block-size")?;
+    let segment_size = size_to_bytes(cmd.segment_size_kb, 1024.0, "--segment-size")?;
 
     let cores = match cmd.cores {
         0 => std::thread::available_parallelism()
@@ -678,10 +695,10 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             let config = EncodingConfig {
                 compression_level: cmd.compression_level,
                 force_f32: f32_compress,
-                uncompressed_block_size: cmd.block_size_mb as usize * 1024 * 1024,
+                uncompressed_block_size: block_size,
                 parallel: matches!(encoding, Encoding::Parallel),
                 section_chunk: cmd.section_chunk.mode(),
-                target_piece_bytes: cmd.target_piece_kb as usize * 1024,
+                target_segment_bytes: segment_size,
                 min_split_bytes: cmd.min_split_kb as usize * 1024,
             };
             if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {

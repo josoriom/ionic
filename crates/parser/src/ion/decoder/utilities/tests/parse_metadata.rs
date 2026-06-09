@@ -48,7 +48,7 @@ fn parse_metadata_section_from_test_file(
 
     let slice = &bytes[c0..c1];
 
-    let expected = if codec_id == parse_metadata::HDR_CODEC_ZSTD {
+    let expected = if codec_id == parse_metadata::CODEC_ZSTD {
         usize::try_from(expected_uncompressed)
             .unwrap_or_else(|_| panic!("{section_name}: expected_uncompressed overflow"))
     } else {

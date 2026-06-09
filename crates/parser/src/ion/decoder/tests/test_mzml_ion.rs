@@ -2,7 +2,9 @@ use std::sync::OnceLock;
 
 use crate::{
     mzml::structs::{BinaryData, MzML},
-    utilities::test::{CvRefMode, assert_cv, parse_ion_as_mzml, spectrum_precursor_list, spectrum_scan_list},
+    utilities::test::{
+        CvRefMode, assert_cv, parse_ion_as_mzml, spectrum_precursor_list, spectrum_scan_list,
+    },
 };
 
 static MZML_CACHE: OnceLock<MzML> = OnceLock::new();

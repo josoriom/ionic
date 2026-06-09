@@ -3,8 +3,8 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::{BinaryData, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_software, mzml, spectrum_by_id,
-        spectrum_description, spectrum_precursor_list, spectrum_scan_list,
+        CvRefMode, assert_cv, assert_software, mzml, spectrum_by_id, spectrum_description,
+        spectrum_precursor_list, spectrum_scan_list,
     },
 };
 

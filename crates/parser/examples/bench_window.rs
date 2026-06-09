@@ -57,8 +57,14 @@ fn run(path: &str, sample_count: usize) -> Result<(), String> {
     println!("spectra sampled {sample}");
     println!("m/z range       {low_mz:.2} .. {high_mz:.2}");
     println!("window          {window_low:.2} .. {window_high:.2}  (middle 2%)");
-    println!("full read       {full_avg:.1} us per spectrum   {} points", full.points);
-    println!("window read     {window_avg:.1} us per spectrum   {} points", window.points);
+    println!(
+        "full read       {full_avg:.1} us per spectrum   {} points",
+        full.points
+    );
+    println!(
+        "window read     {window_avg:.1} us per spectrum   {} points",
+        window.points
+    );
     println!("speedup         {speedup:.1}x");
     Ok(())
 }

@@ -14,7 +14,7 @@ use crate::{
         meta_collector::{
             ArrayPolicy, array_type_accession_from_binary_data_array, parse_accession_tail_raw,
         },
-        pieces::PiecePlan,
+        segments::SegmentPlan,
     },
     ion::{
         IonError, IonResult,
@@ -30,7 +30,7 @@ use crate::{
     },
 };
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
-pub const DEFAULT_TARGET_PIECE_BYTES: usize = 128 * 1024;
+pub const DEFAULT_TARGET_SEGMENT_BYTES: usize = 128 * 1024;
 pub const DEFAULT_MIN_SPLIT_BYTES: usize = 512 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
@@ -174,7 +174,7 @@ pub fn encode(
         uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: true,
         section_chunk: SectionChunkMode::Memory,
-        target_piece_bytes: DEFAULT_TARGET_PIECE_BYTES,
+        target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
         min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
     };
     crate::ion::encoder::ion_writer::write_mzml_to_ion(mzml, config, output)
@@ -200,7 +200,7 @@ pub struct EncodingConfig {
     pub uncompressed_block_size: usize,
     pub parallel: bool,
     pub section_chunk: SectionChunkMode,
-    pub target_piece_bytes: usize,
+    pub target_segment_bytes: usize,
     pub min_split_bytes: usize,
 }
 
@@ -446,7 +446,7 @@ pub(crate) struct EncodedArrayRef {
     pub(crate) dtype: u8,
     pub(crate) array_filter: u8,
     pub(crate) encoded_len: u32,
-    pub(crate) continues_previous: u8,
+    pub(crate) continues_previous_segment: u8,
 }
 
 fn encode_variable_length_array(
@@ -583,7 +583,7 @@ pub(crate) fn encode_single_array(
         dtype,
         array_filter: packing.id() as u8,
         encoded_len,
-        continues_previous: 0,
+        continues_previous_segment: 0,
     }))
 }
 
@@ -601,11 +601,11 @@ pub(crate) fn array_is_fixed_width_splittable(
     Ok(Some((encoding.data.element_count(), encoding.elem_bytes)))
 }
 
-pub(crate) fn write_array_pieces(
+pub(crate) fn write_array_segments(
     bda: &BinaryDataArray,
     config: EncodingConfig,
     policy: ArrayPolicy,
-    plan: &PiecePlan,
+    plan: &SegmentPlan,
     container: &mut ContainerBuilder<'_, DefaultCompressor>,
 ) -> IonResult<Vec<EncodedArrayRef>> {
     let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
@@ -621,33 +621,34 @@ pub(crate) fn write_array_pieces(
     } = encoding;
 
     if packing.is_variable_length() {
-        return Err("write_array_pieces: variable-length arrays cannot be split".into());
+        return Err("write_array_segments: variable-length arrays cannot be split".into());
     }
 
     let mut refs = Vec::with_capacity(plan.count());
-    for (piece_index, range) in plan.iter().enumerate() {
-        let piece = data.slice(range.start, range.end);
-        let (block_id, _) =
-            container.add_array_as_block(piece.element_count() * elem_bytes, elem_bytes, |buf| {
-                write_fixed_array_payload(buf, piece, dtype, dtype_enum, packing)
-            })?;
+    for (segment_index, range) in plan.iter().enumerate() {
+        let segment = data.slice(range.start, range.end);
+        let (block_id, _) = container.add_array_as_block(
+            segment.element_count() * elem_bytes,
+            elem_bytes,
+            |buf| write_fixed_array_payload(buf, segment, dtype, dtype_enum, packing),
+        )?;
         refs.push(EncodedArrayRef {
             element_offset: 0,
-            element_count: piece.element_count() as u64,
+            element_count: segment.element_count() as u64,
             block_id,
             accession,
             dtype,
             array_filter: packing.id() as u8,
             encoded_len: 0,
-            continues_previous: (piece_index > 0) as u8,
+            continues_previous_segment: (segment_index > 0) as u8,
         });
     }
     Ok(refs)
 }
 
-pub(crate) fn get_piece_bounds(
+pub(crate) fn get_segment_bounds(
     bda: &BinaryDataArray,
-    plan: &PiecePlan,
+    plan: &SegmentPlan,
     dtype: u8,
 ) -> Option<Vec<(f64, f64)>> {
     let data = array_data_from_binary_data_array(bda)?;
@@ -666,6 +667,22 @@ pub(crate) fn get_piece_bounds(
         bounds.push((low, high));
     }
     Some(bounds)
+}
+
+pub(crate) fn get_array_bounds(bda: &BinaryDataArray, dtype: u8) -> Option<(f64, f64)> {
+    let data = array_data_from_binary_data_array(bda)?;
+    if data.is_empty() {
+        return None;
+    }
+    let accession = array_type_accession_from_binary_data_array(bda);
+    axis_of(accession)?;
+    if !data.is_monotonic_non_decreasing() {
+        return None;
+    }
+    Some((
+        data.stored_value_at(0, dtype),
+        data.stored_value_at(data.element_count() - 1, dtype),
+    ))
 }
 
 #[cfg(test)]
@@ -801,7 +818,7 @@ mod tests {
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_chunk: SectionChunkMode::Memory,
-            target_piece_bytes: DEFAULT_TARGET_PIECE_BYTES,
+            target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
             min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
         };
         assert!(!config.compression_is_enabled());
@@ -818,7 +835,7 @@ mod tests {
             uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_chunk: SectionChunkMode::Memory,
-            target_piece_bytes: DEFAULT_TARGET_PIECE_BYTES,
+            target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
             min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
         };
         assert!(config.compression_is_enabled());

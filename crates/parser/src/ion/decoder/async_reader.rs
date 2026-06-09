@@ -314,8 +314,7 @@ mod tests {
         let mut config = DecoderConfig::default();
         config.max_cached_bytes = 0;
         let source = RangeServer::new(BYTES) as Arc<dyn AsyncByteSource>;
-        let mut reader =
-            block_on(AsyncReader::open_with_async_source(source, config)).unwrap();
+        let mut reader = block_on(AsyncReader::open_with_async_source(source, config)).unwrap();
         let mzml = block_on(reader.to_mzml()).unwrap();
         assert!(mzml.run.spectrum_list.unwrap().spectra.len() > 0);
     }
@@ -335,11 +334,6 @@ mod tests {
         assert_eq!(cache.read(0, 4).unwrap(), vec![1, 2, 3, 4]);
         let missing = cache.read(8, 16);
         assert!(missing.is_err());
-        assert!(
-            missing
-                .unwrap_err()
-                .to_string()
-                .contains("prefetch miss")
-        );
+        assert!(missing.unwrap_err().to_string().contains("prefetch miss"));
     }
 }

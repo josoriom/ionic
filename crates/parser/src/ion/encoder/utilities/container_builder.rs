@@ -139,6 +139,11 @@ pub(crate) struct BlockDirEntry {
     pub(crate) checksum: u32,
 }
 
+fn block_id_from_count(count: usize) -> IonResult<u32> {
+    u32::try_from(count)
+        .map_err(|_| IonError::from("container: block count exceeds the u32 block id limit"))
+}
+
 impl BlockDirEntry {
     fn write_to_buffer(&self, buffer: &mut Vec<u8>) {
         buffer.extend_from_slice(&self.payload_offset.to_le_bytes());
@@ -160,10 +165,11 @@ impl BlockDirectory {
         }
     }
 
-    fn reserve_next_block_id(&mut self) -> u32 {
-        let new_block_id = self.entries.len() as u32;
+    fn reserve_next_block_id(&mut self) -> IonResult<u32> {
+        let count = self.entries.len();
+        let block_id = block_id_from_count(count)?;
         self.entries.push(BlockDirEntry::default());
-        new_block_id
+        Ok(block_id)
     }
 
     fn seal_block(&mut self, block_id: u32, entry: BlockDirEntry) -> IonResult<()> {
@@ -243,9 +249,9 @@ impl BlockStore {
             && current + additional_bytes > self.max_block_size
     }
 
-    fn ensure_open_block(&mut self, stride: Stride, capacity_hint: usize) {
+    fn ensure_open_block(&mut self, stride: Stride, capacity_hint: usize) -> IonResult<()> {
         if !self.slots.is_open(stride) {
-            let block_id = self.directory.reserve_next_block_id();
+            let block_id = self.directory.reserve_next_block_id()?;
             self.slots.insert(
                 stride,
                 ActiveBlock {
@@ -255,6 +261,7 @@ impl BlockStore {
                 },
             );
         }
+        Ok(())
     }
 
     fn append_to_block<W>(
@@ -283,8 +290,8 @@ impl BlockStore {
         stride: Stride,
         capacity: usize,
         compress_sequentially: bool,
-    ) -> u32 {
-        let block_id = self.directory.reserve_next_block_id();
+    ) -> IonResult<u32> {
+        let block_id = self.directory.reserve_next_block_id()?;
         self.slots.insert(
             stride,
             ActiveBlock {
@@ -293,7 +300,7 @@ impl BlockStore {
                 compress_sequentially,
             },
         );
-        block_id
+        Ok(block_id)
     }
 
     fn take_open_block(&mut self, stride: Stride) -> Option<ActiveBlock> {
@@ -357,6 +364,13 @@ fn merge_sorted_by_block_id(left: Vec<ReadyBlock>, right: Vec<ReadyBlock>) -> Ve
             (None, None) => return out,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContainerSummary {
+    pub(crate) block_count: u32,
+    pub(crate) total_bytes: u64,
+    pub(crate) directory_crc32: u32,
 }
 
 pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
@@ -440,7 +454,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
 
         let block_id =
             self.store
-                .open_isolated_block(stride, item_byte_size, compress_sequentially);
+                .open_isolated_block(stride, item_byte_size, compress_sequentially)?;
 
         write_action(
             &mut self
@@ -468,7 +482,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
             self.seal_open_block_for_stride(stride)?;
         }
 
-        self.store.ensure_open_block(stride, item_byte_size);
+        self.store.ensure_open_block(stride, item_byte_size)?;
         let (block_id, element_offset) =
             self.store
                 .append_to_block(stride, item_byte_size, write_action)?;
@@ -631,7 +645,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> IonResult<(u32, u64)> {
+    pub(crate) fn finish(mut self) -> IonResult<ContainerSummary> {
         for stride in Stride::all_variants() {
             self.seal_open_block_for_stride(stride)?;
         }
@@ -641,10 +655,15 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         let mut directory_bytes =
             Vec::with_capacity(block_count as usize * BLOCK_DIRECTORY_ENTRY_SIZE);
         self.store.write_directory(&mut directory_bytes);
+        let directory_crc32 = crc32fast::hash(&directory_bytes);
         self.output.write_bytes(&directory_bytes)?;
 
-        let total_bytes_written = self.payload_bytes + directory_bytes.len() as u64;
-        Ok((block_count, total_bytes_written))
+        let total_bytes = self.payload_bytes + directory_bytes.len() as u64;
+        Ok(ContainerSummary {
+            block_count,
+            total_bytes,
+            directory_crc32,
+        })
     }
 }
 
@@ -670,16 +689,16 @@ mod tests {
     #[test]
     fn block_directory_allocate_increments() {
         let mut directory = BlockDirectory::new();
-        assert_eq!(directory.reserve_next_block_id(), 0);
-        assert_eq!(directory.reserve_next_block_id(), 1);
-        assert_eq!(directory.reserve_next_block_id(), 2);
+        assert_eq!(directory.reserve_next_block_id().unwrap(), 0);
+        assert_eq!(directory.reserve_next_block_id().unwrap(), 1);
+        assert_eq!(directory.reserve_next_block_id().unwrap(), 2);
         assert_eq!(directory.block_count(), 3);
     }
 
     #[test]
     fn block_directory_seal_fills_placeholder() {
         let mut directory = BlockDirectory::new();
-        let block_id = directory.reserve_next_block_id();
+        let block_id = directory.reserve_next_block_id().unwrap();
         directory
             .seal_block(
                 block_id,
@@ -768,7 +787,7 @@ mod tests {
     fn block_store_ensure_open_block_creates_new() {
         let mut store = BlockStore::new(1024);
         assert_eq!(store.block_count(), 0);
-        store.ensure_open_block(Stride::FourBytes, 16);
+        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
         assert_eq!(store.block_count(), 1);
         assert!(store.slots.is_open(Stride::FourBytes));
     }
@@ -776,8 +795,8 @@ mod tests {
     #[test]
     fn block_store_ensure_open_block_is_idempotent() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::FourBytes, 16);
-        store.ensure_open_block(Stride::FourBytes, 16);
+        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
+        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
         assert_eq!(store.block_count(), 1);
     }
 
@@ -790,7 +809,7 @@ mod tests {
     #[test]
     fn block_store_would_overflow_detects_threshold() {
         let mut store = BlockStore::new(16);
-        store.ensure_open_block(Stride::FourBytes, 12);
+        store.ensure_open_block(Stride::FourBytes, 12).unwrap();
         store
             .append_to_block(Stride::FourBytes, 12, |buf| {
                 buf.extend_from_slice(&[0u8; 12]);
@@ -804,7 +823,7 @@ mod tests {
     #[test]
     fn block_store_append_returns_correct_element_offsets() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::EightBytes, 24);
+        store.ensure_open_block(Stride::EightBytes, 24).unwrap();
         let (_, off0) = store
             .append_to_block(Stride::EightBytes, 8, |b| {
                 b.extend_from_slice(&[0u8; 8]);
@@ -831,9 +850,11 @@ mod tests {
     #[test]
     fn block_store_open_isolated_block_replaces_slot() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::FourBytes, 8);
+        store.ensure_open_block(Stride::FourBytes, 8).unwrap();
         let first_id = store.slots.get_mut(Stride::FourBytes).unwrap().block_id;
-        let isolated_id = store.open_isolated_block(Stride::FourBytes, 256, true);
+        let isolated_id = store
+            .open_isolated_block(Stride::FourBytes, 256, true)
+            .unwrap();
         assert_ne!(first_id, isolated_id);
         assert_eq!(
             store.slots.get_mut(Stride::FourBytes).unwrap().block_id,
@@ -844,7 +865,7 @@ mod tests {
     #[test]
     fn block_store_seal_and_directory_roundtrip() {
         let mut store = BlockStore::new(1024);
-        let bid = store.directory.reserve_next_block_id();
+        let bid = store.directory.reserve_next_block_id().unwrap();
         store
             .seal(
                 bid,
@@ -864,8 +885,8 @@ mod tests {
     #[test]
     fn block_store_different_strides_independent() {
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::TwoBytes, 8);
-        store.ensure_open_block(Stride::EightBytes, 8);
+        store.ensure_open_block(Stride::TwoBytes, 8).unwrap();
+        store.ensure_open_block(Stride::EightBytes, 8).unwrap();
         assert_eq!(store.block_count(), 2);
         assert!(store.slots.is_open(Stride::TwoBytes));
         assert!(store.slots.is_open(Stride::EightBytes));
@@ -923,7 +944,11 @@ mod tests {
             .unwrap();
         assert_eq!(block_id, 0);
         assert_eq!(element_offset, 0);
-        let (block_count, total_bytes) = builder.finish().unwrap();
+        let ContainerSummary {
+            block_count,
+            total_bytes,
+            ..
+        } = builder.finish().unwrap();
         assert_eq!(block_count, 1);
         assert!(total_bytes > 0);
         assert!(output.0.starts_with(&item_data));
@@ -947,7 +972,7 @@ mod tests {
         assert_eq!(builder.pending.len(), 1);
         assert!(
             !builder.pending[0].compress_sequentially,
-            "split piece blocks must stay on the parallel path"
+            "split segment blocks must stay on the parallel path"
         );
     }
 
@@ -1055,7 +1080,7 @@ mod tests {
             first_block_id, second_block_id,
             "overflow should have triggered a new block"
         );
-        let (total_block_count, _) = builder.finish().unwrap();
+        let total_block_count = builder.finish().unwrap().block_count;
         assert_eq!(total_block_count, 2);
     }
 
@@ -1074,7 +1099,11 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let (block_count, total_bytes) = builder.finish().unwrap();
+        let ContainerSummary {
+            block_count,
+            total_bytes,
+            ..
+        } = builder.finish().unwrap();
         assert_eq!(block_count, 1);
         let expected_directory_size = BLOCK_DIRECTORY_ENTRY_SIZE as u64;
         assert_eq!(total_bytes, 8 + expected_directory_size);
@@ -1089,7 +1118,11 @@ mod tests {
             CompressionMode::<PassthroughCompressor>::Raw,
             PackingId::Raw,
         );
-        let (block_count, total_bytes) = builder.finish().unwrap();
+        let ContainerSummary {
+            block_count,
+            total_bytes,
+            ..
+        } = builder.finish().unwrap();
         assert_eq!(block_count, 0);
         assert_eq!(total_bytes, 0);
         assert!(output.0.is_empty());
@@ -1146,7 +1179,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(element_offset, 0);
-        let (block_count, _) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 1);
         assert_eq!(block_id, 0);
         assert!(output.0.starts_with(&[0xABu8; 64]));
@@ -1183,7 +1216,7 @@ mod tests {
         assert_eq!(off_oversized, 0);
         assert_ne!(bid_before, bid_oversized);
         assert_ne!(bid_oversized, bid_after);
-        let (block_count, _) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 3);
     }
 
@@ -1212,7 +1245,7 @@ mod tests {
         assert_eq!(off_a, 0);
         assert_eq!(off_b, 0);
         assert_ne!(bid_a, bid_b);
-        let (block_count, _) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 2);
     }
 
@@ -1233,7 +1266,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let (block_count, _total_bytes) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count, 1);
         let directory_start = output.0.len() - BLOCK_DIRECTORY_ENTRY_SIZE;
         let uncomp_bytes = u64::from_le_bytes(
@@ -1318,7 +1351,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let (block_count, _total) = builder.finish().unwrap();
+        let block_count = builder.finish().unwrap().block_count;
         assert_eq!(block_count as usize, item_count);
 
         let raw = output.0;
@@ -1329,5 +1362,17 @@ mod tests {
             let size = u64::from_le_bytes(raw[at + 8..at + 16].try_into().unwrap()) as usize;
             assert_eq!(&raw[offset..offset + size], &[i as u8; 8]);
         }
+    }
+
+    #[test]
+    fn block_id_fits_under_limit() {
+        assert_eq!(block_id_from_count(0).unwrap(), 0);
+        assert_eq!(block_id_from_count(1).unwrap(), 1);
+        assert_eq!(block_id_from_count(u32::MAX as usize).unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn block_id_over_limit_errors() {
+        assert!(block_id_from_count(u32::MAX as usize + 1).is_err());
     }
 }

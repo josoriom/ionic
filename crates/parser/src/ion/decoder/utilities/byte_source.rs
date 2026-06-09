@@ -232,7 +232,11 @@ impl<'source> Future for ReadAll<'source> {
         if !all_ready {
             return Poll::Pending;
         }
-        let payloads = state.payloads.iter_mut().map(|slot| slot.take().unwrap()).collect();
+        let payloads = state
+            .payloads
+            .iter_mut()
+            .map(|slot| slot.take().unwrap())
+            .collect();
         Poll::Ready(Ok(payloads))
     }
 }

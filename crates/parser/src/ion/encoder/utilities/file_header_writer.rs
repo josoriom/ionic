@@ -1,26 +1,28 @@
 use crate::ion::format::{CURRENT_VERSION, FILE_SIGNATURE};
-use crate::ion::extensions::ExtensionLocation;
 use crate::ion::utilities::parse_header::{
     HEADER_ARRAY_FILTER_ID, HEADER_CHROM_ARRAY_TYPE_COUNT, HEADER_CHROM_BLOCK_COUNT,
-    HEADER_CHROM_COUNT, HEADER_CHROM_META_CRC32, HEADER_CHROM_META_NUMERIC_COUNT,
-    HEADER_CHROM_META_ROW_COUNT, HEADER_CHROM_META_STRING_COUNT,
-    HEADER_CHROM_META_UNCOMPRESSED_SIZE, HEADER_CODEC_ID, HEADER_COMPRESSION_LEVEL, HEADER_CRC32,
+    HEADER_CHROM_COUNT, HEADER_CHROM_DIRECTORY_CRC32, HEADER_CHROM_META_CRC32,
+    HEADER_CHROM_META_GROUP_COUNT, HEADER_CHROM_META_NUMERIC_COUNT, HEADER_CHROM_META_ROW_COUNT,
+    HEADER_CHROM_META_STRING_COUNT, HEADER_CHROM_META_UNCOMPRESSED_SIZE,
+    HEADER_CHROM_SEGMENT_BOUNDS_CRC32, HEADER_CODEC_ID, HEADER_COMPRESSION_LEVEL, HEADER_CRC32,
     HEADER_FORMAT_VERSION_OFFSET, HEADER_GLOBAL_META_CRC32, HEADER_GLOBAL_META_NUMERIC_COUNT,
     HEADER_GLOBAL_META_ROW_COUNT, HEADER_GLOBAL_META_STRING_COUNT,
-    HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, HEADER_LENGTH_EXTENSIONS, HEADER_LEN_CHROM_ARRAYREFS, HEADER_LEN_CHROM_ENTRIES,
-    HEADER_LEN_CHROM_META, HEADER_LEN_CHROM_SUMMARY, HEADER_LEN_GLOBAL_META,
-    HEADER_LEN_PACKED_CHROMS, HEADER_LEN_PACKED_SPECTRA, HEADER_LEN_SPEC_ARRAYREFS,
-    HEADER_LEN_SPEC_ENTRIES, HEADER_LEN_SPEC_META, HEADER_LEN_SPEC_SUMMARY,
-    HEADER_OFF_CHROM_SUMMARY, HEADER_OFF_SPEC_SUMMARY, HEADER_OFFSET_CHROM_ARRAYREFS,
-    HEADER_OFFSET_CHROM_ENTRIES, HEADER_OFFSET_CHROM_META, HEADER_OFFSET_GLOBAL_META,
-    HEADER_OFFSET_EXTENSIONS, HEADER_OFFSET_PACKED_CHROMS, HEADER_OFFSET_PACKED_SPECTRA, HEADER_OFFSET_SPEC_ARRAYREFS,
-    HEADER_OFFSET_SPEC_ENTRIES, HEADER_OFFSET_SPEC_META, HEADER_SPEC_ARRAY_TYPE_COUNT,
-    HEADER_SPEC_META_CRC32, HEADER_SPEC_META_NUMERIC_COUNT, HEADER_SPEC_META_ROW_COUNT,
-    HEADER_SPEC_META_STRING_COUNT, HEADER_SPEC_META_UNCOMPRESSED_SIZE, HEADER_SPECTRUM_BLOCK_COUNT,
-    HEADER_SPECTRUM_COUNT, HEADER_TARGET_BLOCK_SIZE, HEADER_TOTAL_FILE_SIZE,
-};
-use crate::ion::utilities::parse_header::{
-    HEADER_CHROM_META_GROUP_COUNT, HEADER_META_GROUP_SIZE, HEADER_SPEC_META_GROUP_COUNT,
+    HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, HEADER_LEN_CHROM_ARRAYREFS, HEADER_LEN_CHROM_ENTRIES,
+    HEADER_LEN_CHROM_META, HEADER_LEN_CHROM_SEGMENT_BOUNDS, HEADER_LEN_CHROM_SUMMARY,
+    HEADER_LEN_GLOBAL_META, HEADER_LEN_PACKED_CHROMS, HEADER_LEN_PACKED_SPECTRA,
+    HEADER_LEN_SPEC_ARRAYREFS, HEADER_LEN_SPEC_ENTRIES, HEADER_LEN_SPEC_META,
+    HEADER_LEN_SPEC_SEGMENT_BOUNDS, HEADER_LEN_SPEC_SUMMARY, HEADER_META_GROUP_SIZE,
+    HEADER_OFFSET_CHROM_ARRAYREFS, HEADER_OFFSET_CHROM_ENTRIES, HEADER_OFFSET_CHROM_META,
+    HEADER_OFFSET_CHROM_SEGMENT_BOUNDS, HEADER_OFFSET_CHROM_SUMMARY, HEADER_OFFSET_GLOBAL_META,
+    HEADER_OFFSET_PACKED_CHROMS, HEADER_OFFSET_PACKED_SPECTRA, HEADER_OFFSET_SPEC_ARRAYREFS,
+    HEADER_OFFSET_SPEC_ENTRIES, HEADER_OFFSET_SPEC_META, HEADER_OFFSET_SPEC_SEGMENT_BOUNDS,
+    HEADER_OFFSET_SPEC_SUMMARY, HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS,
+    HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS, HEADER_SPEC_ARRAY_TYPE_COUNT,
+    HEADER_SPEC_DIRECTORY_CRC32, HEADER_SPEC_META_CRC32, HEADER_SPEC_META_GROUP_COUNT,
+    HEADER_SPEC_META_NUMERIC_COUNT, HEADER_SPEC_META_ROW_COUNT, HEADER_SPEC_META_STRING_COUNT,
+    HEADER_SPEC_META_UNCOMPRESSED_SIZE, HEADER_SPEC_SEGMENT_BOUNDS_CRC32,
+    HEADER_SPECTRUM_BLOCK_COUNT, HEADER_SPECTRUM_COUNT, HEADER_TARGET_BLOCK_SIZE,
+    HEADER_TOTAL_FILE_SIZE,
 };
 
 #[derive(Default)]
@@ -81,7 +83,17 @@ pub(crate) struct FileHeader {
     pub(crate) spec_meta_group_count: u64,
     pub(crate) chrom_meta_group_count: u64,
 
-    pub(crate) extensions: Option<ExtensionLocation>,
+    pub(crate) spec_directory_crc32: u32,
+    pub(crate) chrom_directory_crc32: u32,
+
+    pub(crate) off_spec_segment_bounds: u64,
+    pub(crate) len_spec_segment_bounds: u64,
+    pub(crate) off_chrom_segment_bounds: u64,
+    pub(crate) len_chrom_segment_bounds: u64,
+    pub(crate) plain_len_spec_segment_bounds: u64,
+    pub(crate) plain_len_chrom_segment_bounds: u64,
+    pub(crate) spec_segment_bounds_crc32: u32,
+    pub(crate) chrom_segment_bounds_crc32: u32,
 
     pub(crate) spec_meta_crc32: u32,
     pub(crate) chrom_meta_crc32: u32,
@@ -200,9 +212,9 @@ impl FileHeader {
             self.global_meta_uncompressed_size,
         );
 
-        patch_u64_at(buf, HEADER_OFF_SPEC_SUMMARY, self.off_spec_summary);
+        patch_u64_at(buf, HEADER_OFFSET_SPEC_SUMMARY, self.off_spec_summary);
         patch_u64_at(buf, HEADER_LEN_SPEC_SUMMARY, self.len_spec_summary);
-        patch_u64_at(buf, HEADER_OFF_CHROM_SUMMARY, self.off_chrom_summary);
+        patch_u64_at(buf, HEADER_OFFSET_CHROM_SUMMARY, self.off_chrom_summary);
         patch_u64_at(buf, HEADER_LEN_CHROM_SUMMARY, self.len_chrom_summary);
 
         patch_u64_at(buf, HEADER_TOTAL_FILE_SIZE, self.total_file_size);
@@ -219,16 +231,53 @@ impl FileHeader {
             self.chrom_meta_group_count,
         );
 
-        match &self.extensions {
-            None => {
-                patch_u64_at(buf, HEADER_OFFSET_EXTENSIONS, 0);
-                patch_u64_at(buf, HEADER_LENGTH_EXTENSIONS, 0);
-            }
-            Some(ext) => {
-                patch_u64_at(buf, HEADER_OFFSET_EXTENSIONS, ext.offset);
-                patch_u64_at(buf, HEADER_LENGTH_EXTENSIONS, ext.length);
-            }
-        }
+        patch_u32_at(buf, HEADER_SPEC_DIRECTORY_CRC32, self.spec_directory_crc32);
+        patch_u32_at(
+            buf,
+            HEADER_CHROM_DIRECTORY_CRC32,
+            self.chrom_directory_crc32,
+        );
+
+        patch_u64_at(
+            buf,
+            HEADER_OFFSET_SPEC_SEGMENT_BOUNDS,
+            self.off_spec_segment_bounds,
+        );
+        patch_u64_at(
+            buf,
+            HEADER_LEN_SPEC_SEGMENT_BOUNDS,
+            self.len_spec_segment_bounds,
+        );
+        patch_u64_at(
+            buf,
+            HEADER_OFFSET_CHROM_SEGMENT_BOUNDS,
+            self.off_chrom_segment_bounds,
+        );
+        patch_u64_at(
+            buf,
+            HEADER_LEN_CHROM_SEGMENT_BOUNDS,
+            self.len_chrom_segment_bounds,
+        );
+        patch_u64_at(
+            buf,
+            HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS,
+            self.plain_len_spec_segment_bounds,
+        );
+        patch_u64_at(
+            buf,
+            HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS,
+            self.plain_len_chrom_segment_bounds,
+        );
+        patch_u32_at(
+            buf,
+            HEADER_SPEC_SEGMENT_BOUNDS_CRC32,
+            self.spec_segment_bounds_crc32,
+        );
+        patch_u32_at(
+            buf,
+            HEADER_CHROM_SEGMENT_BOUNDS_CRC32,
+            self.chrom_segment_bounds_crc32,
+        );
 
         patch_u32_at(buf, HEADER_SPEC_META_CRC32, self.spec_meta_crc32);
         patch_u32_at(buf, HEADER_CHROM_META_CRC32, self.chrom_meta_crc32);
