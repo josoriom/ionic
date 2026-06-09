@@ -7,7 +7,9 @@ pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
 pub mod decoder;
 pub mod format;
 pub(crate) mod version_generated;
-pub use decoder::decode::{ArrayWindow, Decoder, DecoderConfig, Ion, OwnedIon, SpectrumWindow};
+pub use decoder::decode::{
+    ArrayWindow, ByteRange, Decoder, DecoderConfig, Ion, OwnedIon, SpectrumWindow, plan_open_ranges,
+};
 pub(crate) use decoder::utilities;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub use decoder::utilities::byte_source::MmapSource;

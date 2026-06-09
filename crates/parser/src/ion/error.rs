@@ -10,6 +10,9 @@ pub enum IonError {
     UnsupportedPacking(u8),
     UnsupportedFormatVersion(u16),
     UnsupportedCodec(u8),
+    MissingSpectrumBounds,
+    BadSpectrumBoundsChecksum,
+    MalformedSpectrumBounds(String),
 }
 
 pub type IonResult<T> = Result<T, IonError>;
@@ -30,6 +33,13 @@ impl Display for IonError {
             Self::UnsupportedPacking(b) => write!(f, "unsupported packing id: {b}"),
             Self::UnsupportedFormatVersion(v) => write!(f, "unsupported format version: {v}"),
             Self::UnsupportedCodec(c) => write!(f, "unsupported compression codec: {c}"),
+            Self::MissingSpectrumBounds => f.write_str(
+                "spectrum has no segment bounds (A3); re-encode the file with the current Ionic",
+            ),
+            Self::BadSpectrumBoundsChecksum => f.write_str("spectrum bounds (A3) checksum failed"),
+            Self::MalformedSpectrumBounds(reason) => {
+                write!(f, "spectrum bounds (A3) malformed: {reason}")
+            }
         }
     }
 }

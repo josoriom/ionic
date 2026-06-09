@@ -70,6 +70,18 @@ const ARRAY_REF_BYTES: usize = 32;
 const DEFAULT_MAX_CACHED_BYTES: usize = 256 * 1024 * 1024;
 const INLINE_ARRAY_REF_CAP: usize = 8;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteRange {
+    pub offset: u64,
+    pub length: u64,
+}
+
+impl ByteRange {
+    pub fn end(&self) -> Option<u64> {
+        self.offset.checked_add(self.length)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetadatumValue {
     Number(f64),
@@ -88,6 +100,18 @@ pub struct Metadatum {
     pub(crate) value: MetadatumValue,
 }
 
+pub fn plan_open_ranges(header_bytes: &[u8]) -> IonResult<Vec<ByteRange>> {
+    if header_bytes.len() < 1024 {
+        return Err("plan_open_ranges: needs at least 1024 header bytes".into());
+    }
+    let header = parse_header(&header_bytes[..1024])?;
+    let ranges = open_byte_ranges(&header)?;
+    Ok(ranges
+        .into_iter()
+        .map(|(offset, length)| ByteRange { offset, length })
+        .collect())
+}
+
 pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<(u64, u64)>> {
     let mut ranges = vec![
         (0, 1024),
@@ -101,6 +125,19 @@ pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<(u64, u64)>> {
         (header.off_spec_meta, header.len_spec_meta),
         (header.off_chrom_meta, header.len_chrom_meta),
     ];
+
+    if header.len_spec_segment_bounds > 0 {
+        ranges.push((
+            header.off_spec_segment_bounds,
+            header.len_spec_segment_bounds,
+        ));
+    }
+    if header.len_chrom_segment_bounds > 0 {
+        ranges.push((
+            header.off_chrom_segment_bounds,
+            header.len_chrom_segment_bounds,
+        ));
+    }
 
     let spec_blocks = usize::try_from(header.spec_block_count)
         .map_err(|_| IonError::from("spec: block count too large for this platform"))?;
@@ -145,6 +182,12 @@ pub struct ArrayGroup {
     pub refs: Vec<ArrayRef>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SegmentRead {
+    mz_ref: ArrayRef,
+    intensity_ref: ArrayRef,
+}
+
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {
     pub max_cached_bytes: usize,
@@ -166,7 +209,9 @@ impl Default for DecoderConfig {
 
 enum SegmentBoundsCache {
     Unloaded,
-    Absent,
+    Missing,
+    BadChecksum,
+    Malformed(String),
     Loaded(SegmentBoundsIndex),
 }
 
@@ -641,6 +686,140 @@ impl Decoder {
         })
     }
 
+    pub fn require_spectrum_bounds(&mut self) -> IonResult<()> {
+        self.ensure_spec_segment_bounds()
+    }
+
+    fn get_spectrum_mz_segments(
+        &mut self,
+        scan_index: usize,
+        mz_from: f64,
+        mz_to: f64,
+    ) -> IonResult<Vec<SegmentRead>> {
+        if !mz_from.is_finite() || !mz_to.is_finite() {
+            return Err("mz window bounds must be finite".into());
+        }
+        if mz_from > mz_to {
+            return Err("mz window: from is greater than to".into());
+        }
+        if scan_index >= self.header.spectrum_count as usize {
+            return Err("spectrum index out of range".into());
+        }
+
+        self.require_spectrum_bounds()?;
+
+        let array_refs =
+            read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, scan_index)
+                .ok_or_else(|| IonError::from("spectrum has no array refs"))?;
+        let ref_start = array_ref_start_for_item(&self.spec_entries_buf, scan_index)
+            .ok_or_else(|| IonError::from("spectrum has no array ref start"))?;
+
+        let groups = group_arrays(array_refs.as_slice())?;
+
+        let mut mz_group = None;
+        let mut intensity_group = None;
+        let mut position = 0u64;
+        for group in &groups {
+            if group.array_type == crate::accessions::MZ_ARRAY && mz_group.is_none() {
+                mz_group = Some((position, group));
+            } else if group.array_type == ACC_INT && intensity_group.is_none() {
+                intensity_group = Some((position, group));
+            }
+            position += group.refs.len() as u64;
+        }
+
+        let (Some((mz_position, mz_group)), Some((_, intensity_group))) =
+            (mz_group, intensity_group)
+        else {
+            return Err("spectrum is missing the mz or intensity array".into());
+        };
+
+        if mz_group.refs.len() != intensity_group.refs.len() {
+            return Err("spectrum mz and intensity segment counts differ".into());
+        }
+
+        let bounds = match &self.spec_segment_bounds {
+            SegmentBoundsCache::Loaded(index) => index,
+            _ => return Err(IonError::MissingSpectrumBounds),
+        };
+
+        let mz_ref_base = ref_start + mz_position;
+        let mut segments = Vec::new();
+        for segment_index in 0..mz_group.refs.len() {
+            let row_index = mz_ref_base + segment_index as u64;
+            let (segment_low, segment_high) = bounds.require(row_index)?;
+            let overlaps = segment_low <= mz_to && segment_high >= mz_from;
+            if overlaps {
+                segments.push(SegmentRead {
+                    mz_ref: mz_group.refs[segment_index],
+                    intensity_ref: intensity_group.refs[segment_index],
+                });
+            }
+        }
+
+        Ok(segments)
+    }
+
+    fn spec_block_byte_range(&self, block_id: u32) -> IonResult<ByteRange> {
+        let (offset, length) = self
+            .spec_container
+            .block_byte_range(block_id)
+            .ok_or_else(|| IonError::from("spectrum block id out of range"))?;
+        Ok(ByteRange { offset, length })
+    }
+
+    pub fn spectrum_mz_window_block_ranges_strict(
+        &mut self,
+        scan_index: usize,
+        mz_from: f64,
+        mz_to: f64,
+    ) -> IonResult<Vec<ByteRange>> {
+        let segments = self.get_spectrum_mz_segments(scan_index, mz_from, mz_to)?;
+
+        let mut block_ids = Vec::with_capacity(segments.len() * 2);
+        for segment in &segments {
+            block_ids.push(segment.mz_ref.block_id);
+            block_ids.push(segment.intensity_ref.block_id);
+        }
+        block_ids.sort_unstable();
+        block_ids.dedup();
+
+        let mut ranges = Vec::with_capacity(block_ids.len());
+        for block_id in block_ids {
+            ranges.push(self.spec_block_byte_range(block_id)?);
+        }
+        ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+        Ok(ranges)
+    }
+
+    pub fn read_spectrum_mz_window_strict(
+        &mut self,
+        scan_index: usize,
+        mz_from: f64,
+        mz_to: f64,
+    ) -> IonResult<SpectrumWindow> {
+        let segments = self.get_spectrum_mz_segments(scan_index, mz_from, mz_to)?;
+
+        let mut mz = Vec::new();
+        let mut intensity = Vec::new();
+        let mut mz_segment = Vec::new();
+        let mut intensity_segment = Vec::new();
+        for segment in segments {
+            self.read_spectrum_array(&segment.mz_ref, &mut mz_segment)?;
+            self.read_spectrum_array(&segment.intensity_ref, &mut intensity_segment)?;
+            keep_pairs_in_range_sorted(
+                &mz_segment,
+                &intensity_segment,
+                mz_from,
+                mz_to,
+                &mut mz,
+                &mut intensity,
+            );
+        }
+
+        Ok(SpectrumWindow { mz, intensity })
+    }
+
     fn read_spectrum_window_inner(
         &mut self,
         index: usize,
@@ -685,7 +864,7 @@ impl Decoder {
         };
 
         if x_group.refs.len() == y_group.refs.len() {
-            self.ensure_spec_segment_bounds();
+            let _ = self.ensure_spec_segment_bounds();
             if let Some(window) =
                 self.try_fast_window(ref_start + x_position, x_group, y_group, low, high)?
             {
@@ -753,14 +932,27 @@ impl Decoder {
         Ok(ArrayWindow { x: x_out, y: y_out })
     }
 
-    fn ensure_spec_segment_bounds(&mut self) {
-        if !matches!(self.spec_segment_bounds, SegmentBoundsCache::Unloaded) {
-            return;
+    fn ensure_spec_segment_bounds(&mut self) -> IonResult<()> {
+        if matches!(self.spec_segment_bounds, SegmentBoundsCache::Unloaded) {
+            self.spec_segment_bounds = match self.load_spec_segment_bounds() {
+                Ok(index) => SegmentBoundsCache::Loaded(index),
+                Err(IonError::MissingSpectrumBounds) => SegmentBoundsCache::Missing,
+                Err(IonError::BadSpectrumBoundsChecksum) => SegmentBoundsCache::BadChecksum,
+                Err(IonError::MalformedSpectrumBounds(reason)) => {
+                    SegmentBoundsCache::Malformed(reason)
+                }
+                Err(other) => SegmentBoundsCache::Malformed(other.to_string()),
+            };
         }
-        self.spec_segment_bounds = match self.load_spec_segment_bounds() {
-            Some(index) => SegmentBoundsCache::Loaded(index),
-            None => SegmentBoundsCache::Absent,
-        };
+        match &self.spec_segment_bounds {
+            SegmentBoundsCache::Loaded(_) => Ok(()),
+            SegmentBoundsCache::Missing => Err(IonError::MissingSpectrumBounds),
+            SegmentBoundsCache::BadChecksum => Err(IonError::BadSpectrumBoundsChecksum),
+            SegmentBoundsCache::Malformed(reason) => {
+                Err(IonError::MalformedSpectrumBounds(reason.clone()))
+            }
+            SegmentBoundsCache::Unloaded => Err(IonError::MissingSpectrumBounds),
+        }
     }
 
     fn ensure_chrom_segment_bounds(&mut self) {
@@ -769,13 +961,13 @@ impl Decoder {
         }
         self.chrom_segment_bounds = match self.load_chrom_segment_bounds() {
             Some(index) => SegmentBoundsCache::Loaded(index),
-            None => SegmentBoundsCache::Absent,
+            None => SegmentBoundsCache::Missing,
         };
     }
 
-    fn load_spec_segment_bounds(&self) -> Option<SegmentBoundsIndex> {
+    fn load_spec_segment_bounds(&self) -> IonResult<SegmentBoundsIndex> {
         if self.header.len_spec_segment_bounds == 0 {
-            return None;
+            return Err(IonError::MissingSpectrumBounds);
         }
         let spec_array_ref_count = self.spec_array_refs.len() as u64 / ARRAY_REF_BYTES as u64;
         let bytes = self
@@ -784,14 +976,17 @@ impl Decoder {
                 self.header.off_spec_segment_bounds,
                 self.header.len_spec_segment_bounds,
             )
-            .ok()?;
+            .map_err(|error| IonError::MalformedSpectrumBounds(format!("read failed: {error}")))?;
         if crc32fast::hash(&bytes) != self.header.spec_segment_bounds_crc32 {
-            return None;
+            return Err(IonError::BadSpectrumBoundsChecksum);
         }
         let decompressed = self
             .decompress_segment_bounds(&bytes, self.header.plain_len_spec_segment_bounds as usize)
-            .ok()?;
-        SegmentBoundsIndex::from_bytes(&decompressed, spec_array_ref_count).ok()
+            .map_err(|error| {
+                IonError::MalformedSpectrumBounds(format!("decompression failed: {error}"))
+            })?;
+        SegmentBoundsIndex::from_bytes(&decompressed, spec_array_ref_count)
+            .map_err(|error| IonError::MalformedSpectrumBounds(error.to_string()))
     }
 
     fn load_chrom_segment_bounds(&self) -> Option<SegmentBoundsIndex> {
@@ -843,7 +1038,7 @@ impl Decoder {
 
         let (entries_buf, array_refs_buf, segment_bounds) = match target {
             Target::Spec => {
-                self.ensure_spec_segment_bounds();
+                let _ = self.ensure_spec_segment_bounds();
                 (
                     &self.spec_entries_buf,
                     &self.spec_array_refs,
@@ -1300,6 +1495,45 @@ impl Ion {
                 )
             })
             .and_then(|d| d.read_spectrum_mz_window(index, low, high))
+    }
+
+    pub fn require_spectrum_bounds(&mut self) -> IonResult<()> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| IonError::from("require_spectrum_bounds needs a sync decoder-backed Ion"))
+            .and_then(|decoder| decoder.require_spectrum_bounds())
+    }
+
+    pub fn spectrum_mz_window_block_ranges_strict(
+        &mut self,
+        scan_index: usize,
+        mz_from: f64,
+        mz_to: f64,
+    ) -> IonResult<Vec<ByteRange>> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| {
+                IonError::from(
+                    "spectrum_mz_window_block_ranges_strict needs a sync decoder-backed Ion",
+                )
+            })
+            .and_then(|decoder| {
+                decoder.spectrum_mz_window_block_ranges_strict(scan_index, mz_from, mz_to)
+            })
+    }
+
+    pub fn read_spectrum_mz_window_strict(
+        &mut self,
+        scan_index: usize,
+        mz_from: f64,
+        mz_to: f64,
+    ) -> IonResult<SpectrumWindow> {
+        self.backend
+            .as_decoder_mut()
+            .ok_or_else(|| {
+                IonError::from("read_spectrum_mz_window_strict needs a sync decoder-backed Ion")
+            })
+            .and_then(|decoder| decoder.read_spectrum_mz_window_strict(scan_index, mz_from, mz_to))
     }
 
     pub fn read_spectrum_logical_array(
@@ -3561,7 +3795,7 @@ mod tests {
             encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
 
         let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
-        decoder.spec_segment_bounds = SegmentBoundsCache::Absent;
+        decoder.spec_segment_bounds = SegmentBoundsCache::Missing;
 
         for (low, high) in [(120.0, 130.0), (100.0, 149.999), (130.5, 130.5)] {
             let got = decoder.read_spectrum_mz_window(0, low, high).unwrap();
@@ -3733,7 +3967,7 @@ mod tests {
         assert_eq!(got.intensity, expected_int);
         assert!(matches!(
             decoder.spec_segment_bounds,
-            SegmentBoundsCache::Absent
+            SegmentBoundsCache::BadChecksum
         ));
     }
 
@@ -3895,7 +4129,7 @@ mod tests {
 
         let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
 
-        decoder.spec_segment_bounds = SegmentBoundsCache::Absent;
+        decoder.spec_segment_bounds = SegmentBoundsCache::Missing;
 
         let candidates = decoder
             .candidate_items_for_axis(Target::Spec, crate::accessions::MZ_ARRAY, 120.0, 130.0)
@@ -3933,8 +4167,8 @@ mod tests {
                 "should return all candidates when A3 CRC fails"
             );
             assert!(
-                matches!(decoder.spec_segment_bounds, SegmentBoundsCache::Absent),
-                "A3 should be marked absent after CRC failure"
+                matches!(decoder.spec_segment_bounds, SegmentBoundsCache::BadChecksum),
+                "A3 should be marked bad checksum after CRC failure"
             );
         }
     }
@@ -3979,5 +4213,292 @@ mod tests {
             candidates.is_empty(),
             "chromatogram query should return empty when file has no chromatograms"
         );
+    }
+
+    fn split_file_with_a3() -> (Vec<f64>, Vec<f64>, Vec<u8>) {
+        let n = 50_000;
+        let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
+        let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let encoded = encode_one_spectrum_with_split(mz.clone(), int.clone(), 64 * 1024, 128 * 1024);
+        (mz, int, encoded)
+    }
+
+    fn kept_block_ids(
+        decoder: &Decoder,
+        scan_index: usize,
+        low: f64,
+        high: f64,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let array_refs = read_array_refs_from_buffers(
+            &decoder.spec_entries_buf,
+            &decoder.spec_array_refs,
+            scan_index,
+        )
+        .unwrap();
+        let ref_start = array_ref_start_for_item(&decoder.spec_entries_buf, scan_index).unwrap();
+        let groups = group_arrays(array_refs.as_slice()).unwrap();
+
+        let mut mz_group = None;
+        let mut intensity_group = None;
+        let mut position = 0u64;
+        for group in &groups {
+            if group.array_type == crate::accessions::MZ_ARRAY && mz_group.is_none() {
+                mz_group = Some((position, group));
+            } else if group.array_type == ACC_INT && intensity_group.is_none() {
+                intensity_group = Some((position, group));
+            }
+            position += group.refs.len() as u64;
+        }
+        let (mz_position, mz_group) = mz_group.unwrap();
+        let (_, intensity_group) = intensity_group.unwrap();
+
+        let SegmentBoundsCache::Loaded(index) = &decoder.spec_segment_bounds else {
+            panic!("A3 must be loaded before computing kept blocks");
+        };
+
+        let mut mz_blocks = Vec::new();
+        let mut intensity_blocks = Vec::new();
+        for segment in 0..mz_group.refs.len() {
+            let (segment_low, segment_high) =
+                index.get(ref_start + mz_position + segment as u64).unwrap();
+            if segment_low <= high && segment_high >= low {
+                mz_blocks.push(mz_group.refs[segment].block_id);
+                intensity_blocks.push(intensity_group.refs[segment].block_id);
+            }
+        }
+        mz_blocks.sort_unstable();
+        mz_blocks.dedup();
+        intensity_blocks.sort_unstable();
+        intensity_blocks.dedup();
+        (mz_blocks, intensity_blocks)
+    }
+
+    fn block_ranges_for(decoder: &Decoder, block_ids: &[u32]) -> Vec<ByteRange> {
+        let mut ranges: Vec<ByteRange> = block_ids
+            .iter()
+            .map(|&id| {
+                let (offset, length) = decoder.spec_container.block_byte_range(id).unwrap();
+                ByteRange { offset, length }
+            })
+            .collect();
+        ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+        ranges.dedup();
+        ranges
+    }
+
+    #[test]
+    fn require_spectrum_bounds_passes_on_file_with_a3() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.require_spectrum_bounds().is_ok());
+    }
+
+    #[test]
+    fn require_spectrum_bounds_errors_when_a3_missing() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        decoder.spec_segment_bounds = SegmentBoundsCache::Missing;
+        assert_eq!(
+            decoder.require_spectrum_bounds(),
+            Err(IonError::MissingSpectrumBounds)
+        );
+    }
+
+    #[test]
+    fn require_spectrum_bounds_errors_on_bad_checksum() {
+        let (_, _, mut encoded) = split_file_with_a3();
+        let a3_offset = parse_header(&encoded[..1024]).unwrap().off_spec_segment_bounds as usize;
+        assert!(a3_offset > 0);
+        encoded[a3_offset] ^= 0xFF;
+
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert_eq!(
+            decoder.require_spectrum_bounds(),
+            Err(IonError::BadSpectrumBoundsChecksum)
+        );
+    }
+
+    #[test]
+    fn require_spectrum_bounds_errors_on_malformed_rows() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        decoder.spec_segment_bounds = SegmentBoundsCache::Malformed("bad rows".to_string());
+        assert_eq!(
+            decoder.require_spectrum_bounds(),
+            Err(IonError::MalformedSpectrumBounds("bad rows".to_string()))
+        );
+    }
+
+    #[test]
+    fn strict_window_matches_brute_force() {
+        let (mz, int, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+
+        for (low, high) in [(120.0, 130.0), (100.0, 149.999), (130.5, 130.5)] {
+            let got = decoder.read_spectrum_mz_window_strict(0, low, high).unwrap();
+            let (expected_mz, expected_int) = brute_force_window(&mz, &int, low, high);
+            assert_eq!(got.mz, expected_mz, "mz mismatch for window {low}..{high}");
+            assert_eq!(
+                got.intensity, expected_int,
+                "intensity mismatch for window {low}..{high}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_window_errors_when_a3_missing() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        decoder.spec_segment_bounds = SegmentBoundsCache::Missing;
+        assert_eq!(
+            decoder.read_spectrum_mz_window_strict(0, 120.0, 130.0),
+            Err(IonError::MissingSpectrumBounds)
+        );
+    }
+
+    #[test]
+    fn strict_window_errors_when_a3_row_missing() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        decoder.require_spectrum_bounds().unwrap();
+
+        let array_refs =
+            read_array_refs_from_buffers(&decoder.spec_entries_buf, &decoder.spec_array_refs, 0)
+                .unwrap();
+        let groups = group_arrays(array_refs.as_slice()).unwrap();
+        let mz_count = groups
+            .iter()
+            .find(|group| group.array_type == crate::accessions::MZ_ARRAY)
+            .unwrap()
+            .refs
+            .len();
+        assert!(mz_count >= 2, "need a split m/z array for this test");
+
+        let total_refs = (decoder.spec_array_refs.len() / ARRAY_REF_BYTES) as u64;
+        let mut rows = Vec::new();
+        for row_index in 0..(mz_count as u64 - 1) {
+            rows.extend_from_slice(&row_index.to_le_bytes());
+            rows.extend_from_slice(&0.0f64.to_le_bytes());
+            rows.extend_from_slice(&1.0e9f64.to_le_bytes());
+        }
+        let index = SegmentBoundsIndex::from_bytes(&rows, total_refs).unwrap();
+        decoder.spec_segment_bounds = SegmentBoundsCache::Loaded(index);
+
+        let result = decoder.read_spectrum_mz_window_strict(0, 100.0, 200.0);
+        assert!(matches!(result, Err(IonError::MalformedSpectrumBounds(_))));
+    }
+
+    #[test]
+    fn strict_window_errors_on_low_above_high() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(decoder.read_spectrum_mz_window_strict(0, 130.0, 120.0).is_err());
+    }
+
+    #[test]
+    fn strict_window_errors_on_non_finite_bounds() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+        assert!(
+            decoder
+                .read_spectrum_mz_window_strict(0, f64::NAN, 130.0)
+                .is_err()
+        );
+        assert!(
+            decoder
+                .read_spectrum_mz_window_strict(0, 120.0, f64::INFINITY)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn strict_planner_returns_mz_and_intensity_blocks() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+
+        let plan = decoder
+            .spectrum_mz_window_block_ranges_strict(0, 120.0, 130.0)
+            .unwrap();
+
+        let (mz_blocks, intensity_blocks) = kept_block_ids(&decoder, 0, 120.0, 130.0);
+        assert!(!mz_blocks.is_empty(), "expected kept m/z blocks");
+        assert!(!intensity_blocks.is_empty(), "expected kept intensity blocks");
+
+        for range in block_ranges_for(&decoder, &intensity_blocks) {
+            assert!(
+                plan.contains(&range),
+                "plan must include intensity block range {range:?}"
+            );
+        }
+        for range in block_ranges_for(&decoder, &mz_blocks) {
+            assert!(
+                plan.contains(&range),
+                "plan must include m/z block range {range:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_planner_and_strict_reader_use_same_segments() {
+        let (_, _, encoded) = split_file_with_a3();
+        let mut decoder = Decoder::open(&encoded, DecoderConfig::default()).unwrap();
+
+        let plan = decoder
+            .spectrum_mz_window_block_ranges_strict(0, 120.0, 130.0)
+            .unwrap();
+
+        let (mz_blocks, intensity_blocks) = kept_block_ids(&decoder, 0, 120.0, 130.0);
+        let mut all_blocks = mz_blocks;
+        all_blocks.extend(intensity_blocks);
+        all_blocks.sort_unstable();
+        all_blocks.dedup();
+
+        let expected = block_ranges_for(&decoder, &all_blocks);
+        assert_eq!(plan, expected);
+    }
+
+    #[test]
+    fn plan_open_ranges_includes_spec_a3() {
+        let (_, _, encoded) = split_file_with_a3();
+        let header = parse_header(&encoded[..1024]).unwrap();
+        assert!(header.len_spec_segment_bounds > 0);
+
+        let ranges = plan_open_ranges(&encoded[..1024]).unwrap();
+        assert!(ranges.contains(&ByteRange {
+            offset: header.off_spec_segment_bounds,
+            length: header.len_spec_segment_bounds,
+        }));
+    }
+
+    #[test]
+    fn plan_open_ranges_includes_container_directories() {
+        let (_, _, encoded) = split_file_with_a3();
+        let header = parse_header(&encoded[..1024]).unwrap();
+        let (start, end) = spec_directory_range(&header);
+
+        let ranges = plan_open_ranges(&encoded[..1024]).unwrap();
+        assert!(ranges.contains(&ByteRange {
+            offset: start as u64,
+            length: (end - start) as u64,
+        }));
+    }
+
+    #[test]
+    fn ion_forwards_strict_methods() {
+        let (mz, int, encoded) = split_file_with_a3();
+        let bytes: Arc<[u8]> = Arc::from(encoded.as_slice());
+        let mut ion = Ion::open_arc(bytes, DecoderConfig::default()).unwrap();
+
+        ion.require_spectrum_bounds().unwrap();
+
+        let plan = ion
+            .spectrum_mz_window_block_ranges_strict(0, 120.0, 130.0)
+            .unwrap();
+        assert!(!plan.is_empty());
+
+        let got = ion.read_spectrum_mz_window_strict(0, 120.0, 130.0).unwrap();
+        let (expected_mz, expected_int) = brute_force_window(&mz, &int, 120.0, 130.0);
+        assert_eq!(got.mz, expected_mz);
+        assert_eq!(got.intensity, expected_int);
     }
 }

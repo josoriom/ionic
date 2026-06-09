@@ -55,7 +55,7 @@ struct HeaderView<'a> {
 impl<'a> HeaderView<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         let header = &bytes[..HEADER_SIZE];
-        let sections = build_sections(header, u64_at(header, 344));
+        let sections = build_sections(header, u64_at(header, 368));
         Self {
             bytes,
             header,
@@ -83,23 +83,23 @@ impl<'a> HeaderView<'a> {
     }
 
     fn file_size_ok(&self) -> bool {
-        self.read_header_u64(344) == self.bytes.len() as u64
+        self.read_header_u64(368) == self.bytes.len() as u64
     }
 
     fn spec_dir_fits(&self) -> bool {
-        self.read_header_u64(200)
+        self.read_header_u64(232)
             .checked_mul(32)
-            .is_some_and(|b| b <= self.read_header_u64(176))
+            .is_some_and(|bytes| bytes <= self.read_header_u64(208))
     }
 
     fn chrom_dir_fits(&self) -> bool {
-        self.read_header_u64(208)
+        self.read_header_u64(240)
             .checked_mul(32)
-            .is_some_and(|b| b <= self.read_header_u64(192))
+            .is_some_and(|bytes| bytes <= self.read_header_u64(224))
     }
 
     fn sections_in_bounds(&self) -> bool {
-        let trailer_start = self.read_header_u64(344).saturating_sub(8);
+        let trailer_start = self.read_header_u64(368).saturating_sub(8);
         self.sections.iter().all(|s| {
             s.size == 0
                 || s.offset
@@ -138,14 +138,16 @@ fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
         Section::new("spec_summary", u64_at(header, 24), u64_at(header, 32)),
         Section::new("spec_entries", u64_at(header, 40), u64_at(header, 48)),
         Section::new("spec_arrayrefs", u64_at(header, 56), u64_at(header, 64)),
-        Section::new("chrom_summary", u64_at(header, 72), u64_at(header, 80)),
-        Section::new("chrom_entries", u64_at(header, 88), u64_at(header, 96)),
-        Section::new("chrom_arrayrefs", u64_at(header, 104), u64_at(header, 112)),
-        Section::new("spec_meta", u64_at(header, 120), u64_at(header, 128)),
-        Section::new("chrom_meta", u64_at(header, 136), u64_at(header, 144)),
-        Section::new("global_meta", u64_at(header, 152), u64_at(header, 160)),
-        Section::new("spec_container", u64_at(header, 168), u64_at(header, 176)),
-        Section::new("chrom_container", u64_at(header, 184), u64_at(header, 192)),
+        Section::new("spec_segment_bounds", u64_at(header, 72), u64_at(header, 80)),
+        Section::new("chrom_summary", u64_at(header, 88), u64_at(header, 96)),
+        Section::new("chrom_entries", u64_at(header, 104), u64_at(header, 112)),
+        Section::new("chrom_arrayrefs", u64_at(header, 120), u64_at(header, 128)),
+        Section::new("chrom_segment_bounds", u64_at(header, 136), u64_at(header, 144)),
+        Section::new("spec_meta", u64_at(header, 152), u64_at(header, 160)),
+        Section::new("chrom_meta", u64_at(header, 168), u64_at(header, 176)),
+        Section::new("global_meta", u64_at(header, 184), u64_at(header, 192)),
+        Section::new("spec_container", u64_at(header, 200), u64_at(header, 208)),
+        Section::new("chrom_container", u64_at(header, 216), u64_at(header, 224)),
     ];
 
     let trailer_start = total_file_size.saturating_sub(8);
@@ -213,10 +215,10 @@ fn print_summary(view: &HeaderView<'_>) {
     );
     field(
         "spectrum_count",
-        &view.read_header_u64(216).to_string(),
+        &view.read_header_u64(248).to_string(),
         None,
     );
-    field("chrom_count", &view.read_header_u64(224).to_string(), None);
+    field("chrom_count", &view.read_header_u64(256).to_string(), None);
     let actual = view.bytes.len() as u64;
     field(
         "total_file_size",
@@ -256,9 +258,9 @@ fn print_integrity(view: &HeaderView<'_>) {
         ("7   all sections within bounds", view.sections_in_bounds()),
         ("8   no section overlaps", view.no_overlaps()),
         ("9   all offsets 8-byte aligned", view.all_aligned()),
-        ("10  spec_meta CRC-32", view.crc_ok(120, 128, 1008)),
-        ("11  chrom_meta CRC-32", view.crc_ok(136, 144, 1012)),
-        ("12  global_meta CRC-32", view.crc_ok(152, 160, 1016)),
+        ("10  spec_meta CRC-32", view.crc_ok(152, 160, 1008)),
+        ("11  chrom_meta CRC-32", view.crc_ok(168, 176, 1012)),
+        ("12  global_meta CRC-32", view.crc_ok(184, 192, 1016)),
     ];
     for (label, ok) in checks {
         let (color, mark) = if *ok { (GREEN, "✓") } else { (RED, "✗") };

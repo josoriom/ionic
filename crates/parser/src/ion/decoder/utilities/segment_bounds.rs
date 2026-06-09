@@ -1,4 +1,4 @@
-use crate::ion::IonResult;
+use crate::ion::{IonError, IonResult};
 
 const SEGMENT_BOUND_SIZE: usize = 24;
 
@@ -21,6 +21,14 @@ impl SegmentBoundsIndex {
                 let row = &self.rows[index];
                 (row.low, row.high)
             })
+    }
+
+    pub(crate) fn require(&self, array_ref_index: u64) -> IonResult<(f64, f64)> {
+        self.get(array_ref_index).ok_or_else(|| {
+            IonError::MalformedSpectrumBounds(format!(
+                "no segment bounds row for array ref {array_ref_index}"
+            ))
+        })
     }
 
     pub(crate) fn from_bytes(bytes: &[u8], spec_array_ref_count: u64) -> IonResult<Self> {
