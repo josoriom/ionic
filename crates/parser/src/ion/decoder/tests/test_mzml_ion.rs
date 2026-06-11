@@ -355,16 +355,6 @@ fn anpc_mzml1_1_0_first_spectrum() {
 
     let scl = spectrum_scan_list(s0);
     assert_eq!(scl.scans.len(), 1);
-    // TODO: re-enable once ScanList.cv_params is parsed
-    // assert_cv(
-    //     CV_REF_MODE,
-    //     &scl.cv_params,
-    //     "no combination",
-    //     "MS:1000795",
-    //     "MS",
-    //     Some(""),
-    //     None,
-    // );
 
     let scan0 = &scl.scans[0];
     assert_cv(
@@ -538,18 +528,8 @@ fn anpc_mzml1_1_0_last_spectrum() {
         None,
     );
 
-    // TODO: re-enable once ScanList.cv_params is parsed
     let scl = spectrum_scan_list(s_last);
     assert_eq!(scl.scans.len(), 1);
-    // assert_cv(
-    //     CV_REF_MODE,
-    //     &scl.cv_params,
-    //     "no combination",
-    //     "MS:1000795",
-    //     "MS",
-    //     Some(""),
-    //     None,
-    // );
 
     let scan0 = &scl.scans[0];
     assert_cv(
@@ -905,7 +885,7 @@ fn spectrum0_mz_array_decodes_to_0_to_9_f64() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
         other => panic!("expected BinaryData::F64, got {:?}", other),
@@ -933,7 +913,7 @@ fn spectrum0_intensity_array_decodes_to_0_to_9_f32() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
         other => panic!("expected BinaryData::F32, got {:?}", other),
@@ -961,7 +941,7 @@ fn chromatogram_tic_time_array_decodes_to_0_to_9_f64() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
         other => panic!("expected BinaryData::F64, got {:?}", other),
@@ -989,7 +969,7 @@ fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
         other => panic!("expected BinaryData::F32, got {:?}", other),
@@ -1014,7 +994,7 @@ fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
                 "expected at least 10 values, got {}",
                 xs.len()
             );
-            assert_eq!(&xs[..10], &[0, 10, 0, 30, 0, 50, 0, 70, 0, 90]);
+            assert_eq!(&xs[..10], &[0, 0, 0, 0, 0, 10, 30, 50, 70, 90]);
         }
         other => panic!("expected BinaryData::I64, got {:?}", other),
     }

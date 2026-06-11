@@ -8,7 +8,7 @@ use zstd::zstd_safe;
 use crate::{
     decoder::{
         decode::{Metadatum, MetadatumValue},
-        utilities::decompression_budget::DecompressionBudget,
+        utilities::decompression_limit::DecompressionLimit,
     },
     ion::{
         IonError, IonResult,
@@ -98,7 +98,7 @@ pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult
 pub(crate) fn decompress_zstd(
     comp: &[u8],
     expected: usize,
-    budget: DecompressionBudget,
+    budget: DecompressionLimit,
 ) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
@@ -133,7 +133,7 @@ pub(crate) fn decompress_zstd(
 pub(crate) fn decompress_zstd(
     comp: &[u8],
     expected: usize,
-    budget: DecompressionBudget,
+    budget: DecompressionLimit,
 ) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
@@ -163,7 +163,7 @@ pub(crate) fn decompress_zstd(
 pub(crate) fn decompress_zstd_allow_aligned_padding(
     input: &[u8],
     expected: usize,
-    budget: DecompressionBudget,
+    budget: DecompressionLimit,
 ) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());

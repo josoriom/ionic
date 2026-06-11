@@ -6,29 +6,27 @@ use common::{canonical_diff_paths, decode_ion};
 use ionic::{
     encoder::IonWriter,
     ion::{
-        Ion,
-        decoder::decode::DecoderConfig,
+        IonReader,
+        decoder::decode::ReadOptions,
         encoder::{
             encode::{
-                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+                DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
                 TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
-            ion_writer::stream_to_ion,
-            utilities::SectionChunkMode,
+            utilities::SectionStorage,
         },
     },
     mzml::{MzmlReader, parse_mzml::parse_mzml},
 };
 
-fn config() -> EncodingConfig {
-    EncodingConfig {
+fn config() -> WriteOptions {
+    WriteOptions {
         compression_level: 0,
         force_f32: false,
-        uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
-        section_chunk: SectionChunkMode::Memory,
-        target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
-        min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
+        section_storage: SectionStorage::Memory,
+        segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
     }
 }
 
@@ -73,7 +71,7 @@ fn stream_writer_roundtrips_like_mzml_writer() {
     let mut reader = MzmlReader::from_mzml(mzml.clone());
     let mut bytes = Vec::new();
     let mut writer = IonWriter::begin(&mut bytes, config()).unwrap();
-    stream_to_ion(&mut reader, &mut writer).unwrap();
+    writer.write_stream(&mut reader).unwrap();
     let decoded = decode_ion(&bytes).unwrap();
     let diffs = canonical_diff_paths(&mzml, &decoded);
     assert!(diffs.is_empty(), "{diffs:#?}");
@@ -85,8 +83,8 @@ fn spectrum_summary_keeps_coordinates() {
     let mut reader = MzmlReader::from_mzml(mzml);
     let mut bytes = Vec::new();
     let mut writer = IonWriter::begin(&mut bytes, config()).unwrap();
-    stream_to_ion(&mut reader, &mut writer).unwrap();
-    let ion = Ion::open(&bytes, DecoderConfig::default()).unwrap();
+    writer.write_stream(&mut reader).unwrap();
+    let ion = IonReader::open(&bytes, ReadOptions::default()).unwrap();
     let summary = ion.spec_summary(0).unwrap();
     assert_eq!(summary.position_x, 11);
     assert_eq!(summary.position_y, 22);
@@ -103,7 +101,7 @@ fn file_stream_reader_roundtrips_spectra_then_chromatograms() {
     let mut reader = MzmlReader::open(&path).unwrap();
     let mut bytes = Vec::new();
     let mut writer = IonWriter::begin(&mut bytes, config()).unwrap();
-    stream_to_ion(&mut reader, &mut writer).unwrap();
+    writer.write_stream(&mut reader).unwrap();
     let decoded = decode_ion(&bytes).unwrap();
     let diffs = canonical_diff_paths(&mzml, &decoded);
     let _ = fs::remove_file(&path);

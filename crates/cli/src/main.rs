@@ -21,14 +21,14 @@ use serde::Serialize;
 
 use ionic::{
     ion::{
-        DecoderConfig, FileEncoderOutput, Ion, TempFile,
+        ReadOptions, FileWriter, IonReader, TempFile,
         encoder::{
             encode::{
-                DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+                DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
                 TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
-            ion_writer::{IonWriter, stream_to_ion},
-            utilities::SectionChunkMode,
+            ion_writer::IonWriter,
+            utilities::SectionStorage,
         },
         format::{CURRENT_VERSION, FILE_TRAILER, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION},
     },
@@ -156,8 +156,8 @@ struct ConvertArgs {
     #[arg(long = "many-files", default_value_t = false, action = ArgAction::SetTrue)]
     many_files: bool,
 
-    #[arg(long = "section-chunk", value_enum, default_value_t = SectionChunkArg::Memory)]
-    section_chunk: SectionChunkArg,
+    #[arg(long = "section-storage", value_enum, default_value_t = SectionStorageArg::Memory)]
+    section_storage: SectionStorageArg,
 
     #[arg(
         long = "segment-size",
@@ -166,28 +166,21 @@ struct ConvertArgs {
     )]
     segment_size_kb: f64,
 
-    #[arg(
-        long = "min-split-kb",
-        default_value_t = (DEFAULT_MIN_SPLIT_BYTES / 1024) as u32,
-        value_name = "KB"
-    )]
-    min_split_kb: u32,
-
     #[command(flatten)]
     which: ConvertWhich,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum SectionChunkArg {
+enum SectionStorageArg {
     Memory,
     Disk,
 }
 
-impl SectionChunkArg {
-    fn mode(self) -> SectionChunkMode {
+impl SectionStorageArg {
+    fn storage(self) -> SectionStorage {
         match self {
-            Self::Memory => SectionChunkMode::Memory,
-            Self::Disk => SectionChunkMode::Disk,
+            Self::Memory => SectionStorage::Memory,
+            Self::Disk => SectionStorage::Disk,
         }
     }
 }
@@ -313,10 +306,10 @@ fn cat_scan(file_path: &Path, scan_1based: u32) -> Result<(), String> {
 fn load_spectrum_at(file_path: &Path, index: usize) -> Result<Option<Spectrum>, String> {
     match file_ext_lower(file_path).as_str() {
         "ion" => {
-            let mut ion = Ion::open_file(file_path, DecoderConfig::default())
-                .map_err(|e| format!("Ion::open_file failed: {e}"))?;
-            ion.spectrum_at(index)
-                .map_err(|e| format!("spectrum_at failed: {e}"))
+            let mut ion = IonReader::open_file(file_path, ReadOptions::default())
+                .map_err(|e| format!("IonReader::open_file failed: {e}"))?;
+            ion.get_spectrum(index)
+                .map_err(|e| format!("get_spectrum failed: {e}"))
         }
         "mzml" => {
             let bytes = fs::read(file_path).map_err(|e| format!("read failed: {e}"))?;
@@ -358,11 +351,11 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     let ext = file_ext_lower(file_path);
 
     if ext == "ion" {
-        let ion = Ion::open_file(file_path, DecoderConfig::default())
-            .map_err(|e| format!("Ion::open_file failed: {e}"))?;
+        let ion = IonReader::open_file(file_path, ReadOptions::default())
+            .map_err(|e| format!("IonReader::open_file failed: {e}"))?;
         return ion
-            .to_mzml_metadata_only()
-            .map_err(|e| format!("to_mzml_metadata_only failed: {e}"));
+            .metadata()
+            .map_err(|e| format!("metadata failed: {e}"));
     }
     if ext == "mzml" {
         return parse_mzml(&bytes).map_err(|e| format!("parse_mzml failed: {e}"));
@@ -376,16 +369,16 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
 fn write_mzml_as_ion(
     input_path: &Path,
     output_path: &Path,
-    config: EncodingConfig,
+    config: WriteOptions,
 ) -> Result<(), String> {
     let temp_output = TempFile::new(output_path).map_err(|error| error.to_string())?;
     let mut input_reader = MzmlReader::open(input_path).map_err(|error| error.to_string())?;
     {
         let mut output_file =
-            FileEncoderOutput::open_path(temp_output.path()).map_err(|error| error.to_string())?;
+            FileWriter::open_path(temp_output.path()).map_err(|error| error.to_string())?;
         let mut ion_writer =
             IonWriter::begin(&mut output_file, config).map_err(|error| error.to_string())?;
-        stream_to_ion(&mut input_reader, &mut ion_writer).map_err(|error| error.to_string())?;
+        ion_writer.write_stream(&mut input_reader).map_err(|error| error.to_string())?;
         drop(ion_writer);
         output_file.flush().map_err(|error| error.to_string())?;
     }
@@ -694,14 +687,13 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 .map(|m| m.len() as f64 / MB)
                 .unwrap_or(0.0);
 
-            let config = EncodingConfig {
+            let config = WriteOptions {
                 compression_level: cmd.compression_level,
                 force_f32: f32_compress,
-                uncompressed_block_size: block_size,
+                block_size,
                 parallel: matches!(encoding, Encoding::Parallel),
-                section_chunk: cmd.section_chunk.mode(),
-                target_segment_bytes: segment_size,
-                min_split_bytes: cmd.min_split_kb as usize * 1024,
+                section_storage: cmd.section_storage.storage(),
+                segment_size,
             };
             if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {
                 had_failed.store(true, Ordering::Relaxed);
@@ -866,11 +858,11 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 .map(|m| m.len() as f64 / MB)
                 .unwrap_or(0.0);
 
-            let mut ion = match Ion::open_file(
+            let mut ion = match IonReader::open_file(
                 in_path,
-                DecoderConfig {
+                ReadOptions {
                     parallel: matches!(encoding, Encoding::Parallel),
-                    ..DecoderConfig::default()
+                    ..ReadOptions::default()
                 },
             ) {
                 Ok(v) => v,
@@ -881,7 +873,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     let name = basename(in_path);
                     let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                     eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: Ion::open_file failed: {e}",
+                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: IonReader::open_file failed: {e}",
                         n, total, name
                     );
                     let _ = stderr().flush();
@@ -993,20 +985,20 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         let benchmark_one = |in_path: &PathBuf| {
             let name = basename(in_path);
             let t0 = Instant::now();
-            match Ion::open_file(
+            match IonReader::open_file(
                 in_path,
-                DecoderConfig {
+                ReadOptions {
                     parallel: matches!(encoding, Encoding::Parallel),
-                    ..DecoderConfig::default()
+                    ..ReadOptions::default()
                 },
             ) {
                 Ok(mut ion) => {
                     let count = ion.spectrum_count() as usize;
                     let mut buf = Vec::new();
                     for i in 0..count {
-                        if let Some(refs) = ion.spectrum_array_refs(i) {
+                        if let Some(refs) = ion.spectrum_arrays(i) {
                             for aref in refs {
-                                let _ = ion.read_spectrum_array(&aref, &mut buf);
+                                let _ = ion.read_array(&aref, &mut buf);
                             }
                         }
                     }

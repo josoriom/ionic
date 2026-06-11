@@ -6,7 +6,7 @@ use crate::{
         POSITIVE_SCAN,
     },
     encoder::utilities::{
-        encoder_output::{EncoderOutput, SectionChunkMode},
+        sink::{WriteBytes, SectionStorage},
         le_writers::{
             write_f32_le, write_f32_slice_le, write_f64_le, write_f64_slice_le, write_i16_slice_le,
             write_i32_slice_le, write_i64_slice_le, write_u16_slice_le,
@@ -19,7 +19,7 @@ use crate::{
     ion::{
         IonError, IonResult,
         axes::axis_of,
-        encoder::utilities::{CompressionMode, ContainerBuilder, DefaultCompressor},
+        encoder::utilities::{CompressionMode, BlockWriter, DefaultCompressor},
         filter_summary::{ChromatogramSummary, SpectrumSummary},
         packing::raw::RAW as RAW_PACKING,
         packing::{Dtype, Packing, PackingId, PackingInput, packing_for},
@@ -31,7 +31,6 @@ use crate::{
 };
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_TARGET_SEGMENT_BYTES: usize = 256 * 1024;
-pub const DEFAULT_MIN_SPLIT_BYTES: usize = 1024 * 1024;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
@@ -165,19 +164,10 @@ pub fn encode(
     mzml: &MzML,
     compression_level: u8,
     force_f32: bool,
-    output: &mut dyn EncoderOutput,
+    output: &mut dyn WriteBytes,
 ) -> IonResult<()> {
     allow_compression_level(compression_level)?;
-    let config = EncodingConfig {
-        compression_level,
-        force_f32,
-        uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
-        parallel: true,
-        section_chunk: SectionChunkMode::Memory,
-        target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
-        min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
-    };
-    crate::ion::encoder::ion_writer::write_mzml_to_ion(mzml, config, output)
+    crate::ion::encoder::ion_writer::write_mzml_to_ion(mzml, WriteOptions::quick(compression_level, force_f32), output)
 }
 
 pub(crate) fn allow_compression_level(compression_level: u8) -> IonResult<()> {
@@ -194,17 +184,27 @@ pub(crate) fn allow_compression_level(compression_level: u8) -> IonResult<()> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct EncodingConfig {
+pub struct WriteOptions {
     pub compression_level: u8,
     pub force_f32: bool,
-    pub uncompressed_block_size: usize,
+    pub block_size: usize,
     pub parallel: bool,
-    pub section_chunk: SectionChunkMode,
-    pub target_segment_bytes: usize,
-    pub min_split_bytes: usize,
+    pub section_storage: SectionStorage,
+    pub segment_size: usize,
 }
 
-impl EncodingConfig {
+impl WriteOptions {
+    pub fn quick(level: u8, force_f32: bool) -> Self {
+        Self {
+            compression_level: level,
+            force_f32,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
+            section_storage: SectionStorage::Memory,
+            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+        }
+    }
+
     pub(crate) fn compression_is_enabled(self) -> bool {
         self.compression_level != 0
     }
@@ -454,7 +454,7 @@ fn encode_variable_length_array(
     dtype: u8,
     dtype_enum: Dtype,
     packing: &'static dyn Packing,
-    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    container: &mut BlockWriter<'_, DefaultCompressor>,
 ) -> IonResult<(u32, u64, u32)> {
     let mut encoded = Vec::new();
     match (data, dtype_enum) {
@@ -499,7 +499,7 @@ fn encode_fixed_length_array(
     dtype_enum: Dtype,
     elem_bytes: usize,
     packing: &'static dyn Packing,
-    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    container: &mut BlockWriter<'_, DefaultCompressor>,
 ) -> IonResult<(u32, u64, u32)> {
     let (bid, eoff) =
         container.add_item_to_box(data.element_count() * elem_bytes, elem_bytes, |buf| {
@@ -519,7 +519,7 @@ struct ArrayEncoding<'a> {
 
 fn resolve_array_encoding<'a>(
     bda: &'a BinaryDataArray,
-    config: EncodingConfig,
+    config: WriteOptions,
     policy: ArrayPolicy,
 ) -> IonResult<Option<ArrayEncoding<'a>>> {
     let Some(data) = array_data_from_binary_data_array(bda) else {
@@ -555,9 +555,9 @@ fn resolve_array_encoding<'a>(
 
 pub(crate) fn encode_single_array(
     bda: &BinaryDataArray,
-    config: EncodingConfig,
+    config: WriteOptions,
     policy: ArrayPolicy,
-    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    container: &mut BlockWriter<'_, DefaultCompressor>,
 ) -> IonResult<Option<EncodedArrayRef>> {
     let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
         return Ok(None);
@@ -589,7 +589,7 @@ pub(crate) fn encode_single_array(
 
 pub(crate) fn array_is_fixed_width_splittable(
     bda: &BinaryDataArray,
-    config: EncodingConfig,
+    config: WriteOptions,
     policy: ArrayPolicy,
 ) -> IonResult<Option<(usize, usize)>> {
     let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
@@ -603,10 +603,10 @@ pub(crate) fn array_is_fixed_width_splittable(
 
 pub(crate) fn write_array_segments(
     bda: &BinaryDataArray,
-    config: EncodingConfig,
+    config: WriteOptions,
     policy: ArrayPolicy,
     plan: &SegmentPlan,
-    container: &mut ContainerBuilder<'_, DefaultCompressor>,
+    container: &mut BlockWriter<'_, DefaultCompressor>,
 ) -> IonResult<Vec<EncodedArrayRef>> {
     let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
         return Ok(Vec::new());
@@ -670,6 +670,29 @@ pub(crate) fn get_segment_bounds(
     Some(bounds)
 }
 
+pub(crate) fn check_spectrum_mz_order(
+    arrays: &[BinaryDataArray],
+    spectrum_index: usize,
+) -> IonResult<()> {
+    use crate::accessions::MZ_ARRAY;
+    for bda in arrays {
+        if array_type_accession_from_binary_data_array(bda) != MZ_ARRAY {
+            continue;
+        }
+        let Some(data) = array_data_from_binary_data_array(bda) else {
+            return Ok(());
+        };
+        if !data.is_monotonic_non_decreasing() {
+            return Err(format!(
+                "spectrum {spectrum_index}: m/z array must be sorted ascending (non-decreasing) for range reads"
+            )
+            .into());
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 pub(crate) fn get_array_bounds(bda: &BinaryDataArray, dtype: u8) -> Option<(f64, f64)> {
     let data = array_data_from_binary_data_array(bda)?;
     if data.is_empty() {
@@ -691,7 +714,7 @@ mod tests {
     use super::*;
     use crate::ion::{
         format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE},
-        utilities::parse_header::{
+        header::{
             HEADER_CHROM_BLOCK_COUNT, HEADER_SPECTRUM_BLOCK_COUNT, HEADER_TARGET_BLOCK_SIZE,
             HEADER_TOTAL_FILE_SIZE,
         },
@@ -762,16 +785,16 @@ mod tests {
     }
 
     #[test]
-    fn vec_encoder_output_patch_bytes_at() {
+    fn vec_patch_in_bounds() {
         let mut output = vec![0u8; 16];
-        output.patch_bytes_at(4, &[1u8, 2, 3, 4]).unwrap();
+        output.patch(4, &[1u8, 2, 3, 4]).unwrap();
         assert_eq!(&output[4..8], &[1u8, 2, 3, 4]);
     }
 
     #[test]
-    fn vec_encoder_output_patch_out_of_bounds_errors() {
+    fn vec_patch_out_of_bounds_errors() {
         let mut output = vec![0u8; 4];
-        assert!(output.patch_bytes_at(3, &[1u8, 2, 3]).is_err());
+        assert!(output.patch(3, &[1u8, 2, 3]).is_err());
     }
 
     #[test]
@@ -818,14 +841,13 @@ mod tests {
 
     #[test]
     fn encoder_config_compression_disabled_at_level_zero() {
-        let config = EncodingConfig {
+        let config = WriteOptions {
             compression_level: 0,
             force_f32: false,
-            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
-            section_chunk: SectionChunkMode::Memory,
-            target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
-            min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
+            section_storage: SectionStorage::Memory,
+            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -835,14 +857,13 @@ mod tests {
 
     #[test]
     fn encoder_config_compression_enabled_at_nonzero_level() {
-        let config = EncodingConfig {
+        let config = WriteOptions {
             compression_level: 3,
             force_f32: false,
-            uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
-            section_chunk: SectionChunkMode::Memory,
-            target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
-            min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
+            section_storage: SectionStorage::Memory,
+            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);

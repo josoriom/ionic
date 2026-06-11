@@ -3,8 +3,8 @@ use crate::{
     mzml::structs::{Chromatogram, MzML, Spectrum},
 };
 
-pub trait FileReader {
-    fn get_metadata(&mut self) -> IonResult<MzML>;
+pub trait ScanStream {
+    fn metadata(&mut self) -> IonResult<MzML>;
     fn next_spectrum(&mut self) -> IonResult<Option<Spectrum>>;
     fn next_chromatogram(&mut self) -> IonResult<Option<Chromatogram>>;
 }
@@ -37,8 +37,8 @@ impl MemoryReader {
     }
 }
 
-impl FileReader for MemoryReader {
-    fn get_metadata(&mut self) -> IonResult<MzML> {
+impl ScanStream for MemoryReader {
+    fn metadata(&mut self) -> IonResult<MzML> {
         Ok(self.metadata.clone())
     }
 

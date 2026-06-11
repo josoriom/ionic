@@ -61,3 +61,4 @@ fn internal_test_file_regression_guard_anpc() {
     let out = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &out);
 }
+

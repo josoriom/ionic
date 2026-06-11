@@ -1,40 +1,40 @@
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufWriter, Read, Seek, SeekFrom, Write},
+    io::{BufWriter, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::ion::{IonError, IonResult};
 
-pub trait EncoderOutput {
-    fn write_bytes(&mut self, bytes: &[u8]) -> IonResult<()>;
-    fn patch_bytes_at(&mut self, position: u64, bytes: &[u8]) -> IonResult<()>;
-    fn current_byte_position(&mut self) -> IonResult<u64>;
+pub trait WriteBytes {
+    fn write(&mut self, bytes: &[u8]) -> IonResult<()>;
+    fn patch(&mut self, at: u64, bytes: &[u8]) -> IonResult<()>;
+    fn position(&mut self) -> IonResult<u64>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SectionChunkMode {
+pub enum SectionStorage {
     Memory,
     Disk,
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub(crate) fn make_chunk(
-    mode: SectionChunkMode,
+    mode: SectionStorage,
     tag: &str,
     capacity: usize,
 ) -> IonResult<SectionChunk> {
     match mode {
-        SectionChunkMode::Memory => Ok(SectionChunk::memory(capacity)),
-        SectionChunkMode::Disk => SectionChunk::disk(&std::env::temp_dir(), tag),
+        SectionStorage::Memory => Ok(SectionChunk::memory(capacity)),
+        SectionStorage::Disk => SectionChunk::disk(&std::env::temp_dir(), tag),
     }
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 pub(crate) fn make_chunk(
-    _mode: SectionChunkMode,
+    _mode: SectionStorage,
     _tag: &str,
     capacity: usize,
 ) -> IonResult<SectionChunk> {
@@ -42,13 +42,13 @@ pub(crate) fn make_chunk(
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-pub struct FileEncoderOutput {
+pub struct FileWriter {
     writer: BufWriter<File>,
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-impl FileEncoderOutput {
-    pub fn open_for_writing(path: &str) -> IonResult<Self> {
+impl FileWriter {
+    pub fn open(path: &str) -> IonResult<Self> {
         Self::open_path(Path::new(path))
     }
 
@@ -65,6 +65,7 @@ impl FileEncoderOutput {
     }
 
     pub fn flush(&mut self) -> IonResult<()> {
+        use std::io::Write as StdWrite;
         self.writer
             .flush()
             .map_err(|err| IonError::from(format!("flush error: {err}")))
@@ -72,14 +73,14 @@ impl FileEncoderOutput {
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-impl EncoderOutput for FileEncoderOutput {
-    fn write_bytes(&mut self, bytes: &[u8]) -> IonResult<()> {
-        self.writer
-            .write_all(bytes)
+impl WriteBytes for FileWriter {
+    fn write(&mut self, bytes: &[u8]) -> IonResult<()> {
+        std::io::Write::write_all(&mut self.writer, bytes)
             .map_err(|err| IonError::from(format!("write error: {err}")))
     }
 
-    fn patch_bytes_at(&mut self, position: u64, bytes: &[u8]) -> IonResult<()> {
+    fn patch(&mut self, at: u64, bytes: &[u8]) -> IonResult<()> {
+        use std::io::Write as StdWrite;
         self.writer
             .flush()
             .map_err(|err| IonError::from(format!("flush error: {err}")))?;
@@ -88,10 +89,9 @@ impl EncoderOutput for FileEncoderOutput {
             .stream_position()
             .map_err(|err| IonError::from(format!("position error: {err}")))?;
         self.writer
-            .seek(SeekFrom::Start(position))
+            .seek(SeekFrom::Start(at))
             .map_err(|err| IonError::from(format!("seek error: {err}")))?;
-        self.writer
-            .write_all(bytes)
+        std::io::Write::write_all(&mut self.writer, bytes)
             .map_err(|err| IonError::from(format!("patch write error: {err}")))?;
         self.writer
             .seek(SeekFrom::Start(resume_position))
@@ -99,7 +99,8 @@ impl EncoderOutput for FileEncoderOutput {
         Ok(())
     }
 
-    fn current_byte_position(&mut self) -> IonResult<u64> {
+    fn position(&mut self) -> IonResult<u64> {
+        use std::io::Write as StdWrite;
         self.writer
             .flush()
             .map_err(|err| IonError::from(format!("flush error: {err}")))?;
@@ -219,8 +220,7 @@ impl SectionChunk {
             SectionChunk::Memory(buffer) => buffer.extend_from_slice(bytes),
             #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
             SectionChunk::Disk(disk) => {
-                disk.writer
-                    .write_all(bytes)
+                std::io::Write::write_all(&mut disk.writer, bytes)
                     .map_err(|err| IonError::from(format!("section chunk write error: {err}")))?;
                 disk.len += bytes.len() as u64;
             }
@@ -269,63 +269,28 @@ impl SectionChunk {
         }
     }
 
-    pub(crate) fn copy_into(self, output: &mut dyn EncoderOutput) -> IonResult<u64> {
-        let position = output.current_byte_position()?;
-        let aligned = (position + 7) & !7;
-        if aligned > position {
-            output.write_bytes(&[0u8; 7][..(aligned - position) as usize])?;
-        }
-        match self {
-            SectionChunk::Memory(buffer) => output.write_bytes(&buffer)?,
-            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-            SectionChunk::Disk(disk) => {
-                let DiskSectionChunk {
-                    writer,
-                    temp,
-                    len: _,
-                } = disk;
-                let mut file = writer
-                    .into_inner()
-                    .map_err(|err| IonError::from(format!("section chunk flush error: {err}")))?;
-                file.seek(SeekFrom::Start(0))
-                    .map_err(|err| IonError::from(format!("section chunk seek error: {err}")))?;
-                let mut buffer = vec![0u8; 1 << 20];
-                loop {
-                    let read = file.read(&mut buffer).map_err(|err| {
-                        IonError::from(format!("section chunk read error: {err}"))
-                    })?;
-                    if read == 0 {
-                        break;
-                    }
-                    output.write_bytes(&buffer[..read])?;
-                }
-                drop(temp);
-            }
-        }
-        Ok(aligned)
-    }
 }
 
-impl EncoderOutput for Vec<u8> {
-    fn write_bytes(&mut self, bytes: &[u8]) -> IonResult<()> {
+impl WriteBytes for Vec<u8> {
+    fn write(&mut self, bytes: &[u8]) -> IonResult<()> {
         self.extend_from_slice(bytes);
         Ok(())
     }
 
-    fn patch_bytes_at(&mut self, position: u64, bytes: &[u8]) -> IonResult<()> {
-        let start = position as usize;
+    fn patch(&mut self, at: u64, bytes: &[u8]) -> IonResult<()> {
+        let start = at as usize;
         let end = start + bytes.len();
         self.get_mut(start..end)
             .ok_or_else(|| {
                 IonError::from(format!(
-                    "patch_bytes_at: range {start}..{end} out of bounds"
+                    "patch: range {start}..{end} out of bounds"
                 ))
             })?
             .copy_from_slice(bytes);
         Ok(())
     }
 
-    fn current_byte_position(&mut self) -> IonResult<u64> {
+    fn position(&mut self) -> IonResult<u64> {
         Ok(self.len() as u64)
     }
 }

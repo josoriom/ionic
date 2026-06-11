@@ -13,7 +13,7 @@ pub(crate) use binary_ext::BinaryDataExt;
 use std::{collections::BTreeSet, fs, path::PathBuf, sync::OnceLock};
 
 use ionic::{
-    ion::{Decoder, DecoderConfig, IonResult, encode},
+    ion::{IonReader, ReadOptions, IonResult, encode},
     mzml::{
         parse_mzml::{parse_indexed_mzml, parse_mzml},
         structs::*,
@@ -57,7 +57,7 @@ pub(crate) fn encode_to_ion(mzml: &MzML, compression_level: u8, force_f32: bool)
 }
 
 pub(crate) fn decode_ion(bytes: &[u8]) -> IonResult<MzML> {
-    let mut decoder = Decoder::open(bytes, DecoderConfig::default())?;
+    let mut decoder = IonReader::open(bytes, ReadOptions::default())?;
     decoder.to_mzml()
 }
 

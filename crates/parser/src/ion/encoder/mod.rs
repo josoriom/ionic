@@ -1,9 +1,10 @@
 pub mod encode;
 pub use encode::encode;
-pub mod file_reader;
+pub mod scan_stream;
+pub use scan_stream::ScanStream;
 pub mod utilities;
-pub use utilities::EncoderOutput;
+pub use utilities::WriteBytes;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-pub use utilities::FileEncoderOutput;
+pub use utilities::FileWriter;
 pub mod ion_writer;
-pub use ion_writer::{IonWriter, stream_to_ion, write_mzml_to_ion};
+pub use ion_writer::{IonWriter, write_mzml_to_ion};

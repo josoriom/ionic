@@ -4,7 +4,7 @@ use crate::{
         IonError, IonResult,
         utilities::{
             common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
-            decompression_budget::DecompressionBudget,
+            decompression_limit::DecompressionLimit,
             parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
         },
     },
@@ -12,7 +12,7 @@ use crate::{
 
 const GLOBAL_SECTION_HEADER_BYTE_SIZE: usize = 32;
 
-#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn parse_global_metadata(
     bytes: &[u8],
     item_count: u64,
@@ -21,7 +21,7 @@ pub(crate) fn parse_global_metadata(
     str_count: u64,
     compression_codec: u8,
     expected_uncompressed: u64,
-    decompression_budget: DecompressionBudget,
+    decompression_limit: DecompressionLimit,
 ) -> IonResult<Vec<Metadatum>> {
     let expected_byte_count = usize::try_from(expected_uncompressed)
         .map_err(|_| IonError::from("global metadata: expected_uncompressed overflow"))?;
@@ -47,7 +47,7 @@ pub(crate) fn parse_global_metadata(
             owned = decompress_zstd_allow_aligned_padding(
                 bytes,
                 expected_byte_count,
-                decompression_budget,
+                decompression_limit,
             )?;
             owned.as_slice()
         }
@@ -114,7 +114,7 @@ pub(crate) fn parse_global_metadata(
         str_count,
         CODEC_NONE,
         0,
-        decompression_budget,
+        decompression_limit,
     )
 }
 
@@ -150,7 +150,7 @@ mod tests {
             0,
             CODEC_NONE,
             0,
-            DecompressionBudget::default(),
+            DecompressionLimit::default(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("too small"));
@@ -170,7 +170,7 @@ mod tests {
             0,
             CODEC_NONE,
             0,
-            DecompressionBudget::default(),
+            DecompressionLimit::default(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("counts are zero"));
@@ -190,7 +190,7 @@ mod tests {
             0,
             CODEC_NONE,
             0,
-            DecompressionBudget::default(),
+            DecompressionLimit::default(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("mismatch"));
@@ -200,7 +200,7 @@ mod tests {
     fn parse_global_metadata_rejects_unsupported_codec() {
         let bytes = vec![0u8; GLOBAL_SECTION_HEADER_BYTE_SIZE + 4];
         let result =
-            parse_global_metadata(&bytes, 0, 0, 0, 0, 99, 0, DecompressionBudget::default());
+            parse_global_metadata(&bytes, 0, 0, 0, 0, 99, 0, DecompressionLimit::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unsupported"));
     }
@@ -219,7 +219,7 @@ mod tests {
             0,
             CODEC_NONE,
             expected as u64,
-            DecompressionBudget::default(),
+            DecompressionLimit::default(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("trailing bytes"));
@@ -239,7 +239,7 @@ mod tests {
             0,
             CODEC_NONE,
             expected as u64,
-            DecompressionBudget::default(),
+            DecompressionLimit::default(),
         );
         assert!(result.is_err());
         assert!(!result.unwrap_err().contains("trailing bytes"));
