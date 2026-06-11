@@ -357,19 +357,19 @@ const GOLDEN_ENCODES: &[GoldenEncode] = &[
         name: "tiny_pwiz_10",
         path: "crates/parser/data/mzml/tiny.pwiz.1.0.mzML",
         encoded_len: 13504,
-        encoded_fnv: 0x522f_784f_268d_d513,
+        encoded_fnv: 0x8b48_1496_c9ab_14fb,
     },
     GoldenEncode {
         name: "tiny_pwiz_11",
         path: "crates/parser/data/mzml/tiny.pwiz.1.1.mzML",
         encoded_len: 14456,
-        encoded_fnv: 0x2477_3b5e_664b_dd95,
+        encoded_fnv: 0x4a47_7c66_89b0_4ef4,
     },
     GoldenEncode {
         name: "anpc_test",
         path: "crates/parser/data/mzml/test.mzML",
         encoded_len: 9176,
-        encoded_fnv: 0x7c1a_7194_3e5a_0696,
+        encoded_fnv: 0x805d_f937_fd4f_6d3e,
     },
 ];
 
@@ -398,8 +398,8 @@ fn spec_arrayrefs_crc_tamper_fails_closed_with_verify_on_and_opens_with_verify_o
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 0, false);
 
-    let off_spec_arrayrefs = u64::from_le_bytes(bytes[56..64].try_into().unwrap()) as usize;
-    let len_spec_arrayrefs = u64::from_le_bytes(bytes[64..72].try_into().unwrap()) as usize;
+    let off_spec_arrayrefs = u64::from_le_bytes(bytes[80..88].try_into().unwrap()) as usize;
+    let len_spec_arrayrefs = u64::from_le_bytes(bytes[88..96].try_into().unwrap()) as usize;
     assert!(len_spec_arrayrefs > 0, "spec_arrayrefs must be non-empty for this test to be meaningful");
 
     let mut tampered = bytes.clone();

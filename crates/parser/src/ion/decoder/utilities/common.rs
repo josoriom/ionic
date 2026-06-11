@@ -141,7 +141,7 @@ pub(crate) fn decompress_zstd(
 
     budget.validate(comp.len(), expected)?;
 
-    let mut decoder = ruzstd::StreamingDecoder::new(comp)
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(comp)
         .map_err(|err| IonError::from(format!("zstd decode failed: {err:?}")))?;
     let mut out = Vec::with_capacity(expected);
     decoder

@@ -109,7 +109,7 @@ fn check_header() {
     assert!(header.len_chrom_container >= header.chrom_block_count * 32);
 
     assert_eq!(&bytes[5..8], &[0u8; 3]);
-    assert_eq!(&bytes[448..992], &[0u8; 544]);
+    assert_eq!(&bytes[432..968], &[0u8; 536]);
 
     let len = bytes.len() as u64;
     for &off in &[

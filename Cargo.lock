@@ -195,11 +195,13 @@ dependencies = [
  "clap",
  "crc32fast",
  "ionic",
+ "memmap2",
  "mimalloc",
  "rayon",
  "regex",
  "serde",
  "serde_json",
+ "zstd",
 ]
 
 [[package]]

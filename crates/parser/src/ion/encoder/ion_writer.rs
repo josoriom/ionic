@@ -687,6 +687,7 @@ impl<'out> IonWriter<'out> {
             spec_meta_crc32,
             chrom_meta_crc32,
             global_meta_crc32,
+            segment_size: self.config.segment_size as u64,
             header_crc32: 0,
             ..Header::default()
         };

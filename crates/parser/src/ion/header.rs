@@ -11,100 +11,113 @@ pub(crate) const HEADER_CODEC_ID: usize = 11;
 pub(crate) const HEADER_COMPRESSION_LEVEL: usize = 12;
 pub(crate) const HEADER_ARRAY_FILTER_ID: usize = 13;
 pub(crate) const HEADER_TARGET_BLOCK_SIZE: usize = 16;
+pub(crate) const HEADER_SEGMENT_SIZE: usize = 24;
 
-pub(crate) const HEADER_OFFSET_SPEC_SUMMARY: usize = 24;
-pub(crate) const HEADER_LEN_SPEC_SUMMARY: usize = 32;
-pub(crate) const HEADER_OFFSET_SPEC_ENTRIES: usize = 40;
-pub(crate) const HEADER_LEN_SPEC_ENTRIES: usize = 48;
-pub(crate) const HEADER_OFFSET_SPEC_ARRAYREFS: usize = 56;
-pub(crate) const HEADER_LEN_SPEC_ARRAYREFS: usize = 64;
-pub(crate) const HEADER_OFFSET_SPEC_SEGMENT_BOUNDS: usize = 72;
-pub(crate) const HEADER_LEN_SPEC_SEGMENT_BOUNDS: usize = 80;
+pub(crate) const HEADER_OFFSET_SPEC_SUMMARY: usize = 32;
+pub(crate) const HEADER_LEN_SPEC_SUMMARY: usize = 40;
+pub(crate) const HEADER_OFFSET_SPEC_SEGMENT_BOUNDS: usize = 48;
+pub(crate) const HEADER_LEN_SPEC_SEGMENT_BOUNDS: usize = 56;
+pub(crate) const HEADER_OFFSET_SPEC_ENTRIES: usize = 64;
+pub(crate) const HEADER_LEN_SPEC_ENTRIES: usize = 72;
+pub(crate) const HEADER_OFFSET_SPEC_ARRAYREFS: usize = 80;
+pub(crate) const HEADER_LEN_SPEC_ARRAYREFS: usize = 88;
 
-pub(crate) const HEADER_OFFSET_CHROM_SUMMARY: usize = 88;
-pub(crate) const HEADER_LEN_CHROM_SUMMARY: usize = 96;
-pub(crate) const HEADER_OFFSET_CHROM_ENTRIES: usize = 104;
-pub(crate) const HEADER_LEN_CHROM_ENTRIES: usize = 112;
-pub(crate) const HEADER_OFFSET_CHROM_ARRAYREFS: usize = 120;
-pub(crate) const HEADER_LEN_CHROM_ARRAYREFS: usize = 128;
-pub(crate) const HEADER_OFFSET_CHROM_SEGMENT_BOUNDS: usize = 136;
-pub(crate) const HEADER_LEN_CHROM_SEGMENT_BOUNDS: usize = 144;
+pub(crate) const HEADER_OFFSET_CHROM_SUMMARY: usize = 96;
+pub(crate) const HEADER_LEN_CHROM_SUMMARY: usize = 104;
+pub(crate) const HEADER_OFFSET_CHROM_SEGMENT_BOUNDS: usize = 112;
+pub(crate) const HEADER_LEN_CHROM_SEGMENT_BOUNDS: usize = 120;
+pub(crate) const HEADER_OFFSET_CHROM_ENTRIES: usize = 128;
+pub(crate) const HEADER_LEN_CHROM_ENTRIES: usize = 136;
+pub(crate) const HEADER_OFFSET_CHROM_ARRAYREFS: usize = 144;
+pub(crate) const HEADER_LEN_CHROM_ARRAYREFS: usize = 152;
 
-pub(crate) const HEADER_OFFSET_SPEC_META: usize = 152;
-pub(crate) const HEADER_LEN_SPEC_META: usize = 160;
-pub(crate) const HEADER_OFFSET_CHROM_META: usize = 168;
-pub(crate) const HEADER_LEN_CHROM_META: usize = 176;
-pub(crate) const HEADER_OFFSET_GLOBAL_META: usize = 184;
-pub(crate) const HEADER_LEN_GLOBAL_META: usize = 192;
+pub(crate) const HEADER_OFFSET_SPEC_META: usize = 160;
+pub(crate) const HEADER_LEN_SPEC_META: usize = 168;
+pub(crate) const HEADER_OFFSET_CHROM_META: usize = 176;
+pub(crate) const HEADER_LEN_CHROM_META: usize = 184;
+pub(crate) const HEADER_OFFSET_GLOBAL_META: usize = 192;
+pub(crate) const HEADER_LEN_GLOBAL_META: usize = 200;
 
-pub(crate) const HEADER_OFFSET_PACKED_SPECTRA: usize = 200;
-pub(crate) const HEADER_LEN_PACKED_SPECTRA: usize = 208;
-pub(crate) const HEADER_OFFSET_PACKED_CHROMS: usize = 216;
-pub(crate) const HEADER_LEN_PACKED_CHROMS: usize = 224;
+pub(crate) const HEADER_OFFSET_PACKED_SPECTRA: usize = 208;
+pub(crate) const HEADER_LEN_PACKED_SPECTRA: usize = 216;
+pub(crate) const HEADER_OFFSET_PACKED_CHROMS: usize = 224;
+pub(crate) const HEADER_LEN_PACKED_CHROMS: usize = 232;
 
-pub(crate) const HEADER_SPECTRUM_BLOCK_COUNT: usize = 232;
-pub(crate) const HEADER_CHROM_BLOCK_COUNT: usize = 240;
-pub(crate) const HEADER_SPECTRUM_COUNT: usize = 248;
-pub(crate) const HEADER_CHROM_COUNT: usize = 256;
+pub(crate) const HEADER_SPECTRUM_BLOCK_COUNT: usize = 240;
+pub(crate) const HEADER_CHROM_BLOCK_COUNT: usize = 248;
+pub(crate) const HEADER_SPECTRUM_COUNT: usize = 256;
+pub(crate) const HEADER_CHROM_COUNT: usize = 264;
 
-pub(crate) const HEADER_SPEC_META_ROW_COUNT: usize = 264;
-pub(crate) const HEADER_SPEC_META_NUMERIC_COUNT: usize = 272;
-pub(crate) const HEADER_SPEC_META_STRING_COUNT: usize = 280;
-pub(crate) const HEADER_CHROM_META_ROW_COUNT: usize = 288;
-pub(crate) const HEADER_CHROM_META_NUMERIC_COUNT: usize = 296;
-pub(crate) const HEADER_CHROM_META_STRING_COUNT: usize = 304;
-pub(crate) const HEADER_SPEC_ARRAY_TYPE_COUNT: usize = 312;
-pub(crate) const HEADER_CHROM_ARRAY_TYPE_COUNT: usize = 320;
+pub(crate) const HEADER_SPEC_ARRAY_TYPE_COUNT: usize = 272;
+pub(crate) const HEADER_CHROM_ARRAY_TYPE_COUNT: usize = 280;
 
-pub(crate) const HEADER_SPEC_META_UNCOMPRESSED_SIZE: usize = 328;
-pub(crate) const HEADER_CHROM_META_UNCOMPRESSED_SIZE: usize = 336;
-pub(crate) const HEADER_GLOBAL_META_UNCOMPRESSED_SIZE: usize = 344;
-pub(crate) const HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS: usize = 352;
-pub(crate) const HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS: usize = 360;
+pub(crate) const HEADER_SPEC_META_ROW_COUNT: usize = 288;
+pub(crate) const HEADER_SPEC_META_NUMERIC_COUNT: usize = 296;
+pub(crate) const HEADER_SPEC_META_STRING_COUNT: usize = 304;
+pub(crate) const HEADER_CHROM_META_ROW_COUNT: usize = 312;
+pub(crate) const HEADER_CHROM_META_NUMERIC_COUNT: usize = 320;
+pub(crate) const HEADER_CHROM_META_STRING_COUNT: usize = 328;
+pub(crate) const HEADER_GLOBAL_META_ROW_COUNT: usize = 336;
+pub(crate) const HEADER_GLOBAL_META_NUMERIC_COUNT: usize = 344;
+pub(crate) const HEADER_GLOBAL_META_STRING_COUNT: usize = 352;
 
-pub(crate) const HEADER_TOTAL_FILE_SIZE: usize = 368;
-pub(crate) const HEADER_META_GROUP_SIZE: usize = 376;
-pub(crate) const HEADER_SPEC_META_GROUP_COUNT: usize = 384;
-pub(crate) const HEADER_CHROM_META_GROUP_COUNT: usize = 392;
+pub(crate) const HEADER_SPEC_META_UNCOMPRESSED_SIZE: usize = 360;
+pub(crate) const HEADER_CHROM_META_UNCOMPRESSED_SIZE: usize = 368;
+pub(crate) const HEADER_GLOBAL_META_UNCOMPRESSED_SIZE: usize = 376;
 
-pub(crate) const HEADER_GLOBAL_META_ROW_COUNT: usize = 400;
-pub(crate) const HEADER_GLOBAL_META_NUMERIC_COUNT: usize = 408;
-pub(crate) const HEADER_GLOBAL_META_STRING_COUNT: usize = 416;
+pub(crate) const HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS: usize = 384;
+pub(crate) const HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS: usize = 392;
 
-pub(crate) const HEADER_SPEC_SUMMARY_CRC32: usize = 424;
-pub(crate) const HEADER_SPEC_ENTRIES_CRC32: usize = 428;
-pub(crate) const HEADER_SPEC_ARRAYREFS_CRC32: usize = 432;
-pub(crate) const HEADER_CHROM_SUMMARY_CRC32: usize = 436;
-pub(crate) const HEADER_CHROM_ENTRIES_CRC32: usize = 440;
-pub(crate) const HEADER_CHROM_ARRAYREFS_CRC32: usize = 444;
+pub(crate) const HEADER_TOTAL_FILE_SIZE: usize = 400;
+pub(crate) const HEADER_META_GROUP_SIZE: usize = 408;
+pub(crate) const HEADER_SPEC_META_GROUP_COUNT: usize = 416;
+pub(crate) const HEADER_CHROM_META_GROUP_COUNT: usize = 424;
 
-pub(crate) const RESERVED_BLOCK_START: usize = 448;
-pub(crate) const RESERVED_BLOCK_SIZE: usize = 544;
+pub(crate) const RESERVED_BLOCK_START: usize = 432;
+pub(crate) const RESERVED_BLOCK_SIZE: usize = 536;
 
-pub(crate) const HEADER_SPEC_DIRECTORY_CRC32: usize = 992;
-pub(crate) const HEADER_CHROM_DIRECTORY_CRC32: usize = 996;
-pub(crate) const HEADER_SPEC_SEGMENT_BOUNDS_CRC32: usize = 1000;
-pub(crate) const HEADER_CHROM_SEGMENT_BOUNDS_CRC32: usize = 1004;
+pub(crate) const HEADER_SPEC_SUMMARY_CRC32: usize = 968;
+pub(crate) const HEADER_SPEC_SEGMENT_BOUNDS_CRC32: usize = 972;
+pub(crate) const HEADER_SPEC_ENTRIES_CRC32: usize = 976;
+pub(crate) const HEADER_SPEC_ARRAYREFS_CRC32: usize = 980;
+pub(crate) const HEADER_CHROM_SUMMARY_CRC32: usize = 984;
+pub(crate) const HEADER_CHROM_SEGMENT_BOUNDS_CRC32: usize = 988;
+pub(crate) const HEADER_CHROM_ENTRIES_CRC32: usize = 992;
+pub(crate) const HEADER_CHROM_ARRAYREFS_CRC32: usize = 996;
+pub(crate) const HEADER_SPEC_DIRECTORY_CRC32: usize = 1000;
+pub(crate) const HEADER_CHROM_DIRECTORY_CRC32: usize = 1004;
 pub(crate) const HEADER_SPEC_META_CRC32: usize = 1008;
 pub(crate) const HEADER_CHROM_META_CRC32: usize = 1012;
 pub(crate) const HEADER_GLOBAL_META_CRC32: usize = 1016;
 pub(crate) const HEADER_CRC32: usize = 1020;
 
-const _: () = assert!(HEADER_OFFSET_SPEC_SUMMARY == 24);
-const _: () = assert!(HEADER_OFFSET_SPEC_SEGMENT_BOUNDS == 72);
-const _: () = assert!(HEADER_OFFSET_CHROM_SEGMENT_BOUNDS == 136);
-const _: () = assert!(HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS == 352);
-const _: () = assert!(HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS == 360);
-const _: () = assert!(HEADER_SPEC_SUMMARY_CRC32 == 424);
-const _: () = assert!(HEADER_SPEC_ENTRIES_CRC32 == 428);
-const _: () = assert!(HEADER_SPEC_ARRAYREFS_CRC32 == 432);
-const _: () = assert!(HEADER_CHROM_SUMMARY_CRC32 == 436);
-const _: () = assert!(HEADER_CHROM_ENTRIES_CRC32 == 440);
-const _: () = assert!(HEADER_CHROM_ARRAYREFS_CRC32 == 444);
-const _: () = assert!(HEADER_SPEC_DIRECTORY_CRC32 == 992);
-const _: () = assert!(HEADER_SPEC_SEGMENT_BOUNDS_CRC32 == 1000);
+const _: () = assert!(HEADER_SEGMENT_SIZE == 24);
+const _: () = assert!(HEADER_OFFSET_SPEC_SUMMARY == 32);
+const _: () = assert!(HEADER_OFFSET_SPEC_SEGMENT_BOUNDS == 48);
+const _: () = assert!(HEADER_OFFSET_SPEC_ENTRIES == 64);
+const _: () = assert!(HEADER_OFFSET_SPEC_ARRAYREFS == 80);
+const _: () = assert!(HEADER_OFFSET_CHROM_SEGMENT_BOUNDS == 112);
+const _: () = assert!(HEADER_OFFSET_CHROM_ENTRIES == 128);
+const _: () = assert!(HEADER_OFFSET_CHROM_ARRAYREFS == 144);
+const _: () = assert!(HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS == 384);
+const _: () = assert!(HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS == 392);
+const _: () = assert!(RESERVED_BLOCK_START == 432);
+const _: () = assert!(RESERVED_BLOCK_SIZE == 536);
+const _: () = assert!(RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE == 968);
+const _: () = assert!(HEADER_SPEC_SUMMARY_CRC32 == 968);
+const _: () = assert!(HEADER_SPEC_SEGMENT_BOUNDS_CRC32 == 972);
+const _: () = assert!(HEADER_SPEC_ENTRIES_CRC32 == 976);
+const _: () = assert!(HEADER_SPEC_ARRAYREFS_CRC32 == 980);
+const _: () = assert!(HEADER_CHROM_SUMMARY_CRC32 == 984);
+const _: () = assert!(HEADER_CHROM_SEGMENT_BOUNDS_CRC32 == 988);
+const _: () = assert!(HEADER_CHROM_ENTRIES_CRC32 == 992);
+const _: () = assert!(HEADER_CHROM_ARRAYREFS_CRC32 == 996);
+const _: () = assert!(HEADER_SPEC_DIRECTORY_CRC32 == 1000);
+const _: () = assert!(HEADER_CHROM_DIRECTORY_CRC32 == 1004);
+const _: () = assert!(HEADER_SPEC_META_CRC32 == 1008);
+const _: () = assert!(HEADER_CHROM_META_CRC32 == 1012);
+const _: () = assert!(HEADER_GLOBAL_META_CRC32 == 1016);
 const _: () = assert!(HEADER_CRC32 == 1020);
-const _: () = assert!(RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE == 992);
 
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
@@ -166,6 +179,7 @@ pub(crate) struct Header {
     pub(crate) chrom_summary_crc32: u32,
     pub(crate) chrom_entries_crc32: u32,
     pub(crate) chrom_arrayrefs_crc32: u32,
+    pub(crate) segment_size: u64,
     #[allow(dead_code)]
     pub(crate) reserved: [u8; RESERVED_BLOCK_SIZE],
     pub(crate) spec_directory_crc32: u32,
@@ -244,6 +258,7 @@ impl Default for Header {
             chrom_summary_crc32: 0,
             chrom_entries_crc32: 0,
             chrom_arrayrefs_crc32: 0,
+            segment_size: 0,
             reserved: [0u8; RESERVED_BLOCK_SIZE],
             spec_directory_crc32: 0,
             chrom_directory_crc32: 0,
@@ -365,12 +380,14 @@ impl Header {
         let chrom_entries_crc32 = read_u32_at(h, HEADER_CHROM_ENTRIES_CRC32);
         let chrom_arrayrefs_crc32 = read_u32_at(h, HEADER_CHROM_ARRAYREFS_CRC32);
 
+        let segment_size = read_u64_at(h, HEADER_SEGMENT_SIZE);
+
         let reserved = <[u8; RESERVED_BLOCK_SIZE]>::try_from(
             &h[RESERVED_BLOCK_START..RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE],
         )
         .unwrap();
         if reserved.iter().any(|&b| b != 0) {
-            return Err("header: reserved block 448..992 must be all zeros".into());
+            return Err("header: reserved block 432..968 must be all zeros".into());
         }
 
         let spec_directory_crc32 = read_u32_at(h, HEADER_SPEC_DIRECTORY_CRC32);
@@ -438,6 +455,7 @@ impl Header {
             chrom_summary_crc32,
             chrom_entries_crc32,
             chrom_arrayrefs_crc32,
+            segment_size,
             reserved,
             spec_directory_crc32,
             chrom_directory_crc32,
@@ -537,6 +555,8 @@ impl Header {
         write_u32_at(buf, HEADER_CHROM_SUMMARY_CRC32, self.chrom_summary_crc32);
         write_u32_at(buf, HEADER_CHROM_ENTRIES_CRC32, self.chrom_entries_crc32);
         write_u32_at(buf, HEADER_CHROM_ARRAYREFS_CRC32, self.chrom_arrayrefs_crc32);
+
+        write_u64_at(buf, HEADER_SEGMENT_SIZE, self.segment_size);
 
         write_u32_at(buf, HEADER_SPEC_DIRECTORY_CRC32, self.spec_directory_crc32);
         write_u32_at(buf, HEADER_CHROM_DIRECTORY_CRC32, self.chrom_directory_crc32);
@@ -788,11 +808,11 @@ mod tests {
     #[test]
     fn corrupt_reserved_area_is_rejected() {
         let mut h = valid_header_bytes();
-        h[448] = 1;
+        h[432] = 1;
         assert!(Header::parse(&h).is_err());
 
         let mut at_end = valid_header_bytes();
-        at_end[991] = 1;
+        at_end[967] = 1;
         assert!(Header::parse(&at_end).is_err());
     }
 
@@ -831,69 +851,70 @@ mod tests {
         assert_eq!(HEADER_COMPRESSION_LEVEL, 12);
         assert_eq!(HEADER_ARRAY_FILTER_ID, 13);
         assert_eq!(HEADER_TARGET_BLOCK_SIZE, 16);
-        assert_eq!(HEADER_OFFSET_SPEC_SUMMARY, 24);
-        assert_eq!(HEADER_LEN_SPEC_SUMMARY, 32);
-        assert_eq!(HEADER_OFFSET_SPEC_ENTRIES, 40);
-        assert_eq!(HEADER_LEN_SPEC_ENTRIES, 48);
-        assert_eq!(HEADER_OFFSET_SPEC_ARRAYREFS, 56);
-        assert_eq!(HEADER_LEN_SPEC_ARRAYREFS, 64);
-        assert_eq!(HEADER_OFFSET_SPEC_SEGMENT_BOUNDS, 72);
-        assert_eq!(HEADER_LEN_SPEC_SEGMENT_BOUNDS, 80);
-        assert_eq!(HEADER_OFFSET_CHROM_SUMMARY, 88);
-        assert_eq!(HEADER_LEN_CHROM_SUMMARY, 96);
-        assert_eq!(HEADER_OFFSET_CHROM_ENTRIES, 104);
-        assert_eq!(HEADER_LEN_CHROM_ENTRIES, 112);
-        assert_eq!(HEADER_OFFSET_CHROM_ARRAYREFS, 120);
-        assert_eq!(HEADER_LEN_CHROM_ARRAYREFS, 128);
-        assert_eq!(HEADER_OFFSET_CHROM_SEGMENT_BOUNDS, 136);
-        assert_eq!(HEADER_LEN_CHROM_SEGMENT_BOUNDS, 144);
-        assert_eq!(HEADER_OFFSET_SPEC_META, 152);
-        assert_eq!(HEADER_LEN_SPEC_META, 160);
-        assert_eq!(HEADER_OFFSET_CHROM_META, 168);
-        assert_eq!(HEADER_LEN_CHROM_META, 176);
-        assert_eq!(HEADER_OFFSET_GLOBAL_META, 184);
-        assert_eq!(HEADER_LEN_GLOBAL_META, 192);
-        assert_eq!(HEADER_OFFSET_PACKED_SPECTRA, 200);
-        assert_eq!(HEADER_LEN_PACKED_SPECTRA, 208);
-        assert_eq!(HEADER_OFFSET_PACKED_CHROMS, 216);
-        assert_eq!(HEADER_LEN_PACKED_CHROMS, 224);
-        assert_eq!(HEADER_SPECTRUM_BLOCK_COUNT, 232);
-        assert_eq!(HEADER_CHROM_BLOCK_COUNT, 240);
-        assert_eq!(HEADER_SPECTRUM_COUNT, 248);
-        assert_eq!(HEADER_CHROM_COUNT, 256);
-        assert_eq!(HEADER_SPEC_META_ROW_COUNT, 264);
-        assert_eq!(HEADER_SPEC_META_NUMERIC_COUNT, 272);
-        assert_eq!(HEADER_SPEC_META_STRING_COUNT, 280);
-        assert_eq!(HEADER_CHROM_META_ROW_COUNT, 288);
-        assert_eq!(HEADER_CHROM_META_NUMERIC_COUNT, 296);
-        assert_eq!(HEADER_CHROM_META_STRING_COUNT, 304);
-        assert_eq!(HEADER_GLOBAL_META_ROW_COUNT, 400);
-        assert_eq!(HEADER_GLOBAL_META_NUMERIC_COUNT, 408);
-        assert_eq!(HEADER_GLOBAL_META_STRING_COUNT, 416);
-        assert_eq!(HEADER_SPEC_ARRAY_TYPE_COUNT, 312);
-        assert_eq!(HEADER_CHROM_ARRAY_TYPE_COUNT, 320);
-        assert_eq!(HEADER_SPEC_META_UNCOMPRESSED_SIZE, 328);
-        assert_eq!(HEADER_CHROM_META_UNCOMPRESSED_SIZE, 336);
-        assert_eq!(HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, 344);
-        assert_eq!(HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS, 352);
-        assert_eq!(HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS, 360);
-        assert_eq!(HEADER_TOTAL_FILE_SIZE, 368);
-        assert_eq!(HEADER_META_GROUP_SIZE, 376);
-        assert_eq!(HEADER_SPEC_META_GROUP_COUNT, 384);
-        assert_eq!(HEADER_CHROM_META_GROUP_COUNT, 392);
-        assert_eq!(HEADER_SPEC_SUMMARY_CRC32, 424);
-        assert_eq!(HEADER_SPEC_ENTRIES_CRC32, 428);
-        assert_eq!(HEADER_SPEC_ARRAYREFS_CRC32, 432);
-        assert_eq!(HEADER_CHROM_SUMMARY_CRC32, 436);
-        assert_eq!(HEADER_CHROM_ENTRIES_CRC32, 440);
-        assert_eq!(HEADER_CHROM_ARRAYREFS_CRC32, 444);
-        assert_eq!(RESERVED_BLOCK_START, 448);
-        assert_eq!(RESERVED_BLOCK_SIZE, 544);
-        assert_eq!(RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE, 992);
-        assert_eq!(HEADER_SPEC_DIRECTORY_CRC32, 992);
-        assert_eq!(HEADER_CHROM_DIRECTORY_CRC32, 996);
-        assert_eq!(HEADER_SPEC_SEGMENT_BOUNDS_CRC32, 1000);
-        assert_eq!(HEADER_CHROM_SEGMENT_BOUNDS_CRC32, 1004);
+        assert_eq!(HEADER_SEGMENT_SIZE, 24);
+        assert_eq!(HEADER_OFFSET_SPEC_SUMMARY, 32);
+        assert_eq!(HEADER_LEN_SPEC_SUMMARY, 40);
+        assert_eq!(HEADER_OFFSET_SPEC_SEGMENT_BOUNDS, 48);
+        assert_eq!(HEADER_LEN_SPEC_SEGMENT_BOUNDS, 56);
+        assert_eq!(HEADER_OFFSET_SPEC_ENTRIES, 64);
+        assert_eq!(HEADER_LEN_SPEC_ENTRIES, 72);
+        assert_eq!(HEADER_OFFSET_SPEC_ARRAYREFS, 80);
+        assert_eq!(HEADER_LEN_SPEC_ARRAYREFS, 88);
+        assert_eq!(HEADER_OFFSET_CHROM_SUMMARY, 96);
+        assert_eq!(HEADER_LEN_CHROM_SUMMARY, 104);
+        assert_eq!(HEADER_OFFSET_CHROM_SEGMENT_BOUNDS, 112);
+        assert_eq!(HEADER_LEN_CHROM_SEGMENT_BOUNDS, 120);
+        assert_eq!(HEADER_OFFSET_CHROM_ENTRIES, 128);
+        assert_eq!(HEADER_LEN_CHROM_ENTRIES, 136);
+        assert_eq!(HEADER_OFFSET_CHROM_ARRAYREFS, 144);
+        assert_eq!(HEADER_LEN_CHROM_ARRAYREFS, 152);
+        assert_eq!(HEADER_OFFSET_SPEC_META, 160);
+        assert_eq!(HEADER_LEN_SPEC_META, 168);
+        assert_eq!(HEADER_OFFSET_CHROM_META, 176);
+        assert_eq!(HEADER_LEN_CHROM_META, 184);
+        assert_eq!(HEADER_OFFSET_GLOBAL_META, 192);
+        assert_eq!(HEADER_LEN_GLOBAL_META, 200);
+        assert_eq!(HEADER_OFFSET_PACKED_SPECTRA, 208);
+        assert_eq!(HEADER_LEN_PACKED_SPECTRA, 216);
+        assert_eq!(HEADER_OFFSET_PACKED_CHROMS, 224);
+        assert_eq!(HEADER_LEN_PACKED_CHROMS, 232);
+        assert_eq!(HEADER_SPECTRUM_BLOCK_COUNT, 240);
+        assert_eq!(HEADER_CHROM_BLOCK_COUNT, 248);
+        assert_eq!(HEADER_SPECTRUM_COUNT, 256);
+        assert_eq!(HEADER_CHROM_COUNT, 264);
+        assert_eq!(HEADER_SPEC_ARRAY_TYPE_COUNT, 272);
+        assert_eq!(HEADER_CHROM_ARRAY_TYPE_COUNT, 280);
+        assert_eq!(HEADER_SPEC_META_ROW_COUNT, 288);
+        assert_eq!(HEADER_SPEC_META_NUMERIC_COUNT, 296);
+        assert_eq!(HEADER_SPEC_META_STRING_COUNT, 304);
+        assert_eq!(HEADER_CHROM_META_ROW_COUNT, 312);
+        assert_eq!(HEADER_CHROM_META_NUMERIC_COUNT, 320);
+        assert_eq!(HEADER_CHROM_META_STRING_COUNT, 328);
+        assert_eq!(HEADER_GLOBAL_META_ROW_COUNT, 336);
+        assert_eq!(HEADER_GLOBAL_META_NUMERIC_COUNT, 344);
+        assert_eq!(HEADER_GLOBAL_META_STRING_COUNT, 352);
+        assert_eq!(HEADER_SPEC_META_UNCOMPRESSED_SIZE, 360);
+        assert_eq!(HEADER_CHROM_META_UNCOMPRESSED_SIZE, 368);
+        assert_eq!(HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, 376);
+        assert_eq!(HEADER_PLAIN_LEN_SPEC_SEGMENT_BOUNDS, 384);
+        assert_eq!(HEADER_PLAIN_LEN_CHROM_SEGMENT_BOUNDS, 392);
+        assert_eq!(HEADER_TOTAL_FILE_SIZE, 400);
+        assert_eq!(HEADER_META_GROUP_SIZE, 408);
+        assert_eq!(HEADER_SPEC_META_GROUP_COUNT, 416);
+        assert_eq!(HEADER_CHROM_META_GROUP_COUNT, 424);
+        assert_eq!(RESERVED_BLOCK_START, 432);
+        assert_eq!(RESERVED_BLOCK_SIZE, 536);
+        assert_eq!(RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE, 968);
+        assert_eq!(HEADER_SPEC_SUMMARY_CRC32, 968);
+        assert_eq!(HEADER_SPEC_SEGMENT_BOUNDS_CRC32, 972);
+        assert_eq!(HEADER_SPEC_ENTRIES_CRC32, 976);
+        assert_eq!(HEADER_SPEC_ARRAYREFS_CRC32, 980);
+        assert_eq!(HEADER_CHROM_SUMMARY_CRC32, 984);
+        assert_eq!(HEADER_CHROM_SEGMENT_BOUNDS_CRC32, 988);
+        assert_eq!(HEADER_CHROM_ENTRIES_CRC32, 992);
+        assert_eq!(HEADER_CHROM_ARRAYREFS_CRC32, 996);
+        assert_eq!(HEADER_SPEC_DIRECTORY_CRC32, 1000);
+        assert_eq!(HEADER_CHROM_DIRECTORY_CRC32, 1004);
         assert_eq!(HEADER_SPEC_META_CRC32, 1008);
         assert_eq!(HEADER_CHROM_META_CRC32, 1012);
         assert_eq!(HEADER_GLOBAL_META_CRC32, 1016);
@@ -960,6 +981,7 @@ mod tests {
             chrom_summary_crc32: 0xAABB_CC0D,
             chrom_entries_crc32: 0xAABB_CC0E,
             chrom_arrayrefs_crc32: 0xAABB_CC0F,
+            segment_size: 0x0041_0000_0000_0031,
             reserved: [0u8; RESERVED_BLOCK_SIZE],
             spec_directory_crc32: 0xAABB_CC01,
             chrom_directory_crc32: 0xAABB_CC02,
@@ -1039,6 +1061,7 @@ mod tests {
         assert_eq!(parsed.chrom_summary_crc32, original.chrom_summary_crc32);
         assert_eq!(parsed.chrom_entries_crc32, original.chrom_entries_crc32);
         assert_eq!(parsed.chrom_arrayrefs_crc32, original.chrom_arrayrefs_crc32);
+        assert_eq!(parsed.segment_size, original.segment_size);
         assert_eq!(parsed.reserved, original.reserved);
         assert_eq!(parsed.spec_directory_crc32, original.spec_directory_crc32);
         assert_eq!(parsed.chrom_directory_crc32, original.chrom_directory_crc32);
