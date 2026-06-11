@@ -9,7 +9,7 @@ use crate::mzml::structs::{ChromatogramList, CvParam};
 
 const PATH: &str = "data/ion/test.ion";
 
-#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
+#[allow(clippy::too_many_arguments)]
 fn assert_cv_param(
     p: &CvParam,
     cv_ref: Option<&str>,

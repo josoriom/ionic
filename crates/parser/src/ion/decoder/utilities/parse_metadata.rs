@@ -3,7 +3,7 @@ use crate::{
         decode::{Metadatum, MetadatumValue},
         utilities::{
             common::{decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes},
-            decompression_budget::DecompressionBudget,
+            decompression_limit::DecompressionLimit,
         },
     },
     ion::{IonResult, attr_meta::format_accession, utilities::common::*},
@@ -12,7 +12,7 @@ use crate::{
 
 pub(crate) use crate::ion::format::{CODEC_NONE, CODEC_ZSTD};
 
-#[allow(clippy::too_many_arguments)] //TODO: Need to fix this
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn parse_metadata(
     bytes: &[u8],
     item_count: u64,
@@ -21,7 +21,7 @@ pub(crate) fn parse_metadata(
     str_count: u64,
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
-    decompression_budget: DecompressionBudget,
+    decompression_limit: DecompressionLimit,
 ) -> IonResult<Vec<Metadatum>> {
     let owned;
     let bytes = match compression_codec {
@@ -30,7 +30,7 @@ pub(crate) fn parse_metadata(
             owned = decompress_zstd_allow_aligned_padding(
                 bytes,
                 expected_uncompressed_bytes,
-                decompression_budget,
+                decompression_limit,
             )?;
             owned.as_slice()
         }

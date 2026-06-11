@@ -14,7 +14,7 @@ use quick_xml::{
 use crate::{
     ion::{
         IonResult,
-        encoder::file_reader::{FileReader, MemoryReader},
+        encoder::scan_stream::{ScanStream, MemoryReader},
     },
     mzml::structs::{Chromatogram, MzML, Spectrum},
 };
@@ -99,12 +99,12 @@ impl MzmlReader {
     }
 }
 
-impl FileReader for MzmlReader {
-    fn get_metadata(&mut self) -> IonResult<MzML> {
+impl ScanStream for MzmlReader {
+    fn metadata(&mut self) -> IonResult<MzML> {
         match &mut self.kind {
             #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-            ReaderKind::File(reader) => reader.get_metadata(),
-            ReaderKind::Memory(reader) => reader.get_metadata(),
+            ReaderKind::File(reader) => reader.metadata(),
+            ReaderKind::Memory(reader) => reader.metadata(),
         }
     }
 
@@ -127,7 +127,7 @@ impl FileReader for MzmlReader {
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl StreamReader {
-    fn get_metadata(&mut self) -> IonResult<MzML> {
+    fn metadata(&mut self) -> IonResult<MzML> {
         match self.state {
             ReaderState::NeedMetadata => self.read_metadata()?,
             ReaderState::NeedChromatograms => self.read_to_chromatograms()?,
@@ -139,7 +139,7 @@ impl StreamReader {
 
     fn next_spectrum(&mut self) -> IonResult<Option<Spectrum>> {
         if self.state == ReaderState::NeedMetadata {
-            self.get_metadata()?;
+            self.metadata()?;
         }
         if self.state != ReaderState::SpectrumList {
             return Ok(None);
@@ -181,7 +181,7 @@ impl StreamReader {
 
     fn next_chromatogram(&mut self) -> IonResult<Option<Chromatogram>> {
         if self.state == ReaderState::NeedMetadata || self.state == ReaderState::NeedChromatograms {
-            self.get_metadata()?;
+            self.metadata()?;
         }
         if self.state != ReaderState::ChromatogramList {
             return Ok(None);

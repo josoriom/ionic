@@ -3,7 +3,7 @@ use rayon::prelude::*;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
-use crate::encoder::utilities::encoder_output::EncoderOutput;
+use crate::encoder::utilities::sink::WriteBytes;
 use crate::ion::byte_transpose::shuffle_with_tail;
 use crate::ion::packing::PackingId;
 use crate::ion::{IonError, IonResult};
@@ -373,8 +373,8 @@ pub(crate) struct ContainerSummary {
     pub(crate) directory_crc32: u32,
 }
 
-pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
-    output: &'output mut dyn EncoderOutput,
+pub(crate) struct BlockWriter<'output, C: BlockCompressor> {
+    output: &'output mut dyn WriteBytes,
     block_packing_id: PackingId,
     store: BlockStore,
     pending: Vec<PendingBlock>,
@@ -385,9 +385,9 @@ pub(crate) struct ContainerBuilder<'output, C: BlockCompressor> {
     par_min_blocks: usize,
 }
 
-impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
+impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
     pub(crate) fn new(
-        output: &'output mut dyn EncoderOutput,
+        output: &'output mut dyn WriteBytes,
         max_block_uncompressed_size: usize,
         compressor: CompressionMode<C>,
         block_packing_id: PackingId,
@@ -630,7 +630,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
         let ready = merge_sorted_by_block_id(sequential_ready, shared_ready);
 
         for block in ready {
-            self.output.write_bytes(&block.bytes)?;
+            self.output.write(&block.bytes)?;
             self.store.seal(
                 block.block_id,
                 BlockDirEntry {
@@ -656,7 +656,7 @@ impl<'output, C: BlockCompressor + Send> ContainerBuilder<'output, C> {
             Vec::with_capacity(block_count as usize * BLOCK_DIRECTORY_ENTRY_SIZE);
         self.store.write_directory(&mut directory_bytes);
         let directory_crc32 = crc32fast::hash(&directory_bytes);
-        self.output.write_bytes(&directory_bytes)?;
+        self.output.write(&directory_bytes)?;
 
         let total_bytes = self.payload_bytes + directory_bytes.len() as u64;
         Ok(ContainerSummary {
@@ -895,17 +895,17 @@ mod tests {
 
     struct VecOutput(Vec<u8>);
 
-    impl EncoderOutput for VecOutput {
-        fn write_bytes(&mut self, bytes: &[u8]) -> IonResult<()> {
+    impl WriteBytes for VecOutput {
+        fn write(&mut self, bytes: &[u8]) -> IonResult<()> {
             self.0.extend_from_slice(bytes);
             Ok(())
         }
-        fn patch_bytes_at(&mut self, position: u64, bytes: &[u8]) -> IonResult<()> {
-            let start = position as usize;
+        fn patch(&mut self, at: u64, bytes: &[u8]) -> IonResult<()> {
+            let start = at as usize;
             self.0[start..start + bytes.len()].copy_from_slice(bytes);
             Ok(())
         }
-        fn current_byte_position(&mut self) -> IonResult<u64> {
+        fn position(&mut self) -> IonResult<u64> {
             Ok(self.0.len() as u64)
         }
     }
@@ -927,9 +927,9 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_raw_single_item() {
+    fn block_writer_raw_single_item() {
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn add_array_as_block_stays_on_parallel_path() {
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -979,7 +979,7 @@ mod tests {
     #[test]
     fn oversized_item_uses_sequential_path() {
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             16,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -999,9 +999,9 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_element_offsets_are_correct() {
+    fn block_writer_element_offsets_are_correct() {
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1031,9 +1031,9 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_different_strides_get_different_blocks() {
+    fn block_writer_different_strides_get_different_blocks() {
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1055,10 +1055,10 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_block_splits_when_full() {
+    fn block_writer_block_splits_when_full() {
         let max_block_size = 16usize;
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             max_block_size,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1085,9 +1085,9 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_finish_writes_directory() {
+    fn block_writer_finish_writes_directory() {
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1110,9 +1110,9 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_empty_produces_no_blocks() {
+    fn block_writer_empty_produces_no_blocks() {
         let mut output = VecOutput(Vec::new());
-        let builder = ContainerBuilder::new(
+        let builder = BlockWriter::new(
             &mut output,
             64 * 1024 * 1024,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1166,7 +1166,7 @@ mod tests {
     fn oversized_item_gets_dedicated_block() {
         let max_block_size = 16usize;
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             max_block_size,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1189,7 +1189,7 @@ mod tests {
     fn oversized_item_between_normal_items_produces_three_blocks() {
         let max_block_size = 16usize;
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             max_block_size,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1224,7 +1224,7 @@ mod tests {
     fn two_consecutive_oversized_items_get_separate_dedicated_blocks() {
         let max_block_size = 16usize;
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             max_block_size,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1254,7 +1254,7 @@ mod tests {
         let max_block_size = 16usize;
         let item_size = 128usize;
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             max_block_size,
             CompressionMode::<PassthroughCompressor>::Raw,
@@ -1278,9 +1278,9 @@ mod tests {
     }
 
     #[test]
-    fn container_builder_seq_and_par_match() {
+    fn block_writer_seq_and_par_match() {
         let mut seq_out = VecOutput(Vec::new());
-        let mut seq = ContainerBuilder::new(
+        let mut seq = BlockWriter::new(
             &mut seq_out,
             8,
             CompressionMode::Compressed(PassthroughCompressor),
@@ -1289,7 +1289,7 @@ mod tests {
         seq.set_par_min_blocks(usize::MAX);
 
         let mut par_out = VecOutput(Vec::new());
-        let mut par = ContainerBuilder::new(
+        let mut par = BlockWriter::new(
             &mut par_out,
             8,
             CompressionMode::Compressed(PassthroughCompressor),
@@ -1335,7 +1335,7 @@ mod tests {
     fn batched_flush_keeps_directory_offsets_correct() {
         let item_count = 7usize;
         let mut output = VecOutput(Vec::new());
-        let mut builder = ContainerBuilder::new(
+        let mut builder = BlockWriter::new(
             &mut output,
             8,
             CompressionMode::<PassthroughCompressor>::Raw,

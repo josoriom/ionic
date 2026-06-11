@@ -827,7 +827,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s19_mz_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -852,7 +852,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s19_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -877,7 +877,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s20_mz_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -902,7 +902,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_s20_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -929,7 +929,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_tic_time_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -956,7 +956,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_tic_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -983,7 +983,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_sic_time_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -1010,7 +1010,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_sic_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),

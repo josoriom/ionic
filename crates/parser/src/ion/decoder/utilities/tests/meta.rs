@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use crate::ion::{
-    DecompressionBudget,
+    DecompressionLimit,
     decoder::decode::Metadatum,
     meta_groups::MetaTotals,
     utilities::{MetaGroupReader, parse_header},
@@ -30,7 +30,7 @@ pub(super) fn spectra_metadata(path: &str) -> Vec<Metadatum> {
         },
         header.compression_codec,
         true,
-        DecompressionBudget::default(),
+        DecompressionLimit::default(),
         64 * 1024 * 1024,
     )
     .expect("build spectra metadata reader")
@@ -56,7 +56,7 @@ pub(super) fn chromatograms_metadata(path: &str) -> Vec<Metadatum> {
         },
         header.compression_codec,
         true,
-        DecompressionBudget::default(),
+        DecompressionLimit::default(),
         64 * 1024 * 1024,
     )
     .expect("build chromatograms metadata reader")

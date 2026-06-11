@@ -1,7 +1,7 @@
-use std::{fs, path::Path};
+use std::{fs::File, path::Path};
 
 use ionic::ion::{
-    format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, is_supported},
+    format::{CODEC_NONE, CODEC_ZSTD, FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, is_supported},
     get_version_from_header,
 };
 
@@ -11,17 +11,18 @@ const RED: &str = "\x1b[1;31m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 
+const SPEC_SUMMARY_ROW: usize = 128;
+const SEGMENT_BOUND_ROW: usize = 24;
+
 struct Section {
-    name: &'static str,
     offset: u64,
     size: u64,
     ok: bool,
 }
 
 impl Section {
-    fn new(name: &'static str, offset: u64, size: u64) -> Self {
+    fn new(_name: &'static str, offset: u64, size: u64) -> Self {
         Self {
-            name,
             offset,
             size,
             ok: true,
@@ -30,17 +31,17 @@ impl Section {
 }
 
 pub(crate) fn check_ion_file(path: &Path) -> Result<(), String> {
-    let bytes = fs::read(path).map_err(|e| format!("read failed: {e}"))?;
+    let file = File::open(path).map_err(|e| format!("open failed: {e}"))?;
+    let map = unsafe { memmap2::Mmap::map(&file).map_err(|e| format!("mmap failed: {e}"))? };
+    let bytes: &[u8] = &map;
     if bytes.len() < HEADER_SIZE {
         return Err(format!(
             "file has {} bytes, expected at least {HEADER_SIZE}",
             bytes.len()
         ));
     }
-    let view = HeaderView::new(&bytes);
+    let view = HeaderView::new(bytes);
     print_summary(&view);
-    println!();
-    print_sections(&view);
     println!();
     print_integrity(&view);
     Ok(())
@@ -55,7 +56,7 @@ struct HeaderView<'a> {
 impl<'a> HeaderView<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         let header = &bytes[..HEADER_SIZE];
-        let sections = build_sections(header, u64_at(header, 368));
+        let sections = build_sections(header, u64_at(header, 400));
         Self {
             bytes,
             header,
@@ -83,23 +84,23 @@ impl<'a> HeaderView<'a> {
     }
 
     fn file_size_ok(&self) -> bool {
-        self.read_header_u64(368) == self.bytes.len() as u64
+        self.read_header_u64(400) == self.bytes.len() as u64
     }
 
     fn spec_dir_fits(&self) -> bool {
-        self.read_header_u64(232)
+        self.read_header_u64(240)
             .checked_mul(32)
-            .is_some_and(|bytes| bytes <= self.read_header_u64(208))
+            .is_some_and(|bytes| bytes <= self.read_header_u64(216))
     }
 
     fn chrom_dir_fits(&self) -> bool {
-        self.read_header_u64(240)
+        self.read_header_u64(248)
             .checked_mul(32)
-            .is_some_and(|bytes| bytes <= self.read_header_u64(224))
+            .is_some_and(|bytes| bytes <= self.read_header_u64(232))
     }
 
     fn sections_in_bounds(&self) -> bool {
-        let trailer_start = self.read_header_u64(368).saturating_sub(8);
+        let trailer_start = self.read_header_u64(400).saturating_sub(8);
         self.sections.iter().all(|s| {
             s.size == 0
                 || s.offset
@@ -131,23 +132,132 @@ impl<'a> HeaderView<'a> {
             .and_then(|end| self.bytes.get(offset..end))
             .is_some_and(|slice| crc32fast::hash(slice) == stored)
     }
+
+    fn block_dir_crc_ok(
+        &self,
+        container_off_at: usize,
+        container_len_at: usize,
+        block_count_at: usize,
+        stored_at: usize,
+    ) -> bool {
+        let container_off = self.read_header_u64(container_off_at);
+        let container_len = self.read_header_u64(container_len_at);
+        let block_count = self.read_header_u64(block_count_at);
+        let stored = self.read_header_u32(stored_at);
+        (|| -> Option<bool> {
+            let dir_bytes = block_count.checked_mul(32)?;
+            if dir_bytes > container_len {
+                return Some(false);
+            }
+            let dir_off = container_off.checked_add(container_len.checked_sub(dir_bytes)?)?;
+            let start = usize::try_from(dir_off).ok()?;
+            let end = usize::try_from(dir_off.checked_add(dir_bytes)?).ok()?;
+            Some(
+                self.bytes
+                    .get(start..end)
+                    .is_some_and(|s| crc32fast::hash(s) == stored),
+            )
+        })()
+        .unwrap_or(false)
+    }
+
+    fn spec_summary_buf(&self) -> Option<&[u8]> {
+        let off = self.read_header_u64(32) as usize;
+        let len = self.read_header_u64(40) as usize;
+        off.checked_add(len)
+            .and_then(|end| self.bytes.get(off..end))
+    }
+
+    fn spec_segment_bounds_plain(&self) -> Option<Vec<u8>> {
+        let off = self.read_header_u64(48) as usize;
+        let len = self.read_header_u64(56) as usize;
+        if len == 0 {
+            return None;
+        }
+        let raw = off
+            .checked_add(len)
+            .and_then(|end| self.bytes.get(off..end))?;
+        let codec = self.header[11];
+        if codec == CODEC_NONE {
+            return Some(raw.to_vec());
+        }
+        if codec == CODEC_ZSTD {
+            let plain_len = self.read_header_u64(384) as usize;
+            return zstd::bulk::decompress(raw, plain_len).ok();
+        }
+        None
+    }
+
+    fn axis_maxes(&self) -> AxisMaxes {
+        let mut max_rt: f64 = 0.0;
+        let mut max_mz: f64 = 0.0;
+        let mut max_x: u32 = 0;
+        let mut max_y: u32 = 0;
+        let mut max_z: u32 = 0;
+
+        if let Some(buf) = self.spec_summary_buf() {
+            for row in buf.chunks_exact(SPEC_SUMMARY_ROW) {
+                let rt = f64::from_le_bytes(row[0..8].try_into().unwrap());
+                let x = u32::from_le_bytes(row[42..46].try_into().unwrap());
+                let y = u32::from_le_bytes(row[46..50].try_into().unwrap());
+                let z = u32::from_le_bytes(row[50..54].try_into().unwrap());
+                if rt.is_finite() && rt > max_rt {
+                    max_rt = rt;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+                if z > max_z {
+                    max_z = z;
+                }
+            }
+        }
+
+        if let Some(plain) = self.spec_segment_bounds_plain() {
+            for row in plain.chunks_exact(SEGMENT_BOUND_ROW) {
+                let high = f64::from_le_bytes(row[16..24].try_into().unwrap());
+                if high.is_finite() && high > max_mz {
+                    max_mz = high;
+                }
+            }
+        }
+
+        AxisMaxes {
+            max_rt,
+            max_mz,
+            max_x,
+            max_y,
+            max_z,
+        }
+    }
+}
+
+struct AxisMaxes {
+    max_rt: f64,
+    max_mz: f64,
+    max_x: u32,
+    max_y: u32,
+    max_z: u32,
 }
 
 fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
     let mut sections = vec![
-        Section::new("spec_summary", u64_at(header, 24), u64_at(header, 32)),
-        Section::new("spec_entries", u64_at(header, 40), u64_at(header, 48)),
-        Section::new("spec_arrayrefs", u64_at(header, 56), u64_at(header, 64)),
-        Section::new("spec_segment_bounds", u64_at(header, 72), u64_at(header, 80)),
-        Section::new("chrom_summary", u64_at(header, 88), u64_at(header, 96)),
-        Section::new("chrom_entries", u64_at(header, 104), u64_at(header, 112)),
-        Section::new("chrom_arrayrefs", u64_at(header, 120), u64_at(header, 128)),
-        Section::new("chrom_segment_bounds", u64_at(header, 136), u64_at(header, 144)),
-        Section::new("spec_meta", u64_at(header, 152), u64_at(header, 160)),
-        Section::new("chrom_meta", u64_at(header, 168), u64_at(header, 176)),
-        Section::new("global_meta", u64_at(header, 184), u64_at(header, 192)),
-        Section::new("spec_container", u64_at(header, 200), u64_at(header, 208)),
-        Section::new("chrom_container", u64_at(header, 216), u64_at(header, 224)),
+        Section::new("spec_summary", u64_at(header, 32), u64_at(header, 40)),
+        Section::new("spec_segment_bounds", u64_at(header, 48), u64_at(header, 56)),
+        Section::new("spec_entries", u64_at(header, 64), u64_at(header, 72)),
+        Section::new("spec_arrayrefs", u64_at(header, 80), u64_at(header, 88)),
+        Section::new("chrom_summary", u64_at(header, 96), u64_at(header, 104)),
+        Section::new("chrom_segment_bounds", u64_at(header, 112), u64_at(header, 120)),
+        Section::new("chrom_entries", u64_at(header, 128), u64_at(header, 136)),
+        Section::new("chrom_arrayrefs", u64_at(header, 144), u64_at(header, 152)),
+        Section::new("spec_meta", u64_at(header, 160), u64_at(header, 168)),
+        Section::new("chrom_meta", u64_at(header, 176), u64_at(header, 184)),
+        Section::new("global_meta", u64_at(header, 192), u64_at(header, 200)),
+        Section::new("spec_container", u64_at(header, 208), u64_at(header, 216)),
+        Section::new("chrom_container", u64_at(header, 224), u64_at(header, 232)),
     ];
 
     let trailer_start = total_file_size.saturating_sub(8);
@@ -213,12 +323,21 @@ fn print_summary(view: &HeaderView<'_>) {
         ),
         None,
     );
+    let segment_size = view.read_header_u64(24);
     field(
-        "spectrum_count",
-        &view.read_header_u64(248).to_string(),
+        "segment_size",
+        &format!(
+            "{segment_size} bytes  ({:.2} MB)",
+            segment_size as f64 / (1024.0 * 1024.0)
+        ),
         None,
     );
-    field("chrom_count", &view.read_header_u64(256).to_string(), None);
+    field(
+        "spectrum_count",
+        &view.read_header_u64(256).to_string(),
+        None,
+    );
+    field("chrom_count", &view.read_header_u64(264).to_string(), None);
     let actual = view.bytes.len() as u64;
     field(
         "total_file_size",
@@ -228,21 +347,14 @@ fn print_summary(view: &HeaderView<'_>) {
         ),
         Some(view.file_size_ok() && view.trailer_ok()),
     );
-}
 
-fn print_sections(view: &HeaderView<'_>) {
-    println!("{BOLD}Section Layout{RESET}");
-    println!(
-        "{DIM}  {:<20} {:>14} {:>14}{RESET}",
-        "name", "offset", "size"
-    );
-    for s in &view.sections {
-        let mark = if s.ok {
-            format!("{GREEN}✓{RESET}")
-        } else {
-            format!("{RED}✗{RESET}")
-        };
-        println!("  {:<20} {:>14} {:>14}  {mark}", s.name, s.offset, s.size);
+    let ax = view.axis_maxes();
+    field("max_mz", &format!("{:.6}", ax.max_mz), None);
+    field("max_rt", &format!("{:.6}", ax.max_rt), None);
+    if ax.max_x > 0 || ax.max_y > 0 || ax.max_z > 0 {
+        field("max_x", &ax.max_x.to_string(), None);
+        field("max_y", &ax.max_y.to_string(), None);
+        field("max_z", &ax.max_z.to_string(), None);
     }
 }
 
@@ -258,9 +370,25 @@ fn print_integrity(view: &HeaderView<'_>) {
         ("7   all sections within bounds", view.sections_in_bounds()),
         ("8   no section overlaps", view.no_overlaps()),
         ("9   all offsets 8-byte aligned", view.all_aligned()),
-        ("10  spec_meta CRC-32", view.crc_ok(152, 160, 1008)),
-        ("11  chrom_meta CRC-32", view.crc_ok(168, 176, 1012)),
-        ("12  global_meta CRC-32", view.crc_ok(184, 192, 1016)),
+        ("10  A0 spec_summary CRC-32", view.crc_ok(32, 40, 968)),
+        ("11  A1 spec_segment_bounds CRC-32", view.crc_ok(48, 56, 972)),
+        ("12  A2 spec_entries CRC-32", view.crc_ok(64, 72, 976)),
+        ("13  A3 spec_arrayrefs CRC-32", view.crc_ok(80, 88, 980)),
+        ("14  B0 chrom_summary CRC-32", view.crc_ok(96, 104, 984)),
+        ("15  B1 chrom_segment_bounds CRC-32", view.crc_ok(112, 120, 988)),
+        ("16  B2 chrom_entries CRC-32", view.crc_ok(128, 136, 992)),
+        ("17  B3 chrom_arrayrefs CRC-32", view.crc_ok(144, 152, 996)),
+        (
+            "18  spec block directory CRC-32",
+            view.block_dir_crc_ok(208, 216, 240, 1000),
+        ),
+        (
+            "19  chrom block directory CRC-32",
+            view.block_dir_crc_ok(224, 232, 248, 1004),
+        ),
+        ("20  C spec_meta CRC-32", view.crc_ok(160, 168, 1008)),
+        ("21  D chrom_meta CRC-32", view.crc_ok(176, 184, 1012)),
+        ("22  E global_meta CRC-32", view.crc_ok(192, 200, 1016)),
     ];
     for (label, ok) in checks {
         let (color, mark) = if *ok { (GREEN, "✓") } else { (RED, "✗") };

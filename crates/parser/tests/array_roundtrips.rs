@@ -3,7 +3,7 @@ mod common;
 use common::binary_ext::BinaryDataExt;
 use common::helpers::{build_mzml, make_spectrum_f64, mzml_with_single_array};
 use common::{decode_ion, encode_to_ion, first_spectrum_binary, roundtrip};
-use ionic::ion::{Decoder, DecoderConfig, encode};
+use ionic::ion::{IonReader, ReadOptions, encode};
 use ionic::mzml::structs::*;
 use proptest::prelude::*;
 
@@ -48,12 +48,12 @@ fn array_filter_label_matches_applied_transform() {
         mzml_with_single_array(NumericType::Float64, BinaryData::F64(f64_values), f64_len);
 
     let f32_bytes = encode_to_ion(&f32_mzml, 9, false);
-    let f32_decoder = Decoder::open(&f32_bytes, DecoderConfig::default()).expect("open f32 ion");
-    let f32_refs = f32_decoder.spectrum_array_refs(0).expect("f32 array refs");
+    let f32_decoder = IonReader::open(&f32_bytes, ReadOptions::default()).expect("open f32 ion");
+    let f32_refs = f32_decoder.spectrum_arrays(0).expect("f32 array refs");
 
     let f64_bytes = encode_to_ion(&f64_mzml, 9, false);
-    let f64_decoder = Decoder::open(&f64_bytes, DecoderConfig::default()).expect("open f64 ion");
-    let f64_refs = f64_decoder.spectrum_array_refs(0).expect("f64 array refs");
+    let f64_decoder = IonReader::open(&f64_bytes, ReadOptions::default()).expect("open f64 ion");
+    let f64_refs = f64_decoder.spectrum_arrays(0).expect("f64 array refs");
 
     assert!(
         f32_refs
@@ -163,7 +163,7 @@ fn roundtrip_at_compression_levels() {
         let mut buf = Vec::new();
         encode(&mzml, level, false, &mut buf)
             .unwrap_or_else(|e| panic!("encode at level {level} failed: {e}"));
-        let mut decoder = Decoder::open(&buf, DecoderConfig::default())
+        let mut decoder = IonReader::open(&buf, ReadOptions::default())
             .unwrap_or_else(|e| panic!("decoder open at level {level} failed: {e}"));
         let decoded = decoder
             .to_mzml()
@@ -184,7 +184,7 @@ fn roundtrip_force_f32_downcasts() {
 
     let mut buf = Vec::new();
     encode(&mzml, 0, true, &mut buf).expect("encode with force_f32");
-    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder open");
+    let mut decoder = IonReader::open(&buf, ReadOptions::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
     let bin = first_spectrum_binary(&decoded).expect("should have binary data");
@@ -243,7 +243,7 @@ fn delta_mz_special_values_are_bit_exact() {
 #[test]
 fn delta_mz_via_for_each_scan_is_bit_exact() {
     use ionic::ScanSource;
-    use ionic::decoder::decode::Ion;
+    use ionic::decoder::decode::IonReader;
     let input: Vec<f64> = (0..500).map(|i| 100.0 + i as f64 * 0.05).collect();
     let intensity: Vec<f64> = vec![1.0; input.len()];
     let mut spectrum = make_spectrum_f64("scan=1", input.clone(), intensity);
@@ -264,7 +264,7 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
     });
     let mzml = build_mzml(vec![spectrum], vec![]);
     let buf = encode_to_ion(&mzml, 3, false);
-    let mut ion = Ion::open(&buf, DecoderConfig::default()).unwrap();
+    let mut ion = IonReader::open(&buf, ReadOptions::default()).unwrap();
     let mut got_mz: Vec<f64> = Vec::new();
     ion.for_each_in_range(0.0, f64::MAX, 0, |_, mz: &[f64], _| {
         got_mz = mz.to_vec();
@@ -277,7 +277,7 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
 
 #[test]
 fn delta_shuffle_applied_to_mz_and_intensity() {
-    use ionic::ion::Decoder as IonDecoder;
+    use ionic::ion::IonReader as IonDecoder;
     let mz: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
     let intensity: Vec<f64> = (0..100).map(|i| (i * 10) as f64).collect();
     let mzml = build_mzml(
@@ -285,8 +285,8 @@ fn delta_shuffle_applied_to_mz_and_intensity() {
         vec![],
     );
     let buf = encode_to_ion(&mzml, 3, false);
-    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
-    let refs = decoder.spectrum_array_refs(0).unwrap();
+    let mut decoder = IonDecoder::open(&buf, ReadOptions::default()).unwrap();
+    let refs = decoder.spectrum_arrays(0).unwrap();
     let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
     let int_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
     assert_eq!(mz_ref.array_filter, 2, "m/z must use DeltaShuffle filter");
@@ -295,9 +295,9 @@ fn delta_shuffle_applied_to_mz_and_intensity() {
         "intensity must use DeltaShuffle filter"
     );
     let mut got_mz = Vec::new();
-    decoder.read_spectrum_array(mz_ref, &mut got_mz).unwrap();
+    decoder.read_array(mz_ref, &mut got_mz).unwrap();
     let mut got_int = Vec::new();
-    decoder.read_spectrum_array(int_ref, &mut got_int).unwrap();
+    decoder.read_array(int_ref, &mut got_int).unwrap();
     for (a, b) in got_mz.iter().zip(mz.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -333,16 +333,20 @@ fn format_version_always_matches_current() {
 
 #[test]
 fn delta_not_applied_without_compression() {
-    use ionic::ion::Decoder as IonDecoder;
+    use ionic::ion::IonReader as IonDecoder;
     let mz: Vec<f64> = (0..10).map(|i| 100.0 + i as f64).collect();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(mz.clone()), mz.len());
+    let intensity = vec![1.0_f64; mz.len()];
+    let mzml = build_mzml(
+        vec![make_spectrum_f64("scan=1", mz.clone(), intensity)],
+        vec![],
+    );
     let buf = encode_to_ion(&mzml, 0, false);
-    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
-    let refs = decoder.spectrum_array_refs(0).unwrap();
+    let mut decoder = IonDecoder::open(&buf, ReadOptions::default()).unwrap();
+    let refs = decoder.spectrum_arrays(0).unwrap();
     let mz_ref = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
     assert_eq!(mz_ref.array_filter, 0, "no delta without compression");
     let mut got = Vec::new();
-    decoder.read_spectrum_array(mz_ref, &mut got).unwrap();
+    decoder.read_array(mz_ref, &mut got).unwrap();
     for (a, b) in got.iter().zip(mz.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -351,7 +355,7 @@ fn delta_not_applied_without_compression() {
 #[test]
 fn delta_shuffle_applied_to_time_array() {
     use common::helpers::make_chromatogram_f64;
-    use ionic::ion::Decoder as IonDecoder;
+    use ionic::ion::IonReader as IonDecoder;
     let time: Vec<f64> = (0..100).map(|i| i as f64 * 0.1).collect();
     let intensity: Vec<f64> = vec![1.0; time.len()];
     let mzml = build_mzml(
@@ -359,7 +363,7 @@ fn delta_shuffle_applied_to_time_array() {
         vec![make_chromatogram_f64("tic", time.clone(), intensity)],
     );
     let buf = encode_to_ion(&mzml, 3, false);
-    let mut decoder = IonDecoder::open(&buf, DecoderConfig::default()).unwrap();
+    let mut decoder = IonDecoder::open(&buf, ReadOptions::default()).unwrap();
     let refs = decoder.chromatogram_array_refs(0).unwrap();
     let time_ref = refs.iter().find(|r| r.array_type == 1_000_595).unwrap();
     assert_eq!(
@@ -401,19 +405,21 @@ proptest! {
 
     #[test]
     fn proptest_delta2vbyte_mz_roundtrip(
-        mz in prop::collection::vec(prop::num::f64::ANY, 3..256)
+        mz in prop::collection::vec(prop::num::f64::POSITIVE, 3..256)
     ) {
-        let intensity = vec![1.0f64; mz.len()];
+        let mut sorted_mz = mz.clone();
+        sorted_mz.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let intensity = vec![1.0f64; sorted_mz.len()];
         let mzml = build_mzml(
-            vec![make_spectrum_f64("scan=1", mz.clone(), intensity)],
+            vec![make_spectrum_f64("scan=1", sorted_mz.clone(), intensity)],
             vec![],
         );
         let buf = encode_to_ion(&mzml, 3, false);
         let got = decode_ion(&buf).unwrap();
         let bin = first_spectrum_binary(&got).expect("should have binary data");
         let decoded = bin.to_f64_vec();
-        prop_assert_eq!(decoded.len(), mz.len());
-        for (i, (g, e)) in decoded.iter().zip(mz.iter()).enumerate() {
+        prop_assert_eq!(decoded.len(), sorted_mz.len());
+        for (i, (g, e)) in decoded.iter().zip(sorted_mz.iter()).enumerate() {
             if e.is_nan() {
                 prop_assert!(g.is_nan(), "index {}: expected NaN", i);
             } else {

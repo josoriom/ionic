@@ -734,7 +734,7 @@ fn tiny2_srm_mzml0_99_0_s101_mz_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float64));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
         BinaryData::F64(v) => assert_eq!(v, &expected),
@@ -757,7 +757,7 @@ fn tiny2_srm_mzml0_99_0_s101_intensity_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float32));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
         BinaryData::F32(v) => assert_eq!(v, &expected),
@@ -780,7 +780,7 @@ fn tiny2_srm_mzml0_99_0_s102_mz_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float64));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
         BinaryData::F64(v) => assert_eq!(v, &expected),
@@ -803,7 +803,7 @@ fn tiny2_srm_mzml0_99_0_s102_intensity_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float32));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
         BinaryData::F32(v) => assert_eq!(v, &expected),

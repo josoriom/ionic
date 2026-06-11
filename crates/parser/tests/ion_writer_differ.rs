@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 use ionic::{
     ion::{
-        DecoderConfig, Ion,
-        encoder::encode::{EncodingConfig, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+        ReadOptions, IonReader,
+        encoder::encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES},
         encoder::ion_writer::write_mzml_to_ion,
-        encoder::utilities::SectionChunkMode,
+        encoder::utilities::SectionStorage,
     },
     mzml::parse_mzml::parse_mzml,
 };
@@ -15,7 +15,7 @@ use ionic::{
 use common::canonical_diff_paths;
 
 fn decode_ion_bytes(bytes: &[u8]) -> ionic::mzml::structs::MzML {
-    let mut ion = Ion::open(bytes, DecoderConfig::default()).unwrap();
+    let mut ion = IonReader::open(bytes, ReadOptions::default()).unwrap();
     ion.to_mzml().unwrap()
 }
 
@@ -39,15 +39,14 @@ fn mzml_files() -> Vec<PathBuf> {
         .collect()
 }
 
-fn config_for_level(compression_level: u8) -> EncodingConfig {
-    EncodingConfig {
+fn config_for_level(compression_level: u8) -> WriteOptions {
+    WriteOptions {
         compression_level,
         force_f32: false,
-        uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
-        section_chunk: SectionChunkMode::Memory,
-        target_segment_bytes: 256 * 1024,
-        min_split_bytes: 1024 * 1024,
+        section_storage: SectionStorage::Memory,
+        segment_size: 256 * 1024,
     }
 }
 

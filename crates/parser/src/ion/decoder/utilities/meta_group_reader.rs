@@ -6,7 +6,7 @@ use crate::{
     decoder::decode::{Metadatum, MetadatumValue},
     decoder::utilities::{
         common::decompress_zstd_allow_aligned_padding,
-        decompression_budget::DecompressionBudget,
+        decompression_limit::DecompressionLimit,
         parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
     },
     ion::{
@@ -27,7 +27,7 @@ pub(crate) struct MetaGroupReader {
     payload_end: usize,
     compression_codec: u8,
     verify_checksums: bool,
-    budget: DecompressionBudget,
+    budget: DecompressionLimit,
     cache: GroupCache,
 }
 
@@ -68,7 +68,7 @@ impl MetaGroupReader {
         totals: MetaTotals,
         compression_codec: u8,
         verify_checksums: bool,
-        budget: DecompressionBudget,
+        budget: DecompressionLimit,
         max_cached_bytes: usize,
     ) -> IonResult<Self> {
         if item_count > 0 && group_size == 0 {
@@ -288,7 +288,7 @@ mod tests {
     use super::MetaGroupReader;
     use crate::ion::format::CODEC_NONE;
     use crate::ion::meta_groups::MetaTotals;
-    use crate::ion::{DecompressionBudget, IonResult};
+    use crate::ion::{DecompressionLimit, IonResult};
     use std::sync::Arc;
 
     fn no_totals() -> MetaTotals {
@@ -309,7 +309,7 @@ mod tests {
             no_totals(),
             CODEC_NONE,
             false,
-            DecompressionBudget::default(),
+            DecompressionLimit::default(),
             1024,
         )
         .map(|_| ())

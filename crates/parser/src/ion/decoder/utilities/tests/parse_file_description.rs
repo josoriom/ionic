@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use serde_json::Value;
 
 use crate::ion::{
-    DecompressionBudget,
+    DecompressionLimit,
     decoder::decode::Metadatum,
     utilities::{
         children_lookup::{ChildrenLookup, DefaultMetadataPolicy},
@@ -46,7 +46,7 @@ fn parse_global_metadata_from_test_file() -> Vec<Metadatum> {
         header.global_meta_string_count,
         header.compression_codec,
         header.global_meta_uncompressed_bytes,
-        DecompressionBudget::default(),
+        DecompressionLimit::default(),
     )
     .expect("parse_global_metadata failed")
 }

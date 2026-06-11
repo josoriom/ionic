@@ -26,13 +26,13 @@ impl SegmentPlan {
 pub(crate) fn get_segment_ranges(
     element_count: usize,
     element_bytes: usize,
-    target_segment_bytes: usize,
+    segment_size: usize,
 ) -> SegmentPlan {
     if element_count == 0 {
         return SegmentPlan { ranges: vec![] };
     }
 
-    let target_elements = (target_segment_bytes / element_bytes.max(1)).max(1);
+    let target_elements = (segment_size / element_bytes.max(1)).max(1);
     let segment_count = element_count.div_ceil(target_elements);
     let base = element_count / segment_count;
     let extra = element_count % segment_count;
@@ -49,12 +49,8 @@ pub(crate) fn get_segment_ranges(
     SegmentPlan { ranges }
 }
 
-pub(crate) fn allow_split(
-    x_array_bytes: usize,
-    min_split_bytes: usize,
-    plan: &SegmentPlan,
-) -> bool {
-    x_array_bytes >= min_split_bytes && plan.count() >= 2
+pub(crate) fn allow_split(array_bytes: usize, segment_size: usize, plan: &SegmentPlan) -> bool {
+    plan.count() >= 2 && array_bytes >= segment_size * 2
 }
 
 #[cfg(test)]
@@ -117,10 +113,10 @@ mod tests {
 
     #[test]
     fn every_segment_is_within_target() {
-        let target_segment_bytes = 256;
+        let segment_size = 256;
         let element_bytes = 8;
-        let target_elements = target_segment_bytes / element_bytes;
-        let plan = get_segment_ranges(1000, element_bytes, target_segment_bytes);
+        let target_elements = segment_size / element_bytes;
+        let plan = get_segment_ranges(1000, element_bytes, segment_size);
         for segment in plan.iter() {
             assert!(segment.element_count() <= target_elements);
         }
@@ -134,15 +130,12 @@ mod tests {
         let plan_multiple = SegmentPlan {
             ranges: vec![
                 SegmentRange { start: 0, end: 50 },
-                SegmentRange {
-                    start: 50,
-                    end: 100,
-                },
+                SegmentRange { start: 50, end: 100 },
             ],
         };
 
-        assert!(!allow_split(1000, 512, &plan_single));
-        assert!(!allow_split(256, 512, &plan_multiple));
-        assert!(allow_split(1000, 512, &plan_multiple));
+        assert!(!allow_split(2000, 512, &plan_single), "single segment must not split regardless of size");
+        assert!(!allow_split(512, 512, &plan_multiple), "array smaller than two full segments must not split");
+        assert!(allow_split(1024, 512, &plan_multiple), "array at least two full segments with multiple plan must split");
     }
 }

@@ -1,7 +1,5 @@
 pub mod byte_source;
-pub(crate) mod parse_header;
-#[allow(unused_imports)]
-pub(crate) use parse_header::parse_header;
+pub(crate) use crate::ion::header::{Header, parse_header};
 pub(crate) mod common;
 pub(crate) mod meta_group_reader;
 pub(crate) mod parse_metadata;
@@ -43,9 +41,9 @@ pub(crate) use parse_scan_settings_list::parse_scan_settings_list;
 pub(crate) mod parse_cv_list;
 pub(crate) use parse_cv_list::parse_cv_list;
 pub(crate) mod children_lookup;
-pub(crate) mod container_view;
+pub(crate) mod block_reader;
 pub(crate) mod cv_table;
-pub(crate) mod decompression_budget;
+pub(crate) mod decompression_limit;
 pub(crate) mod segment_bounds;
 pub(crate) mod spectrum_source;
 

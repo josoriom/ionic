@@ -16,6 +16,9 @@ pub struct ScanSummary {
     pub base_peak_mz: f64,
     pub base_peak_int: f64,
     pub total_ion_current: f64,
+    pub position_x: u32,
+    pub position_y: u32,
+    pub position_z: u32,
 }
 
 pub trait ScanSource {
@@ -141,6 +144,22 @@ pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
         }
     }
 
+    let mut position_x = 0u32;
+    let mut position_y = 0u32;
+    let mut position_z = 0u32;
+    if let Some(scan_list) = scan_list {
+        for scan in &scan_list.scans {
+            for param in &scan.cv_params {
+                match acc(param.accession.as_deref()) {
+                    acc_const::POSITION_X => position_x = parse_u32(param.value.as_deref()),
+                    acc_const::POSITION_Y => position_y = parse_u32(param.value.as_deref()),
+                    acc_const::POSITION_Z => position_z = parse_u32(param.value.as_deref()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     let selected_ion_mz = spectrum
         .precursor_list
         .as_ref()
@@ -165,6 +184,9 @@ pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
         base_peak_int,
         total_ion_current,
         selected_ion_mz,
+        position_x,
+        position_y,
+        position_z,
     }
 }
 
@@ -216,6 +238,11 @@ fn minutes_from_value(
 #[inline]
 fn parse_f64(s: Option<&str>) -> f64 {
     s.and_then(|v| v.parse().ok()).unwrap_or(f64::NAN)
+}
+
+#[inline]
+fn parse_u32(s: Option<&str>) -> u32 {
+    s.and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
 pub(crate) fn binary_pair(spectrum: &Spectrum) -> Option<(&BinaryData, &BinaryData)> {

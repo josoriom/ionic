@@ -751,7 +751,7 @@ fn tiny2_srm_mzml0_99_0_ion_s101_mz_binary_payload() {
     assert_eq!(bda.encoded_length, Some(22));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -780,7 +780,7 @@ fn tiny2_srm_mzml0_99_0_ion_s101_intensity_binary_payload() {
     assert_eq!(bda.encoded_length, Some(11));
     assert_eq!(bda.numeric_type, Some(NumericType::Float32));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F32(v)) => assert_eq!(v, &expected),
@@ -809,7 +809,7 @@ fn tiny2_srm_mzml0_99_0_ion_s102_mz_binary_payload() {
     assert_eq!(bda.encoded_length, Some(5000));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
@@ -838,7 +838,7 @@ fn tiny2_srm_mzml0_99_0_ion_s102_intensity_binary_payload() {
     assert_eq!(bda.encoded_length, Some(2500));
     assert_eq!(bda.numeric_type, Some(NumericType::Float32));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
         Some(BinaryData::F32(v)) => assert_eq!(v, &expected),

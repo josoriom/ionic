@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use ionic::ion::{DecoderConfig, Ion, OwnedIon};
+use ionic::ion::{ReadOptions, IonReader};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -21,7 +21,7 @@ fn main() {
 }
 
 fn run(path: &str, sample_count: usize) -> Result<(), String> {
-    let mut ion = Ion::open_file(Path::new(path), DecoderConfig::default())
+    let mut ion = IonReader::open_file(Path::new(path), ReadOptions::default())
         .map_err(|error| format!("cannot open {path}: {error}"))?;
 
     let total_spectra = ion.spectrum_count() as usize;
@@ -41,7 +41,7 @@ fn run(path: &str, sample_count: usize) -> Result<(), String> {
     let window_high = low_mz + span * 0.51;
 
     warm_cache(&mut ion, sample)?;
-    let full = measure(&mut ion, sample, f64::NEG_INFINITY, f64::INFINITY)?;
+    let full = measure(&mut ion, sample, 0.0, f64::MAX)?;
     let window = measure(&mut ion, sample, window_low, window_high)?;
 
     let full_avg = full.micros / sample as f64;
@@ -74,25 +74,25 @@ struct Reading {
     points: usize,
 }
 
-fn read_full(ion: &mut OwnedIon, index: usize) -> Result<Vec<f64>, String> {
-    ion.read_spectrum_mz_window(index, f64::NEG_INFINITY, f64::INFINITY)
+fn read_full(ion: &mut IonReader, index: usize) -> Result<Vec<f64>, String> {
+    ion.read_mz_range(index, 0.0, f64::MAX)
         .map(|window| window.mz)
         .map_err(|error| format!("cannot read spectrum {index}: {error}"))
 }
 
-fn warm_cache(ion: &mut OwnedIon, sample: usize) -> Result<(), String> {
+fn warm_cache(ion: &mut IonReader, sample: usize) -> Result<(), String> {
     for index in 0..sample {
         read_full(ion, index)?;
     }
     Ok(())
 }
 
-fn measure(ion: &mut OwnedIon, sample: usize, low: f64, high: f64) -> Result<Reading, String> {
+fn measure(ion: &mut IonReader, sample: usize, low: f64, high: f64) -> Result<Reading, String> {
     let start = Instant::now();
     let mut points = 0usize;
     for index in 0..sample {
         let window = ion
-            .read_spectrum_mz_window(index, low, high)
+            .read_mz_range(index, low, high)
             .map_err(|error| format!("cannot read spectrum {index}: {error}"))?;
         points += window.mz.len();
     }

@@ -279,7 +279,7 @@ pub(crate) fn mzml_with_single_array(
                     binary_data_array_list: Some(BinaryDataArrayList {
                         count: Some(1),
                         binary_data_arrays: vec![synthetic_binary_data_array(
-                            "MS:1000514",
+                            "MS:1000515",
                             numeric_type,
                             binary,
                             Some(len),

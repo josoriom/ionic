@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use crate::ion::{
-    IonError, IonResult,
-    decoder::utilities::byte_source::ByteSource,
-    encoder::utilities::container_builder::{BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride},
+    IonError, IonResult, Range,
+    decoder::utilities::byte_source::ReadBytes,
+    encoder::utilities::block_writer::{BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride},
+    format::CODEC_NONE,
     packing::PackingId,
     utilities::{
         common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
-        decompression_budget::DecompressionBudget,
+        decompression_limit::DecompressionLimit,
     },
 };
 
@@ -18,7 +19,7 @@ pub(crate) trait BlockProcessor {
         &self,
         compressed: &[u8],
         target_len: usize,
-        budget: DecompressionBudget,
+        budget: DecompressionLimit,
     ) -> IonResult<Vec<u8>>;
     fn unshuffle(&self, source: &[u8], target: &mut [u8], stride: usize);
     fn requires_unshuffle(&self, block_packing_id: PackingId) -> bool;
@@ -44,7 +45,7 @@ impl BlockProcessor for DefaultBlockProcessor {
         &self,
         compressed: &[u8],
         target_len: usize,
-        budget: DecompressionBudget,
+        budget: DecompressionLimit,
     ) -> IonResult<Vec<u8>> {
         decompress_zstd(compressed, target_len, budget)
     }
@@ -60,8 +61,8 @@ impl BlockProcessor for DefaultBlockProcessor {
     }
 }
 
-pub(crate) struct ContainerView<P: BlockProcessor> {
-    source: Arc<dyn ByteSource>,
+pub(crate) struct BlockReader<P: BlockProcessor> {
+    source: Arc<dyn ReadBytes>,
     container_offset: u64,
     container_len: u64,
     entries: Vec<BlockDirEntry>,
@@ -73,33 +74,33 @@ pub(crate) struct ContainerView<P: BlockProcessor> {
     cached_bytes: usize,
     max_cached_bytes: usize,
     stride_history: Box<[Option<Stride>]>,
-    compression_level: u8,
+    compression_codec: u8,
     block_packing_id: PackingId,
     verify_checksums: bool,
-    decompression_budget: DecompressionBudget,
+    decompression_limit: DecompressionLimit,
     processor: P,
 }
 
-impl<P: BlockProcessor> ContainerView<P> {
-    #[allow(clippy::too_many_arguments)] //TODO: Need to fix this
+impl<P: BlockProcessor> BlockReader<P> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        source: Arc<dyn ByteSource>,
+        source: Arc<dyn ReadBytes>,
         container_offset: u64,
         container_len: u64,
         block_count: u64,
         directory_crc32: u32,
-        compression_level: u8,
+        compression_codec: u8,
         block_packing_id: PackingId,
         verify_checksums: bool,
         ctx: &'static str,
         processor: P,
         max_cached_bytes: usize,
-        decompression_budget: DecompressionBudget,
+        decompression_limit: DecompressionLimit,
     ) -> IonResult<Self> {
         let block_count = validate_block_count(block_count, container_len, ctx)?;
-        let (directory_offset, directory_byte_count) =
+        let directory =
             container_directory_range(container_offset, container_len, block_count, ctx)?;
-        let directory_bytes = source.read(directory_offset, directory_byte_count)?;
+        let directory_bytes = source.read(directory)?;
 
         if verify_checksums {
             verify_directory_crc(&directory_bytes, directory_crc32, ctx)?;
@@ -123,32 +124,20 @@ impl<P: BlockProcessor> ContainerView<P> {
             cached_bytes: 0,
             max_cached_bytes,
             stride_history: vec![None; block_count].into_boxed_slice(),
-            compression_level,
+            compression_codec,
             block_packing_id,
             verify_checksums,
-            decompression_budget,
+            decompression_limit,
             processor,
         })
     }
 
-    pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<(u64, u64)> {
+    pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<Range> {
         let entry = self.entries.get(block_id as usize)?;
-        Some((
-            self.container_offset + entry.payload_offset,
-            entry.payload_size,
-        ))
-    }
-
-    pub(crate) fn all_block_ranges(&self) -> Vec<(u64, u64)> {
-        self.entries
-            .iter()
-            .map(|entry| {
-                (
-                    self.container_offset + entry.payload_offset,
-                    entry.payload_size,
-                )
-            })
-            .collect()
+        Some(Range {
+            offset: self.container_offset + entry.payload_offset,
+            length: entry.payload_size,
+        })
     }
 
     fn get_block_payload(
@@ -173,10 +162,10 @@ impl<P: BlockProcessor> ContainerView<P> {
             );
         }
 
-        let payload = self.source.read(
-            self.container_offset + entry.payload_offset,
-            entry.payload_size,
-        )?;
+        let payload = self.source.read(Range {
+            offset: self.container_offset + entry.payload_offset,
+            length: entry.payload_size,
+        })?;
 
         if self.verify_checksums {
             let computed = crc32fast::hash(&payload);
@@ -199,13 +188,13 @@ impl<P: BlockProcessor> ContainerView<P> {
         uncompressed_len: usize,
         stride: Stride,
     ) -> IonResult<Vec<u8>> {
-        self.decompression_budget
+        self.decompression_limit
             .validate(payload.len(), uncompressed_len)?;
 
         let needs_unshuffle =
             self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
-        let mut data = if self.compression_level == 0 {
+        let mut data = if self.compression_codec == CODEC_NONE {
             if payload.len() != uncompressed_len {
                 return Err(format!(
                     "uncompressed payload size mismatch: got {}, expected {uncompressed_len}",
@@ -216,7 +205,7 @@ impl<P: BlockProcessor> ContainerView<P> {
             payload
         } else {
             self.processor
-                .decompress(&payload, uncompressed_len, self.decompression_budget)?
+                .decompress(&payload, uncompressed_len, self.decompression_limit)?
         };
 
         if needs_unshuffle {
@@ -363,7 +352,7 @@ impl<P: BlockProcessor> ContainerView<P> {
     }
 }
 
-impl<P: BlockProcessor> ContainerAccess for ContainerView<P> {
+impl<P: BlockProcessor> ContainerAccess for BlockReader<P> {
     #[inline]
     fn get_array_bytes_from_block(
         &mut self,
@@ -415,13 +404,13 @@ pub(crate) fn container_directory_range(
     container_len: u64,
     block_count: usize,
     ctx: &'static str,
-) -> IonResult<(u64, u64)> {
+) -> IonResult<Range> {
     let directory_byte_count = (block_count as u64) * (BLOCK_DIRECTORY_ENTRY_SIZE as u64);
     let directory_offset = container_offset
         .checked_add(container_len)
         .and_then(|end| end.checked_sub(directory_byte_count))
         .ok_or_else(|| IonError::from(format!("{ctx}: directory offset overflows")))?;
-    Ok((directory_offset, directory_byte_count))
+    Ok(Range { offset: directory_offset, length: directory_byte_count })
 }
 
 #[inline]

@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use ionic::{
     ion::{
         encoder::encode::{
-            DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES, EncodingConfig,
+            DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
             TARGET_BLOCK_UNCOMPRESSED_BYTES,
         },
         encoder::ion_writer::write_mzml_to_ion,
-        encoder::utilities::SectionChunkMode,
+        encoder::utilities::SectionStorage,
     },
     mzml::parse_mzml::parse_mzml,
 };
@@ -32,15 +32,14 @@ fn mzml_files() -> Vec<PathBuf> {
         .collect()
 }
 
-fn config(mode: SectionChunkMode, compression_level: u8) -> EncodingConfig {
-    EncodingConfig {
+fn config(mode: SectionStorage, compression_level: u8) -> WriteOptions {
+    WriteOptions {
         compression_level,
         force_f32: false,
-        uncompressed_block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
-        section_chunk: mode,
-        target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
-        min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
+        section_storage: mode,
+        segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
     }
 }
 
@@ -62,9 +61,9 @@ fn disk_chuncks_matches_memory_bytes() {
 
         for level in [0u8, 3] {
             let mut memory = Vec::new();
-            write_mzml_to_ion(&mzml, config(SectionChunkMode::Memory, level), &mut memory).unwrap();
+            write_mzml_to_ion(&mzml, config(SectionStorage::Memory, level), &mut memory).unwrap();
             let mut disk = Vec::new();
-            write_mzml_to_ion(&mzml, config(SectionChunkMode::Disk, level), &mut disk).unwrap();
+            write_mzml_to_ion(&mzml, config(SectionStorage::Disk, level), &mut disk).unwrap();
 
             assert_eq!(
                 memory, disk,
