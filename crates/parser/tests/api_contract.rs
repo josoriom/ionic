@@ -356,20 +356,20 @@ const GOLDEN_ENCODES: &[GoldenEncode] = &[
     GoldenEncode {
         name: "tiny_pwiz_10",
         path: "crates/parser/data/mzml/tiny.pwiz.1.0.mzML",
-        encoded_len: 13504,
-        encoded_fnv: 0x8b48_1496_c9ab_14fb,
+        encoded_len: 13568,
+        encoded_fnv: 0x2946_c6de_a7c6_13c9,
     },
     GoldenEncode {
         name: "tiny_pwiz_11",
         path: "crates/parser/data/mzml/tiny.pwiz.1.1.mzML",
-        encoded_len: 14456,
-        encoded_fnv: 0x4a47_7c66_89b0_4ef4,
+        encoded_len: 14520,
+        encoded_fnv: 0x35a8_647b_5b3c_8c89,
     },
     GoldenEncode {
         name: "anpc_test",
         path: "crates/parser/data/mzml/test.mzML",
-        encoded_len: 9176,
-        encoded_fnv: 0x805d_f937_fd4f_6d3e,
+        encoded_len: 9208,
+        encoded_fnv: 0x70d5_a9ab_801e_32f3,
     },
 ];
 

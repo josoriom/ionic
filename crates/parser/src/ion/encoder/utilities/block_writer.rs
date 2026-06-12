@@ -3,6 +3,8 @@ use rayon::prelude::*;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
+use std::collections::HashMap;
+
 use crate::encoder::utilities::sink::WriteBytes;
 use crate::ion::byte_transpose::shuffle_with_tail;
 use crate::ion::packing::PackingId;
@@ -34,25 +36,6 @@ impl Stride {
     #[inline]
     pub(crate) fn as_usize(self) -> usize {
         self as usize
-    }
-
-    #[inline]
-    fn as_slot_index(self) -> usize {
-        match self {
-            Self::OneByte => 0,
-            Self::TwoBytes => 1,
-            Self::FourBytes => 2,
-            Self::EightBytes => 3,
-        }
-    }
-
-    fn all_variants() -> [Stride; 4] {
-        [
-            Self::OneByte,
-            Self::TwoBytes,
-            Self::FourBytes,
-            Self::EightBytes,
-        ]
     }
 }
 
@@ -191,44 +174,78 @@ impl BlockDirectory {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BlockGroup {
+    array_type: u32,
+    element_size: usize,
+}
+
+impl BlockGroup {
+    fn new(array_type: u32, element_size: usize) -> Self {
+        Self {
+            array_type,
+            element_size: element_size.max(1),
+        }
+    }
+
+    fn stride(self) -> Stride {
+        Stride::from_size(self.element_size)
+    }
+}
+
 struct ActiveBlock {
     block_id: u32,
+    stride: Stride,
     accumulated_data: Vec<u8>,
     compress_sequentially: bool,
 }
 
-struct StrideSlots([Option<ActiveBlock>; 4]);
+struct OpenBlocks {
+    by_group: HashMap<BlockGroup, ActiveBlock>,
+}
 
-impl StrideSlots {
+impl OpenBlocks {
     fn new() -> Self {
-        Self([None, None, None, None])
+        Self {
+            by_group: HashMap::new(),
+        }
     }
 
-    fn get_mut(&mut self, stride: Stride) -> Option<&mut ActiveBlock> {
-        self.0[stride.as_slot_index()].as_mut()
+    fn get_mut(&mut self, group: BlockGroup) -> Option<&mut ActiveBlock> {
+        self.by_group.get_mut(&group)
     }
 
-    fn insert(&mut self, stride: Stride, block: ActiveBlock) {
-        self.0[stride.as_slot_index()] = Some(block);
+    fn insert(&mut self, group: BlockGroup, block: ActiveBlock) {
+        self.by_group.insert(group, block);
     }
 
-    fn take(&mut self, stride: Stride) -> Option<ActiveBlock> {
-        self.0[stride.as_slot_index()].take()
+    fn take(&mut self, group: BlockGroup) -> Option<ActiveBlock> {
+        self.by_group.remove(&group)
     }
 
-    fn is_open(&self, stride: Stride) -> bool {
-        self.0[stride.as_slot_index()].is_some()
+    fn is_open(&self, group: BlockGroup) -> bool {
+        self.by_group.contains_key(&group)
     }
 
-    fn byte_len(&self, stride: Stride) -> usize {
-        self.0[stride.as_slot_index()]
-            .as_ref()
+    fn byte_len(&self, group: BlockGroup) -> usize {
+        self.by_group
+            .get(&group)
             .map_or(0, |block| block.accumulated_data.len())
+    }
+
+    fn open_groups_in_id_order(&self) -> Vec<BlockGroup> {
+        let mut groups: Vec<(u32, BlockGroup)> = self
+            .by_group
+            .iter()
+            .map(|(group, block)| (block.block_id, *group))
+            .collect();
+        groups.sort_by_key(|(block_id, _)| *block_id);
+        groups.into_iter().map(|(_, group)| group).collect()
     }
 }
 
 struct BlockStore {
-    slots: StrideSlots,
+    open_blocks: OpenBlocks,
     directory: BlockDirectory,
     max_block_size: usize,
 }
@@ -236,26 +253,27 @@ struct BlockStore {
 impl BlockStore {
     fn new(max_block_size: usize) -> Self {
         Self {
-            slots: StrideSlots::new(),
+            open_blocks: OpenBlocks::new(),
             directory: BlockDirectory::new(),
             max_block_size,
         }
     }
 
-    fn would_overflow(&self, stride: Stride, additional_bytes: usize) -> bool {
-        let current = self.slots.byte_len(stride);
-        self.slots.is_open(stride)
+    fn would_overflow(&self, group: BlockGroup, additional_bytes: usize) -> bool {
+        let current = self.open_blocks.byte_len(group);
+        self.open_blocks.is_open(group)
             && current > 0
             && current + additional_bytes > self.max_block_size
     }
 
-    fn ensure_open_block(&mut self, stride: Stride, capacity_hint: usize) -> IonResult<()> {
-        if !self.slots.is_open(stride) {
+    fn ensure_open_block(&mut self, group: BlockGroup, capacity_hint: usize) -> IonResult<()> {
+        if !self.open_blocks.is_open(group) {
             let block_id = self.directory.reserve_next_block_id()?;
-            self.slots.insert(
-                stride,
+            self.open_blocks.insert(
+                group,
                 ActiveBlock {
                     block_id,
+                    stride: group.stride(),
                     accumulated_data: Vec::with_capacity(capacity_hint),
                     compress_sequentially: false,
                 },
@@ -266,7 +284,7 @@ impl BlockStore {
 
     fn append_to_block<W>(
         &mut self,
-        stride: Stride,
+        group: BlockGroup,
         item_byte_size: usize,
         write_action: W,
     ) -> IonResult<(u32, u64)>
@@ -274,12 +292,12 @@ impl BlockStore {
         W: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
         let active = self
-            .slots
-            .get_mut(stride)
-            .expect("append_to_block: no open block for stride");
+            .open_blocks
+            .get_mut(group)
+            .expect("append_to_block: no open block for group");
 
         let block_id = active.block_id;
-        let element_offset = (active.accumulated_data.len() / stride.as_usize()) as u64;
+        let element_offset = (active.accumulated_data.len() / active.stride.as_usize()) as u64;
         active.accumulated_data.reserve(item_byte_size);
         write_action(&mut active.accumulated_data)?;
         Ok((block_id, element_offset))
@@ -287,15 +305,16 @@ impl BlockStore {
 
     fn open_isolated_block(
         &mut self,
-        stride: Stride,
+        group: BlockGroup,
         capacity: usize,
         compress_sequentially: bool,
     ) -> IonResult<u32> {
         let block_id = self.directory.reserve_next_block_id()?;
-        self.slots.insert(
-            stride,
+        self.open_blocks.insert(
+            group,
             ActiveBlock {
                 block_id,
+                stride: group.stride(),
                 accumulated_data: Vec::with_capacity(capacity),
                 compress_sequentially,
             },
@@ -303,8 +322,8 @@ impl BlockStore {
         Ok(block_id)
     }
 
-    fn take_open_block(&mut self, stride: Stride) -> Option<ActiveBlock> {
-        self.slots.take(stride)
+    fn take_open_block(&mut self, group: BlockGroup) -> Option<ActiveBlock> {
+        self.open_blocks.take(group)
     }
 
     fn seal(&mut self, block_id: u32, entry: BlockDirEntry) -> IonResult<()> {
@@ -412,6 +431,7 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
 
     pub(crate) fn add_item_to_box<WriteAction>(
         &mut self,
+        array_type: u32,
         item_byte_size: usize,
         element_size: usize,
         write_action: WriteAction,
@@ -419,16 +439,17 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
     where
         WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
-        let stride = Stride::from_size(element_size.max(1));
+        let group = BlockGroup::new(array_type, element_size);
         if item_byte_size > self.store.max_block_size {
-            self.add_isolated_block(item_byte_size, stride, true, write_action)
+            self.add_isolated_block(group, item_byte_size, true, write_action)
         } else {
-            self.add_normal_item(item_byte_size, stride, write_action)
+            self.add_normal_item(group, item_byte_size, write_action)
         }
     }
 
     pub(crate) fn add_array_as_block<WriteAction>(
         &mut self,
+        array_type: u32,
         item_byte_size: usize,
         element_size: usize,
         write_action: WriteAction,
@@ -436,62 +457,62 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
     where
         WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
-        let stride = Stride::from_size(element_size.max(1));
-        self.add_isolated_block(item_byte_size, stride, false, write_action)
+        let group = BlockGroup::new(array_type, element_size);
+        self.add_isolated_block(group, item_byte_size, false, write_action)
     }
 
     fn add_isolated_block<WriteAction>(
         &mut self,
+        group: BlockGroup,
         item_byte_size: usize,
-        stride: Stride,
         compress_sequentially: bool,
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
         WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
-        self.seal_open_block_for_stride(stride)?;
+        self.seal_open_block_for_group(group)?;
 
         let block_id =
             self.store
-                .open_isolated_block(stride, item_byte_size, compress_sequentially)?;
+                .open_isolated_block(group, item_byte_size, compress_sequentially)?;
 
         write_action(
             &mut self
                 .store
-                .slots
-                .get_mut(stride)
+                .open_blocks
+                .get_mut(group)
                 .expect("isolated block was just inserted")
                 .accumulated_data,
         )?;
 
-        self.seal_open_block_for_stride(stride)?;
+        self.seal_open_block_for_group(group)?;
         Ok((block_id, 0))
     }
 
     fn add_normal_item<WriteAction>(
         &mut self,
+        group: BlockGroup,
         item_byte_size: usize,
-        stride: Stride,
         write_action: WriteAction,
     ) -> IonResult<(u32, u64)>
     where
         WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
-        if self.store.would_overflow(stride, item_byte_size) {
-            self.seal_open_block_for_stride(stride)?;
+        if self.store.would_overflow(group, item_byte_size) {
+            self.seal_open_block_for_group(group)?;
         }
 
-        self.store.ensure_open_block(stride, item_byte_size)?;
+        self.store.ensure_open_block(group, item_byte_size)?;
         let (block_id, element_offset) =
             self.store
-                .append_to_block(stride, item_byte_size, write_action)?;
+                .append_to_block(group, item_byte_size, write_action)?;
 
         Ok((block_id, element_offset))
     }
 
-    fn seal_open_block_for_stride(&mut self, stride: Stride) -> IonResult<()> {
-        let Some(active_block) = self.store.take_open_block(stride) else {
+    fn seal_open_block_for_group(&mut self, group: BlockGroup) -> IonResult<()> {
+        let Some(active_block) = self.store.take_open_block(group) else {
             return Ok(());
         };
         if active_block.accumulated_data.is_empty() {
@@ -500,7 +521,7 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
         let data_len = active_block.accumulated_data.len();
         self.pending.push(PendingBlock {
             block_id: active_block.block_id,
-            stride,
+            stride: active_block.stride,
             data: active_block.accumulated_data,
             compress_sequentially: active_block.compress_sequentially,
         });
@@ -646,8 +667,8 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
     }
 
     pub(crate) fn finish(mut self) -> IonResult<ContainerSummary> {
-        for stride in Stride::all_variants() {
-            self.seal_open_block_for_stride(stride)?;
+        for group in self.store.open_blocks.open_groups_in_id_order() {
+            self.seal_open_block_for_group(group)?;
         }
         self.flush_pending()?;
 
@@ -672,18 +693,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stride_slot_indices_are_unique() {
-        let all_indices: Vec<usize> = Stride::all_variants()
-            .iter()
-            .map(|stride| stride.as_slot_index())
-            .collect();
-        let mut seen_indices = std::collections::HashSet::new();
-        for slot_index in all_indices {
-            assert!(
-                seen_indices.insert(slot_index),
-                "duplicate slot index {slot_index}"
-            );
-        }
+    fn block_group_keeps_array_type_and_element_size() {
+        let mz = BlockGroup::new(1000514, 8);
+        let intensity = BlockGroup::new(1000515, 4);
+        assert_ne!(mz, intensity);
+        assert_eq!(mz.stride(), Stride::EightBytes);
+        assert_eq!(intensity.stride(), Stride::FourBytes);
     }
 
     #[test]
@@ -750,94 +765,104 @@ mod tests {
     }
 
     #[test]
-    fn stride_slots_insert_take_roundtrip() {
-        let mut slots = StrideSlots::new();
-        assert!(!slots.is_open(Stride::FourBytes));
-        slots.insert(
-            Stride::FourBytes,
+    fn open_blocks_insert_take_roundtrip() {
+        let group = BlockGroup::new(1000514, 4);
+        let other = BlockGroup::new(1000515, 4);
+        let mut open = OpenBlocks::new();
+        assert!(!open.is_open(group));
+        open.insert(
+            group,
             ActiveBlock {
                 block_id: 7,
+                stride: group.stride(),
                 accumulated_data: vec![1, 2, 3, 4],
                 compress_sequentially: false,
             },
         );
-        assert!(slots.is_open(Stride::FourBytes));
-        assert!(!slots.is_open(Stride::TwoBytes));
-        let taken_block = slots.take(Stride::FourBytes).unwrap();
+        assert!(open.is_open(group));
+        assert!(!open.is_open(other));
+        let taken_block = open.take(group).unwrap();
         assert_eq!(taken_block.block_id, 7);
-        assert!(!slots.is_open(Stride::FourBytes));
+        assert!(!open.is_open(group));
     }
 
     #[test]
-    fn stride_slots_open_block_byte_len() {
-        let mut slots = StrideSlots::new();
-        assert_eq!(slots.byte_len(Stride::FourBytes), 0);
-        slots.insert(
-            Stride::FourBytes,
+    fn open_blocks_byte_len() {
+        let group = BlockGroup::new(1000514, 4);
+        let mut open = OpenBlocks::new();
+        assert_eq!(open.byte_len(group), 0);
+        open.insert(
+            group,
             ActiveBlock {
                 block_id: 0,
+                stride: group.stride(),
                 accumulated_data: vec![0u8; 12],
                 compress_sequentially: false,
             },
         );
-        assert_eq!(slots.byte_len(Stride::FourBytes), 12);
+        assert_eq!(open.byte_len(group), 12);
     }
 
     #[test]
     fn block_store_ensure_open_block_creates_new() {
+        let group = BlockGroup::new(1000514, 4);
         let mut store = BlockStore::new(1024);
         assert_eq!(store.block_count(), 0);
-        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
+        store.ensure_open_block(group, 16).unwrap();
         assert_eq!(store.block_count(), 1);
-        assert!(store.slots.is_open(Stride::FourBytes));
+        assert!(store.open_blocks.is_open(group));
     }
 
     #[test]
     fn block_store_ensure_open_block_is_idempotent() {
+        let group = BlockGroup::new(1000514, 4);
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
-        store.ensure_open_block(Stride::FourBytes, 16).unwrap();
+        store.ensure_open_block(group, 16).unwrap();
+        store.ensure_open_block(group, 16).unwrap();
         assert_eq!(store.block_count(), 1);
     }
 
     #[test]
     fn block_store_would_overflow_empty_block_returns_false() {
+        let group = BlockGroup::new(1000514, 4);
         let store = BlockStore::new(16);
-        assert!(!store.would_overflow(Stride::FourBytes, 20));
+        assert!(!store.would_overflow(group, 20));
     }
 
     #[test]
     fn block_store_would_overflow_detects_threshold() {
+        let group = BlockGroup::new(1000514, 4);
         let mut store = BlockStore::new(16);
-        store.ensure_open_block(Stride::FourBytes, 12).unwrap();
+        store.ensure_open_block(group, 12).unwrap();
         store
-            .append_to_block(Stride::FourBytes, 12, |buf| {
+            .append_to_block(group, 12, |buf| {
                 buf.extend_from_slice(&[0u8; 12]);
                 Ok(())
             })
             .unwrap();
-        assert!(store.would_overflow(Stride::FourBytes, 8));
-        assert!(!store.would_overflow(Stride::FourBytes, 4));
+        assert!(store.would_overflow(group, 8));
+        assert!(!store.would_overflow(group, 4));
     }
 
     #[test]
     fn block_store_append_returns_correct_element_offsets() {
+        let group = BlockGroup::new(1000514, 8);
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::EightBytes, 24).unwrap();
+        store.ensure_open_block(group, 24).unwrap();
         let (_, off0) = store
-            .append_to_block(Stride::EightBytes, 8, |b| {
+            .append_to_block(group, 8, |b| {
                 b.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
             .unwrap();
         let (_, off1) = store
-            .append_to_block(Stride::EightBytes, 8, |b| {
+            .append_to_block(group, 8, |b| {
                 b.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
             .unwrap();
         let (_, off2) = store
-            .append_to_block(Stride::EightBytes, 8, |b| {
+            .append_to_block(group, 8, |b| {
                 b.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
@@ -848,16 +873,15 @@ mod tests {
     }
 
     #[test]
-    fn block_store_open_isolated_block_replaces_slot() {
+    fn block_store_open_isolated_block_replaces_open_block() {
+        let group = BlockGroup::new(1000514, 4);
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::FourBytes, 8).unwrap();
-        let first_id = store.slots.get_mut(Stride::FourBytes).unwrap().block_id;
-        let isolated_id = store
-            .open_isolated_block(Stride::FourBytes, 256, true)
-            .unwrap();
+        store.ensure_open_block(group, 8).unwrap();
+        let first_id = store.open_blocks.get_mut(group).unwrap().block_id;
+        let isolated_id = store.open_isolated_block(group, 256, true).unwrap();
         assert_ne!(first_id, isolated_id);
         assert_eq!(
-            store.slots.get_mut(Stride::FourBytes).unwrap().block_id,
+            store.open_blocks.get_mut(group).unwrap().block_id,
             isolated_id
         );
     }
@@ -883,14 +907,17 @@ mod tests {
     }
 
     #[test]
-    fn block_store_different_strides_independent() {
+    fn block_store_different_groups_independent() {
+        let mz = BlockGroup::new(1000514, 8);
+        let intensity = BlockGroup::new(1000515, 4);
+        let absent = BlockGroup::new(1000516, 2);
         let mut store = BlockStore::new(1024);
-        store.ensure_open_block(Stride::TwoBytes, 8).unwrap();
-        store.ensure_open_block(Stride::EightBytes, 8).unwrap();
+        store.ensure_open_block(mz, 8).unwrap();
+        store.ensure_open_block(intensity, 8).unwrap();
         assert_eq!(store.block_count(), 2);
-        assert!(store.slots.is_open(Stride::TwoBytes));
-        assert!(store.slots.is_open(Stride::EightBytes));
-        assert!(!store.slots.is_open(Stride::FourBytes));
+        assert!(store.open_blocks.is_open(mz));
+        assert!(store.open_blocks.is_open(intensity));
+        assert!(!store.open_blocks.is_open(absent));
     }
 
     struct VecOutput(Vec<u8>);
@@ -937,7 +964,7 @@ mod tests {
         );
         let item_data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
         let (block_id, element_offset) = builder
-            .add_item_to_box(item_data.len(), 8, |buf| {
+            .add_item_to_box(1, item_data.len(), 8, |buf| {
                 buf.extend_from_slice(&item_data);
                 Ok(())
             })
@@ -964,7 +991,7 @@ mod tests {
             PackingId::Raw,
         );
         builder
-            .add_array_as_block(8, 8, |buf| {
+            .add_array_as_block(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[1u8; 8]);
                 Ok(())
             })
@@ -977,6 +1004,36 @@ mod tests {
     }
 
     #[test]
+    fn same_stride_different_array_types_get_different_blocks() {
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            64 * 1024 * 1024,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        let mz_array_type = 1000514;
+        let intensity_array_type = 1000515;
+        let (mz_block, _) = builder
+            .add_item_to_box(mz_array_type, 8, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        let (intensity_block, _) = builder
+            .add_item_to_box(intensity_array_type, 8, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        assert_ne!(
+            mz_block, intensity_block,
+            "different array types must never share a block"
+        );
+        assert_eq!(builder.finish().unwrap().block_count, 2);
+    }
+
+    #[test]
     fn oversized_item_uses_sequential_path() {
         let mut output = VecOutput(Vec::new());
         let mut builder = BlockWriter::new(
@@ -986,7 +1043,7 @@ mod tests {
             PackingId::Raw,
         );
         builder
-            .add_item_to_box(64, 8, |buf| {
+            .add_item_to_box(1, 64, 8, |buf| {
                 buf.extend_from_slice(&[2u8; 64]);
                 Ok(())
             })
@@ -1008,19 +1065,19 @@ mod tests {
             PackingId::Raw,
         );
         let (_, first_offset) = builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
             .unwrap();
         let (_, second_offset) = builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
             .unwrap();
         let (_, third_offset) = builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
@@ -1040,13 +1097,13 @@ mod tests {
             PackingId::Raw,
         );
         let (four_byte_block_id, _) = builder
-            .add_item_to_box(4, 4, |buf| {
+            .add_item_to_box(1, 4, 4, |buf| {
                 buf.extend_from_slice(&[0u8; 4]);
                 Ok(())
             })
             .unwrap();
         let (eight_byte_block_id, _) = builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0u8; 8]);
                 Ok(())
             })
@@ -1065,13 +1122,13 @@ mod tests {
             PackingId::Raw,
         );
         let (first_block_id, _) = builder
-            .add_item_to_box(12, 4, |buf| {
+            .add_item_to_box(1, 12, 4, |buf| {
                 buf.extend_from_slice(&[0u8; 12]);
                 Ok(())
             })
             .unwrap();
         let (second_block_id, _) = builder
-            .add_item_to_box(12, 4, |buf| {
+            .add_item_to_box(1, 12, 4, |buf| {
                 buf.extend_from_slice(&[0u8; 12]);
                 Ok(())
             })
@@ -1094,7 +1151,7 @@ mod tests {
             PackingId::Raw,
         );
         builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0xAAu8; 8]);
                 Ok(())
             })
@@ -1173,7 +1230,7 @@ mod tests {
             PackingId::Raw,
         );
         let (block_id, element_offset) = builder
-            .add_item_to_box(64, 8, |buf| {
+            .add_item_to_box(1, 64, 8, |buf| {
                 buf.extend_from_slice(&[0xABu8; 64]);
                 Ok(())
             })
@@ -1196,19 +1253,19 @@ mod tests {
             PackingId::Raw,
         );
         let (bid_before, _) = builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0x01u8; 8]);
                 Ok(())
             })
             .unwrap();
         let (bid_oversized, off_oversized) = builder
-            .add_item_to_box(64, 8, |buf| {
+            .add_item_to_box(1, 64, 8, |buf| {
                 buf.extend_from_slice(&[0x02u8; 64]);
                 Ok(())
             })
             .unwrap();
         let (bid_after, _) = builder
-            .add_item_to_box(8, 8, |buf| {
+            .add_item_to_box(1, 8, 8, |buf| {
                 buf.extend_from_slice(&[0x03u8; 8]);
                 Ok(())
             })
@@ -1231,13 +1288,13 @@ mod tests {
             PackingId::Raw,
         );
         let (bid_a, off_a) = builder
-            .add_item_to_box(64, 8, |buf| {
+            .add_item_to_box(1, 64, 8, |buf| {
                 buf.extend_from_slice(&[0x11u8; 64]);
                 Ok(())
             })
             .unwrap();
         let (bid_b, off_b) = builder
-            .add_item_to_box(64, 8, |buf| {
+            .add_item_to_box(1, 64, 8, |buf| {
                 buf.extend_from_slice(&[0x22u8; 64]);
                 Ok(())
             })
@@ -1261,7 +1318,7 @@ mod tests {
             PackingId::Raw,
         );
         builder
-            .add_item_to_box(item_size, 8, |buf| {
+            .add_item_to_box(1, item_size, 8, |buf| {
                 buf.extend_from_slice(&[0xFFu8; 128]);
                 Ok(())
             })
@@ -1299,25 +1356,25 @@ mod tests {
 
         for builder in [&mut seq, &mut par] {
             builder
-                .add_item_to_box(8, 4, |buf| {
+                .add_item_to_box(1, 8, 4, |buf| {
                     buf.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
                     Ok(())
                 })
                 .unwrap();
             builder
-                .add_item_to_box(8, 4, |buf| {
+                .add_item_to_box(1, 8, 4, |buf| {
                     buf.extend_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
                     Ok(())
                 })
                 .unwrap();
             builder
-                .add_item_to_box(8, 4, |buf| {
+                .add_item_to_box(1, 8, 4, |buf| {
                     buf.extend_from_slice(&[17, 18, 19, 20, 21, 22, 23, 24]);
                     Ok(())
                 })
                 .unwrap();
             builder
-                .add_item_to_box(8, 4, |buf| {
+                .add_item_to_box(1, 8, 4, |buf| {
                     buf.extend_from_slice(&[25, 26, 27, 28, 29, 30, 31, 32]);
                     Ok(())
                 })
@@ -1345,7 +1402,7 @@ mod tests {
 
         for i in 0..item_count {
             builder
-                .add_item_to_box(8, 8, |buf| {
+                .add_item_to_box(1, 8, 8, |buf| {
                     buf.extend_from_slice(&[i as u8; 8]);
                     Ok(())
                 })

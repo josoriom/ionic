@@ -450,6 +450,7 @@ pub(crate) struct EncodedArrayRef {
 }
 
 fn encode_variable_length_array(
+    array_type: u32,
     data: ArrayData<'_>,
     dtype: u8,
     dtype_enum: Dtype,
@@ -464,7 +465,7 @@ fn encode_variable_length_array(
     }
     let enc_len =
         u32::try_from(encoded.len()).map_err(|_| IonError::from("encoded array exceeds 4 GiB"))?;
-    let (bid, eoff) = container.add_item_to_box(encoded.len(), 1, |buf| {
+    let (bid, eoff) = container.add_item_to_box(array_type, encoded.len(), 1, |buf| {
         buf.extend_from_slice(&encoded);
         Ok(())
     })?;
@@ -494,6 +495,7 @@ fn write_fixed_array_payload(
 }
 
 fn encode_fixed_length_array(
+    array_type: u32,
     data: ArrayData<'_>,
     dtype: u8,
     dtype_enum: Dtype,
@@ -501,10 +503,12 @@ fn encode_fixed_length_array(
     packing: &'static dyn Packing,
     container: &mut BlockWriter<'_, DefaultCompressor>,
 ) -> IonResult<(u32, u64, u32)> {
-    let (bid, eoff) =
-        container.add_item_to_box(data.element_count() * elem_bytes, elem_bytes, |buf| {
-            write_fixed_array_payload(buf, data, dtype, dtype_enum, packing)
-        })?;
+    let (bid, eoff) = container.add_item_to_box(
+        array_type,
+        data.element_count() * elem_bytes,
+        elem_bytes,
+        |buf| write_fixed_array_payload(buf, data, dtype, dtype_enum, packing),
+    )?;
     Ok((bid, eoff, 0u32))
 }
 
@@ -571,9 +575,9 @@ pub(crate) fn encode_single_array(
         packing,
     } = encoding;
     let (block_id, element_offset, encoded_len) = if packing.is_variable_length() {
-        encode_variable_length_array(data, dtype, dtype_enum, packing, container)?
+        encode_variable_length_array(accession, data, dtype, dtype_enum, packing, container)?
     } else {
-        encode_fixed_length_array(data, dtype, dtype_enum, elem_bytes, packing, container)?
+        encode_fixed_length_array(accession, data, dtype, dtype_enum, elem_bytes, packing, container)?
     };
     Ok(Some(EncodedArrayRef {
         element_offset,
@@ -629,6 +633,7 @@ pub(crate) fn write_array_segments(
         let segment = data.slice(range.start, range.end);
         let segment_element_count = range.element_count();
         let (block_id, _) = container.add_array_as_block(
+            accession,
             segment_element_count * elem_bytes,
             elem_bytes,
             |buf| write_fixed_array_payload(buf, segment, dtype, dtype_enum, packing),
