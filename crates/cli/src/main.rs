@@ -582,6 +582,8 @@ fn run_update(
     filter: Option<&dyn Fn(&str) -> bool>,
     config: WriteOptions,
     dry_run: bool,
+    pool: &rayon::ThreadPool,
+    across_files: bool,
 ) -> Result<(), String> {
     const MB: f64 = 1024.0 * 1024.0;
 
@@ -593,28 +595,48 @@ fn run_update(
         ));
     }
 
-    let mut ok = 0u32;
-    let mut failed = 0u32;
-    for file in &files {
+    let total = files.len();
+    let ok = AtomicU32::new(0);
+    let failed = AtomicU32::new(0);
+    let done = AtomicUsize::new(0);
+    let print_lock = Mutex::new(());
+
+    let update_file = |file: &PathBuf| {
         let name = basename(file);
         match update_one(file, output_root, config, dry_run) {
             Ok((old_len, new_len)) => {
-                ok += 1;
+                ok.fetch_add(1, Ordering::Relaxed);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                 let tag = if dry_run { "[dry-run]" } else { "[ok]" };
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
                 println!(
-                    "{tag} {name}  {:.2} MB -> {:.2} MB",
+                    "{tag} [{n}/{total}] {name}  {:.2} MB -> {:.2} MB",
                     old_len as f64 / MB,
                     new_len as f64 / MB
                 );
+                let _ = stdout().flush();
             }
             Err(e) => {
-                failed += 1;
-                eprintln!("[error] {name}: {e}");
+                failed.fetch_add(1, Ordering::Relaxed);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+                eprintln!("[error] [{n}/{total}] {name}: {e}");
+                let _ = stderr().flush();
             }
         }
-    }
+    };
 
-    println!("updated={ok} failed={failed} dry_run={dry_run}");
+    pool.install(|| {
+        if across_files {
+            files.par_iter().for_each(update_file);
+        } else {
+            files.iter().for_each(update_file);
+        }
+    });
+
+    let ok = ok.load(Ordering::Relaxed);
+    let failed = failed.load(Ordering::Relaxed);
+    println!("updated={ok} failed={failed} total={total} dry_run={dry_run}");
     if failed > 0 {
         return Err(format!("{failed} file(s) failed to update"));
     }
@@ -642,23 +664,6 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     const MB: f64 = 1024.0 * 1024.0;
 
     let block_size = size_to_bytes(cmd.block_size_mb, MB, "--block-size")?;
-    if cmd.update {
-        let windowed = WriteOptions {
-            compression_level: cmd.compression_level,
-            force_f32: false,
-            block_size,
-            parallel: false,
-            section_storage: cmd.section_storage.storage(),
-            mz_window: cmd.mz_window,
-        };
-        return run_update(
-            &input_root,
-            &output_root,
-            filter.as_deref(),
-            windowed,
-            cmd.dry_run,
-        );
-    }
 
     let cores = match cmd.cores {
         0 => std::thread::available_parallelism()
@@ -676,6 +681,26 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     } else {
         Encoding::Parallel
     };
+
+    if cmd.update {
+        let windowed = WriteOptions {
+            compression_level: cmd.compression_level,
+            force_f32: false,
+            block_size,
+            parallel: matches!(encoding, Encoding::Parallel),
+            section_storage: cmd.section_storage.storage(),
+            mz_window: cmd.mz_window,
+        };
+        return run_update(
+            &input_root,
+            &output_root,
+            filter.as_deref(),
+            windowed,
+            cmd.dry_run,
+            &pool,
+            matches!(encoding, Encoding::Sequential),
+        );
+    }
 
     let t_all = Instant::now();
 
