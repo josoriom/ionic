@@ -23,8 +23,8 @@ fn check_header() {
     assert_eq!(header.chrom_meta_count, 45);
     assert_eq!(header.chrom_meta_numeric_count, 0);
     assert_eq!(header.chrom_meta_string_count, 20);
-    assert_eq!(header.spec_block_count, 2);
-    assert_eq!(header.chrom_block_count, 2);
+    assert_eq!(header.spec_block_count, 4);
+    assert_eq!(header.chrom_block_count, 3);
     assert_eq!(header.compression_codec, 1);
     assert_eq!(header.compression_level, 22);
     assert_eq!(header.default_array_filter, 1);

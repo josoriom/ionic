@@ -441,7 +441,7 @@ pub enum NumericType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum BinaryData {
+pub enum NumericArray {
     F64(Vec<f64>),
     F32(Vec<f32>),
     F16(Vec<u16>),
@@ -450,7 +450,7 @@ pub enum BinaryData {
     I16(Vec<i16>),
 }
 
-impl BinaryData {
+impl NumericArray {
     pub fn len(&self) -> usize {
         match self {
             Self::F64(v) => v.len(),
@@ -478,7 +478,7 @@ pub struct BinaryDataArray {
     pub user_params: Vec<UserParam>,
 
     pub numeric_type: Option<NumericType>,
-    pub binary: Option<BinaryData>,
+    pub binary: Option<NumericArray>,
 
     #[serde(skip)]
     pub pending_base64: Option<Vec<u8>>,

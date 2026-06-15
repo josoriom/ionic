@@ -5,13 +5,14 @@ pub(crate) mod header;
 pub(crate) mod meta_groups;
 pub(crate) mod packing;
 pub mod range;
+pub(crate) mod windowing;
 pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
-pub use range::Range;
+pub use range::{ByteRange, Range};
 pub mod decoder;
 pub mod format;
 pub(crate) mod version_generated;
 pub use decoder::decode::{
-    ArrayWindow, IonReader, ReadOptions, MzPeaks, plan_open_ranges,
+    DataXY, IonReader, ItemSlice, Pixel, ReadOptions, Select, Target, Window, open_ranges,
 };
 pub(crate) use decoder::utilities;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]

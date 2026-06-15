@@ -10,7 +10,7 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{BinaryData, BinaryDataArray, BinaryDataArrayList, NumericType},
+        structs::{NumericArray, BinaryDataArray, BinaryDataArrayList, NumericType},
         utilities::{
             ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize, read_base64_binary,
             read_cv_param, read_ref_group_ref, read_user_param,
@@ -169,35 +169,35 @@ fn decode_binary_data(
     numeric_type: NumericType,
     decoded: &[u8],
     array_length: Option<usize>,
-) -> BinaryData {
+) -> NumericArray {
     match numeric_type {
         NumericType::Float64 => {
-            BinaryData::F64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
+            NumericArray::F64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
                 f64::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Float32 => {
-            BinaryData::F32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
+            NumericArray::F32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
                 f32::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Float16 => {
-            BinaryData::F16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
+            NumericArray::F16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
                 u16::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Int64 => {
-            BinaryData::I64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
+            NumericArray::I64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
                 i64::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Int32 => {
-            BinaryData::I32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
+            NumericArray::I32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
                 i32::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Int16 => {
-            BinaryData::I16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
+            NumericArray::I16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
                 i16::from_le_bytes(c.try_into().unwrap())
             }))
         }

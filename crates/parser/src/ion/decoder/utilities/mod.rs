@@ -44,7 +44,7 @@ pub(crate) mod children_lookup;
 pub(crate) mod block_reader;
 pub(crate) mod cv_table;
 pub(crate) mod decompression_limit;
-pub(crate) mod segment_bounds;
+pub(crate) mod window_bounds;
 pub(crate) mod spectrum_source;
 
 #[cfg(test)]

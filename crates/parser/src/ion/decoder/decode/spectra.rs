@@ -14,7 +14,8 @@ pub(crate) fn slice_summary(bytes: &[u8], off: u64, index: usize, size: usize, c
 #[inline]
 pub(crate) fn parse_spec_summary(bytes: &[u8]) -> SpectrumSummary {
     SpectrumSummary {
-        rt_seconds: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        rt: f64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        rt_unit: bytes[54],
         base_peak_mz: f64::from_le_bytes(bytes[8..16].try_into().unwrap()),
         selected_ion_mz: f64::from_le_bytes(bytes[16..24].try_into().unwrap()),
         base_peak_int: f64::from_le_bytes(bytes[24..32].try_into().unwrap()),
@@ -104,9 +105,9 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
             self.summary_chunks.by_ref().zip(self.entry_chunks.by_ref())
         {
             let summary = parse_spec_summary(summary_bytes);
-            if !summary.rt_seconds.is_finite()
-                || summary.rt_seconds < self.rt_min
-                || summary.rt_seconds > self.rt_max
+            if !summary.rt.is_finite()
+                || summary.rt < self.rt_min
+                || summary.rt > self.rt_max
             {
                 continue;
             }
@@ -127,7 +128,8 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
                 continue;
             }
             let summary = ScanSummary {
-                rt: summary.rt_seconds / 60.0,
+                rt: summary.rt,
+                rt_unit: TimeUnit::from_code(summary.rt_unit),
                 ms_level: summary.ms_level,
                 polarity: summary.polarity,
                 base_peak_mz: summary.base_peak_mz,
@@ -214,12 +216,20 @@ impl IonReader {
         )
     }
 
-    pub(crate) fn spectrum_metadata(&self) -> IonResult<Vec<Metadatum>> {
+    pub fn spectrum_metadata(&self) -> IonResult<Vec<Metadatum>> {
         self.spec_meta_reader.read_all()
     }
 
-    pub(crate) fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
+    pub fn chromatogram_metadata(&self) -> IonResult<Vec<Metadatum>> {
         self.chrom_meta_reader.read_all()
+    }
+
+    pub(crate) fn spectrum_metadata_grouped(&self) -> IonResult<Vec<Vec<Metadatum>>> {
+        self.spec_meta_reader.read_all_grouped()
+    }
+
+    pub(crate) fn chromatogram_metadata_grouped(&self) -> IonResult<Vec<Vec<Metadatum>>> {
+        self.chrom_meta_reader.read_all_grouped()
     }
 
     pub fn spectrum_metadata_at(&mut self, index: usize) -> IonResult<Vec<Metadatum>> {
@@ -230,7 +240,7 @@ impl IonReader {
         self.chrom_meta_reader.read_item(index as u64)
     }
 
-    pub fn get_spectrum(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
+    pub fn spectrum(&mut self, index: usize) -> IonResult<Option<Spectrum>> {
         if index >= self.header.spectrum_count as usize {
             return Ok(None);
         }
@@ -267,7 +277,8 @@ impl ScanSource for IonReader {
             callback(
                 index,
                 ScanSummary {
-                    rt: summary.rt_seconds / 60.0,
+                    rt: summary.rt,
+                    rt_unit: TimeUnit::from_code(summary.rt_unit),
                     base_peak_mz: summary.base_peak_mz,
                     selected_ion_mz: summary.selected_ion_mz,
                     base_peak_int: summary.base_peak_int,
@@ -332,8 +343,8 @@ impl ScanSource for IonReader {
             container,
             mz_values,
             int_values,
-            rt_min * 60.0,
-            rt_max * 60.0,
+            rt_min,
+            rt_max,
             ms_level,
         )
         .run(&mut callback);

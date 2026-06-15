@@ -182,13 +182,13 @@ fn f32_arrays_via_mzml_xml_roundtrip() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float32,
-                                BinaryData::F32(mz.clone()),
+                                NumericArray::F32(mz.clone()),
                                 Some(len),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float32,
-                                BinaryData::F32(intensity.clone()),
+                                NumericArray::F32(intensity.clone()),
                                 Some(len),
                             ),
                         ],

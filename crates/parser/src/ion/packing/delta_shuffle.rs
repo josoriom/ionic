@@ -27,7 +27,7 @@ impl Packing for DeltaShuffle {
     }
 
     fn supports(&self, dtype: Dtype) -> bool {
-        matches!(dtype, Dtype::F64)
+        matches!(dtype, Dtype::F64 | Dtype::F32)
     }
 
     fn encode(&self, input: PackingInput<'_>, out: &mut Vec<u8>) -> IonResult<()> {
@@ -37,7 +37,12 @@ impl Packing for DeltaShuffle {
                 encode_delta::<u64>(v.iter().map(|x| x.to_bits()), out);
                 Ok(())
             }
-            _ => Err(IonError::from("delta filter needs f64 input")),
+            PackingInput::F32(v) => {
+                out.reserve(v.len() * 4);
+                encode_delta::<u32>(v.iter().map(|x| x.to_bits()), out);
+                Ok(())
+            }
+            _ => Err(IonError::from("delta filter needs f32 or f64 input")),
         }
     }
 
@@ -50,9 +55,16 @@ impl Packing for DeltaShuffle {
                 });
                 Ok(())
             }
+            Dtype::F32 => {
+                out.reserve(input.len());
+                decode_delta::<u32>(input, |w| {
+                    out.extend_from_slice(&f32::from_bits(w).to_le_bytes())
+                });
+                Ok(())
+            }
             _ => Err(IonError::BadDtype {
                 dtype: dtype as u8,
-                kind: "delta filter needs f64",
+                kind: "delta filter needs f32 or f64",
             }),
         }
     }
@@ -72,6 +84,38 @@ mod tests {
         dec.chunks_exact(8)
             .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
             .collect()
+    }
+
+    fn roundtrip_f32(input: &[f32]) -> Vec<f32> {
+        let mut enc = Vec::new();
+        DELTA_SHUFFLE
+            .encode(PackingInput::F32(input), &mut enc)
+            .unwrap();
+        assert_eq!(enc.len(), input.len() * 4);
+        let mut dec = Vec::new();
+        DELTA_SHUFFLE.decode(&enc, Dtype::F32, &mut dec).unwrap();
+        dec.chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn monotonic_mz_f32_is_bit_exact() {
+        let input: Vec<f32> = (0..10_000).map(|i| 100.0 + i as f32 * 0.01).collect();
+        let got = roundtrip_f32(&input);
+        assert_eq!(got.len(), input.len());
+        for (a, b) in got.iter().zip(input.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+    }
+
+    #[test]
+    fn special_values_f32_are_bit_exact() {
+        let input = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0f32, 0.0f32];
+        let got = roundtrip_f32(&input);
+        for (a, b) in got.iter().zip(input.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
     }
 
     #[test]
@@ -126,10 +170,25 @@ mod tests {
     #[test]
     fn packing_for_dtype_dispatch() {
         use super::super::packing_for;
-        use crate::accessions::MZ_ARRAY;
+        use crate::accessions::{INTENSITY_ARRAY, MZ_ARRAY};
         assert_eq!(
             packing_for(MZ_ARRAY, Dtype::F64, 100).id(),
             PackingId::DeltaShuffle
+        );
+        assert_eq!(
+            packing_for(MZ_ARRAY, Dtype::F32, 100).id(),
+            PackingId::DeltaShuffle,
+            "f32 m/z must also use delta-shuffle"
+        );
+        assert_eq!(
+            packing_for(INTENSITY_ARRAY, Dtype::F32, 100).id(),
+            PackingId::Raw,
+            "intensity must stay raw"
+        );
+        assert_eq!(
+            packing_for(INTENSITY_ARRAY, Dtype::F64, 100).id(),
+            PackingId::Raw,
+            "intensity is never delta-shuffled, even at f64"
         );
         assert_eq!(packing_for(0, Dtype::I32, 1).id(), PackingId::Raw);
     }

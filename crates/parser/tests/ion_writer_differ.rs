@@ -46,7 +46,7 @@ fn config_for_level(compression_level: u8) -> WriteOptions {
         block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_storage: SectionStorage::Memory,
-        segment_size: 256 * 1024,
+        mz_window: 0.0,
     }
 }
 

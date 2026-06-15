@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use ionic::ion::{ReadOptions, IonReader};
+use ionic::ion::{ReadOptions, IonReader, Range};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -75,8 +75,8 @@ struct Reading {
 }
 
 fn read_full(ion: &mut IonReader, index: usize) -> Result<Vec<f64>, String> {
-    ion.read_mz_range(index, 0.0, f64::MAX)
-        .map(|window| window.mz)
+    ion.read_window(index, Range { from: 0.0, to: f64::MAX })
+        .map(|window| window.x.to_f64())
         .map_err(|error| format!("cannot read spectrum {index}: {error}"))
 }
 
@@ -92,9 +92,9 @@ fn measure(ion: &mut IonReader, sample: usize, low: f64, high: f64) -> Result<Re
     let mut points = 0usize;
     for index in 0..sample {
         let window = ion
-            .read_mz_range(index, low, high)
+            .read_window(index, Range { from: low, to: high })
             .map_err(|error| format!("cannot read spectrum {index}: {error}"))?;
-        points += window.mz.len();
+        points += window.x.len();
     }
     let micros = start.elapsed().as_secs_f64() * 1_000_000.0;
     Ok(Reading { micros, points })

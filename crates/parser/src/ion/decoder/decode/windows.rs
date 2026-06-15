@@ -1,24 +1,102 @@
 use super::*;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArrayWindow {
-    pub x: Vec<f64>,
-    pub y: Vec<f64>,
+fn find_windows(bounds: &[(f64, f64)], from: f64, to: f64) -> (usize, usize) {
+    let start = bounds.partition_point(|&(_low, high)| high < from);
+    let end = bounds.partition_point(|&(low, _high)| low <= to);
+    (start, end.max(start))
 }
 
-impl ArrayWindow {
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataXY {
+    pub x: NumericArray,
+    pub y: NumericArray,
+}
+
+impl DataXY {
     pub(crate) fn empty() -> Self {
         Self {
-            x: Vec::new(),
-            y: Vec::new(),
+            x: NumericArray::F64(Vec::new()),
+            y: NumericArray::F64(Vec::new()),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct MzPeaks {
-    pub mz: Vec<f64>,
-    pub intensity: Vec<f64>,
+impl NumericArray {
+    pub fn to_f64(&self) -> Vec<f64> {
+        match self {
+            NumericArray::F64(values) => values.clone(),
+            NumericArray::F32(values) => values.iter().map(|&value| value as f64).collect(),
+            NumericArray::F16(values) => values.iter().copied().map(f16_bits_to_f64).collect(),
+            NumericArray::I16(values) => values.iter().map(|&value| value as f64).collect(),
+            NumericArray::I32(values) => values.iter().map(|&value| value as f64).collect(),
+            NumericArray::I64(values) => values.iter().map(|&value| value as f64).collect(),
+        }
+    }
+
+    pub(crate) fn extend_f64(&self, out: &mut Vec<f64>) {
+        match self {
+            NumericArray::F64(values) => out.extend_from_slice(values),
+            NumericArray::F32(values) => out.extend(values.iter().map(|&value| value as f64)),
+            NumericArray::F16(values) => out.extend(values.iter().copied().map(f16_bits_to_f64)),
+            NumericArray::I16(values) => out.extend(values.iter().map(|&value| value as f64)),
+            NumericArray::I32(values) => out.extend(values.iter().map(|&value| value as f64)),
+            NumericArray::I64(values) => out.extend(values.iter().map(|&value| value as f64)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pixel {
+    pub x: Range,
+    pub y: Range,
+    pub z: Range,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Select {
+    All,
+    Rt(Range),
+    Area(Pixel),
+}
+
+pub struct Window<'a> {
+    pub index: usize,
+    pub summary: &'a ScanSummary,
+    pub mz: &'a [f64],
+    pub intensity: &'a [f64],
+}
+
+fn position_in_range(value: u32, range: Range) -> bool {
+    let value = value as f64;
+    value >= range.from && value <= range.to
+}
+
+fn scan_is_selected(select: &Select, summary: &ScanSummary) -> bool {
+    match select {
+        Select::All => true,
+        Select::Rt(range) => summary.rt >= range.from && summary.rt <= range.to,
+        Select::Area(pixel) => {
+            position_in_range(summary.position_x, pixel.x)
+                && position_in_range(summary.position_y, pixel.y)
+                && position_in_range(summary.position_z, pixel.z)
+        }
+    }
+}
+
+fn scan_summary_from_record(record: &SpectrumSummary) -> ScanSummary {
+    ScanSummary {
+        rt: record.rt,
+        rt_unit: TimeUnit::from_code(record.rt_unit),
+        ms_level: record.ms_level,
+        polarity: record.polarity,
+        selected_ion_mz: record.selected_ion_mz,
+        base_peak_mz: record.base_peak_mz,
+        base_peak_int: record.base_peak_int,
+        total_ion_current: record.total_ion_current,
+        position_x: record.position_x,
+        position_y: record.position_y,
+        position_z: record.position_z,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,52 +112,105 @@ pub struct ItemSlice {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SegmentRead {
+pub(crate) struct WindowRead {
     pub(crate) mz_ref: ArrayRef,
     pub(crate) intensity_ref: ArrayRef,
 }
 
-fn slice_is_non_decreasing(values: &[f64]) -> bool {
-    values.windows(2).all(|pair| pair[0] <= pair[1])
+fn empty_array(dtype: u8) -> NumericArray {
+    match dtype {
+        FILE_DTYPE_F32 => NumericArray::F32(Vec::new()),
+        FILE_DTYPE_F16 => NumericArray::F16(Vec::new()),
+        FILE_DTYPE_I16 => NumericArray::I16(Vec::new()),
+        FILE_DTYPE_I32 => NumericArray::I32(Vec::new()),
+        FILE_DTYPE_I64 => NumericArray::I64(Vec::new()),
+        _ => NumericArray::F64(Vec::new()),
+    }
 }
 
-pub(crate) fn keep_pairs_in_range_sorted(
-    x: &[f64],
-    y: &[f64],
-    low: f64,
-    high: f64,
-    x_out: &mut Vec<f64>,
-    y_out: &mut Vec<f64>,
-) {
-    let paired = x.len().min(y.len());
-    let x = &x[..paired];
-    let y = &y[..paired];
-    let start = x.partition_point(|&value| value < low);
-    let end = x.partition_point(|&value| value <= high);
-    x_out.extend_from_slice(&x[start..end]);
-    y_out.extend_from_slice(&y[start..end]);
+fn group_dtype(group: &ArrayGroup) -> u8 {
+    group.refs.first().map(|array_ref| array_ref.dtype).unwrap_or(FILE_DTYPE_F64)
 }
 
-pub(crate) fn keep_pairs_in_range(
-    x: &[f64],
-    y: &[f64],
+fn value_at(array: &NumericArray, index: usize) -> f64 {
+    match array {
+        NumericArray::F64(values) => values[index],
+        NumericArray::F32(values) => values[index] as f64,
+        NumericArray::F16(values) => f16_bits_to_f64(values[index]),
+        NumericArray::I16(values) => values[index] as f64,
+        NumericArray::I32(values) => values[index] as f64,
+        NumericArray::I64(values) => values[index] as f64,
+    }
+}
+
+fn append_range(dst: &mut NumericArray, src: &NumericArray, start: usize, end: usize) {
+    match (dst, src) {
+        (NumericArray::F64(d), NumericArray::F64(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::F32(d), NumericArray::F32(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::F16(d), NumericArray::F16(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::I16(d), NumericArray::I16(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::I32(d), NumericArray::I32(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::I64(d), NumericArray::I64(s)) => d.extend_from_slice(&s[start..end]),
+        _ => {}
+    }
+}
+
+fn range_in_sorted(x: &NumericArray, low: f64, high: f64, paired: usize) -> (usize, usize) {
+    match x {
+        NumericArray::F64(values) => {
+            let values = &values[..paired];
+            (
+                values.partition_point(|&value| value < low),
+                values.partition_point(|&value| value <= high),
+            )
+        }
+        NumericArray::F32(values) => {
+            let values = &values[..paired];
+            (
+                values.partition_point(|&value| (value as f64) < low),
+                values.partition_point(|&value| (value as f64) <= high),
+            )
+        }
+        _ => (0, paired),
+    }
+}
+
+fn is_sorted(x: &NumericArray, len: usize) -> bool {
+    (1..len).all(|index| value_at(x, index - 1) <= value_at(x, index))
+}
+
+pub(crate) fn keep_pairs_sorted(
+    x: &NumericArray,
+    y: &NumericArray,
     low: f64,
     high: f64,
-    x_out: &mut Vec<f64>,
-    y_out: &mut Vec<f64>,
+    x_out: &mut NumericArray,
+    y_out: &mut NumericArray,
 ) {
     let paired = x.len().min(y.len());
-    let x = &x[..paired];
-    let y = &y[..paired];
+    let (start, end) = range_in_sorted(x, low, high, paired);
+    append_range(x_out, x, start, end);
+    append_range(y_out, y, start, end);
+}
 
-    if slice_is_non_decreasing(x) {
-        keep_pairs_in_range_sorted(x, y, low, high, x_out, y_out);
+pub(crate) fn keep_pairs(
+    x: &NumericArray,
+    y: &NumericArray,
+    low: f64,
+    high: f64,
+    x_out: &mut NumericArray,
+    y_out: &mut NumericArray,
+) {
+    let paired = x.len().min(y.len());
+    if is_sorted(x, paired) {
+        keep_pairs_sorted(x, y, low, high, x_out, y_out);
         return;
     }
-    for (position, &value) in x.iter().enumerate() {
+    for index in 0..paired {
+        let value = value_at(x, index);
         if value >= low && value <= high {
-            x_out.push(value);
-            y_out.push(y[position]);
+            append_range(x_out, x, index, index + 1);
+            append_range(y_out, y, index, index + 1);
         }
     }
 }
@@ -92,20 +223,20 @@ impl IonReader {
         y_array_accession: u32,
         low: f64,
         high: f64,
-    ) -> IonResult<ArrayWindow> {
+    ) -> IonResult<DataXY> {
         self.read_spectrum_window_inner(index, x_array_accession, y_array_accession, low, high)
     }
 
     pub fn require_bounds(&mut self) -> IonResult<()> {
-        self.ensure_spec_segment_bounds()
+        self.ensure_spec_window_bounds()
     }
 
-    pub(crate) fn get_spectrum_mz_segments(
+    pub(crate) fn get_spectrum_mz_windows(
         &mut self,
         scan_index: usize,
         mz_from: f64,
         mz_to: f64,
-    ) -> IonResult<Vec<SegmentRead>> {
+    ) -> IonResult<Vec<WindowRead>> {
         if !mz_from.is_finite() || !mz_to.is_finite() {
             return Err("mz window bounds must be finite".into());
         }
@@ -145,49 +276,46 @@ impl IonReader {
         };
 
         if mz_group.refs.len() != intensity_group.refs.len() {
-            return Err("spectrum mz and intensity segment counts differ".into());
+            return Err("spectrum mz and intensity window counts differ".into());
         }
 
-        let bounds = match &self.spec_segment_bounds {
-            SegmentBoundsCache::Loaded(index) => index,
+        let bounds = match &self.spec_window_bounds {
+            WindowBoundsCache::Loaded(index) => index,
             _ => return Err(IonError::MissingSpectrumBounds),
         };
 
         let mz_ref_base = ref_start + mz_position;
-        let mut segments = Vec::new();
-        for segment_index in 0..mz_group.refs.len() {
-            let row_index = mz_ref_base + segment_index as u64;
-            let (segment_low, segment_high) = bounds.require(row_index)?;
-            let overlaps = segment_low <= mz_to && segment_high >= mz_from;
-            if overlaps {
-                segments.push(SegmentRead {
-                    mz_ref: mz_group.refs[segment_index],
-                    intensity_ref: intensity_group.refs[segment_index],
-                });
-            }
+        let window_count = mz_group.refs.len();
+        let mut window_bounds = Vec::with_capacity(window_count);
+        for segment_index in 0..window_count {
+            window_bounds.push(bounds.require(mz_ref_base + segment_index as u64)?);
         }
 
-        Ok(segments)
+        let (start, end) = find_windows(&window_bounds, mz_from, mz_to);
+        let mut windows = Vec::with_capacity(end - start);
+        for segment_index in start..end {
+            windows.push(WindowRead {
+                mz_ref: mz_group.refs[segment_index],
+                intensity_ref: intensity_group.refs[segment_index],
+            });
+        }
+
+        Ok(windows)
     }
 
-    pub(crate) fn spec_block_byte_range(&self, block_id: u32) -> IonResult<Range> {
+    pub(crate) fn spec_block_byte_range(&self, block_id: u32) -> IonResult<ByteRange> {
         self.spec_container
             .block_byte_range(block_id)
             .ok_or_else(|| IonError::from("spectrum block id out of range"))
     }
 
-    pub fn plan_mz_range(
-        &mut self,
-        scan_index: usize,
-        mz_from: f64,
-        mz_to: f64,
-    ) -> IonResult<Vec<Range>> {
-        let segments = self.get_spectrum_mz_segments(scan_index, mz_from, mz_to)?;
+    pub fn byte_ranges(&mut self, scan_index: usize, mz: Range) -> IonResult<Vec<ByteRange>> {
+        let windows = self.get_spectrum_mz_windows(scan_index, mz.from, mz.to)?;
 
-        let mut block_ids = Vec::with_capacity(segments.len() * 2);
-        for segment in &segments {
-            block_ids.push(segment.mz_ref.block_id);
-            block_ids.push(segment.intensity_ref.block_id);
+        let mut block_ids = Vec::with_capacity(windows.len() * 2);
+        for window in &windows {
+            block_ids.push(window.mz_ref.block_id);
+            block_ids.push(window.intensity_ref.block_id);
         }
         block_ids.sort_unstable();
         block_ids.dedup();
@@ -200,32 +328,78 @@ impl IonReader {
         Ok(ranges)
     }
 
-    pub fn read_mz_range(
-        &mut self,
-        scan_index: usize,
-        mz_from: f64,
-        mz_to: f64,
-    ) -> IonResult<MzPeaks> {
-        let segments = self.get_spectrum_mz_segments(scan_index, mz_from, mz_to)?;
+    pub fn read_window(&mut self, index: usize, mz: Range) -> IonResult<DataXY> {
+        let windows = self.get_spectrum_mz_windows(index, mz.from, mz.to)?;
 
-        let mut mz = Vec::new();
-        let mut intensity = Vec::new();
-        let mut mz_segment = Vec::new();
-        let mut intensity_segment = Vec::new();
-        for segment in segments {
-            self.read_array(&segment.mz_ref, &mut mz_segment)?;
-            self.read_array(&segment.intensity_ref, &mut intensity_segment)?;
-            keep_pairs_in_range_sorted(
+        let mz_dtype = windows.first().map(|s| s.mz_ref.dtype).unwrap_or(FILE_DTYPE_F64);
+        let intensity_dtype = windows
+            .first()
+            .map(|s| s.intensity_ref.dtype)
+            .unwrap_or(FILE_DTYPE_F64);
+        let mut mz_out = empty_array(mz_dtype);
+        let mut intensity_out = empty_array(intensity_dtype);
+        for window in windows {
+            let mz_segment = self.read_array_typed(&window.mz_ref)?;
+            let intensity_segment = self.read_array_typed(&window.intensity_ref)?;
+            keep_pairs_sorted(
                 &mz_segment,
                 &intensity_segment,
-                mz_from,
-                mz_to,
-                &mut mz,
-                &mut intensity,
+                mz.from,
+                mz.to,
+                &mut mz_out,
+                &mut intensity_out,
             );
         }
 
-        Ok(MzPeaks { mz, intensity })
+        Ok(DataXY { x: mz_out, y: intensity_out })
+    }
+
+    pub fn scans_in(
+        &mut self,
+        mz: Range,
+        select: Select,
+        ms_level: Option<u8>,
+        visit: &mut dyn FnMut(&Window),
+    ) -> IonResult<()> {
+        self.require_bounds()?;
+        let count = self.header.spectrum_count as usize;
+        let mut mz_out: Vec<f64> = Vec::new();
+        let mut intensity_out: Vec<f64> = Vec::new();
+        for index in 0..count {
+            let Some(record) = self.spec_summary(index) else {
+                continue;
+            };
+            if let Some(level) = ms_level {
+                if record.ms_level != level {
+                    continue;
+                }
+            }
+            let summary = scan_summary_from_record(&record);
+            if !scan_is_selected(&select, &summary) {
+                continue;
+            }
+            let Some(refs) = self.spectrum_arrays(index) else {
+                continue;
+            };
+            let has_mz = refs.iter().any(|r| r.array_type == crate::accessions::MZ_ARRAY);
+            let has_intensity = refs.iter().any(|r| r.array_type == ACC_INT);
+            if !has_mz || !has_intensity {
+                continue;
+            }
+            let data = self.read_window(index, mz)?;
+            mz_out.clear();
+            data.x.extend_f64(&mut mz_out);
+            intensity_out.clear();
+            data.y.extend_f64(&mut intensity_out);
+            let window = Window {
+                index,
+                summary: &summary,
+                mz: &mz_out,
+                intensity: &intensity_out,
+            };
+            visit(&window);
+        }
+        Ok(())
     }
 
     pub(crate) fn read_spectrum_window_inner(
@@ -235,22 +409,22 @@ impl IonReader {
         y_array_accession: u32,
         low: f64,
         high: f64,
-    ) -> IonResult<ArrayWindow> {
+    ) -> IonResult<DataXY> {
         if index >= self.header.spectrum_count as usize {
             return Err("spectrum index out of range".into());
         }
 
         if low > high {
-            return Ok(ArrayWindow::empty());
+            return Ok(DataXY::empty());
         }
 
         let Some(array_refs) =
             read_array_refs_from_buffers(&self.spec_entries_buf, &self.spec_array_refs, index)
         else {
-            return Ok(ArrayWindow::empty());
+            return Ok(DataXY::empty());
         };
         let Some(ref_start) = array_ref_start_for_item(&self.spec_entries_buf, index) else {
-            return Ok(ArrayWindow::empty());
+            return Ok(DataXY::empty());
         };
 
         let groups = group_arrays(array_refs.as_slice())?;
@@ -268,11 +442,11 @@ impl IonReader {
         }
 
         let (Some((x_position, x_group)), Some((_, y_group))) = (x_group, y_group) else {
-            return Ok(ArrayWindow::empty());
+            return Ok(DataXY::empty());
         };
 
         if x_group.refs.len() == y_group.refs.len() {
-            let _ = self.ensure_spec_segment_bounds();
+            let _ = self.ensure_spec_window_bounds();
             if let Some(window) =
                 self.try_fast_window(ref_start + x_position, x_group, y_group, low, high)?
             {
@@ -290,18 +464,18 @@ impl IonReader {
         y_group: &ArrayGroup,
         low: f64,
         high: f64,
-    ) -> IonResult<Option<ArrayWindow>> {
+    ) -> IonResult<Option<DataXY>> {
         let kept_segments = {
-            let SegmentBoundsCache::Loaded(bounds) = &self.spec_segment_bounds else {
+            let WindowBoundsCache::Loaded(bounds) = &self.spec_window_bounds else {
                 return Ok(None);
             };
             let mut kept = Vec::with_capacity(x_group.refs.len());
             for segment_index in 0..x_group.refs.len() {
                 let global_ref_index = x_ref_base + segment_index as u64;
-                let Some((segment_low, segment_high)) = bounds.get(global_ref_index) else {
+                let Some((window_low, window_high)) = bounds.get(global_ref_index) else {
                     return Ok(None);
                 };
-                let overlaps_window = segment_low <= high && segment_high >= low;
+                let overlaps_window = window_low <= high && window_high >= low;
                 if overlaps_window {
                     kept.push(segment_index);
                 }
@@ -309,17 +483,15 @@ impl IonReader {
             kept
         };
 
-        let mut x_out = Vec::new();
-        let mut y_out = Vec::new();
-        let mut x_segment = Vec::new();
-        let mut y_segment = Vec::new();
+        let mut x_out = empty_array(group_dtype(x_group));
+        let mut y_out = empty_array(group_dtype(y_group));
         for segment_index in kept_segments {
-            self.read_array(&x_group.refs[segment_index], &mut x_segment)?;
-            self.read_array(&y_group.refs[segment_index], &mut y_segment)?;
-            keep_pairs_in_range_sorted(&x_segment, &y_segment, low, high, &mut x_out, &mut y_out);
+            let x_segment = self.read_array_typed(&x_group.refs[segment_index])?;
+            let y_segment = self.read_array_typed(&y_group.refs[segment_index])?;
+            keep_pairs_sorted(&x_segment, &y_segment, low, high, &mut x_out, &mut y_out);
         }
 
-        Ok(Some(ArrayWindow { x: x_out, y: y_out }))
+        Ok(Some(DataXY { x: x_out, y: y_out }))
     }
 
     pub(crate) fn read_full_window(
@@ -328,16 +500,23 @@ impl IonReader {
         y_group: &ArrayGroup,
         low: f64,
         high: f64,
-    ) -> IonResult<ArrayWindow> {
-        let mut x = Vec::new();
-        let mut y = Vec::new();
-        self.read_group_values(x_group, &mut x)?;
-        self.read_group_values(y_group, &mut y)?;
+    ) -> IonResult<DataXY> {
+        let x = self.read_group_typed(x_group)?;
+        let y = self.read_group_typed(y_group)?;
 
-        let mut x_out = Vec::new();
-        let mut y_out = Vec::new();
-        keep_pairs_in_range(&x, &y, low, high, &mut x_out, &mut y_out);
-        Ok(ArrayWindow { x: x_out, y: y_out })
+        let mut x_out = empty_array(group_dtype(x_group));
+        let mut y_out = empty_array(group_dtype(y_group));
+        keep_pairs(&x, &y, low, high, &mut x_out, &mut y_out);
+        Ok(DataXY { x: x_out, y: y_out })
+    }
+
+    fn read_group_typed(&mut self, group: &ArrayGroup) -> IonResult<NumericArray> {
+        let mut out = empty_array(group_dtype(group));
+        for array_ref in &group.refs {
+            let window = self.read_array_typed(array_ref)?;
+            append_range(&mut out, &window, 0, window.len());
+        }
+        Ok(out)
     }
 
     pub fn candidate_items(
@@ -353,21 +532,21 @@ impl IonReader {
             return Ok(Vec::new());
         }
 
-        let (entries_buf, array_refs_buf, segment_bounds) = match target {
+        let (entries_buf, array_refs_buf, window_bounds) = match target {
             Target::Spec => {
-                let _ = self.ensure_spec_segment_bounds();
+                let _ = self.ensure_spec_window_bounds();
                 (
                     &self.spec_entries_buf,
                     &self.spec_array_refs,
-                    &self.spec_segment_bounds,
+                    &self.spec_window_bounds,
                 )
             }
             Target::Chrom => {
-                self.ensure_chrom_segment_bounds();
+                self.ensure_chrom_window_bounds();
                 (
                     &self.chrom_entries_buf,
                     &self.chrom_array_refs,
-                    &self.chrom_segment_bounds,
+                    &self.chrom_window_bounds,
                 )
             }
         };
@@ -377,8 +556,8 @@ impl IonReader {
             Target::Chrom => self.header.chrom_count,
         };
 
-        let bounds = match segment_bounds {
-            SegmentBoundsCache::Loaded(b) => Some(b),
+        let bounds = match window_bounds {
+            WindowBoundsCache::Loaded(b) => Some(b),
             _ => None,
         };
 
@@ -409,8 +588,8 @@ impl IonReader {
 
                 let include = match bounds.as_ref() {
                     Some(b) => {
-                        if let Some((segment_low, segment_high)) = b.get(array_ref_index) {
-                            segment_low <= hi && segment_high >= lo
+                        if let Some((window_low, window_high)) = b.get(array_ref_index) {
+                            window_low <= hi && window_high >= lo
                         } else {
                             true
                         }
@@ -428,5 +607,25 @@ impl IonReader {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_windows;
+
+    #[test]
+    fn find_windows_returns_the_overlapping_run() {
+        let bounds = [
+            (100.0, 150.0),
+            (150.0, 200.0),
+            (200.0, 250.0),
+            (250.0, 300.0),
+        ];
+        assert_eq!(find_windows(&bounds, 160.0, 240.0), (1, 3));
+        assert_eq!(find_windows(&bounds, 0.0, 1000.0), (0, 4));
+        assert_eq!(find_windows(&bounds, 100.0, 100.0), (0, 1));
+        assert_eq!(find_windows(&bounds, 400.0, 500.0), (4, 4));
+        assert_eq!(find_windows(&bounds, 0.0, 50.0), (0, 0));
     }
 }

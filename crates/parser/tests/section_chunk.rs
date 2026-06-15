@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use ionic::{
     ion::{
         encoder::encode::{
-            DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
+            WriteOptions,
             TARGET_BLOCK_UNCOMPRESSED_BYTES,
         },
         encoder::ion_writer::write_mzml_to_ion,
@@ -39,7 +39,7 @@ fn config(mode: SectionStorage, compression_level: u8) -> WriteOptions {
         block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_storage: mode,
-        segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+        mz_window: 0.0,
     }
 }
 

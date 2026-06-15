@@ -1,5 +1,5 @@
 use crate::ion::IonResult;
-use crate::ion::encoder::utilities::sink::{WriteBytes, SectionChunk};
+use crate::ion::encoder::utilities::output::{WriteBytes, SectionChunk};
 
 pub(crate) struct SummaryTable {
     chunk: SectionChunk,
@@ -78,22 +78,22 @@ impl ArrayRefTable {
     }
 }
 
-pub(crate) struct SegmentBound {
+pub(crate) struct WindowBound {
     pub(crate) array_ref_index: u64,
     pub(crate) low: f64,
     pub(crate) high: f64,
 }
 
-pub(crate) struct SegmentBoundsTable {
+pub(crate) struct WindowBoundsTable {
     chunk: SectionChunk,
 }
 
-impl SegmentBoundsTable {
+impl WindowBoundsTable {
     pub(crate) fn new(chunk: SectionChunk) -> Self {
         Self { chunk }
     }
 
-    pub(crate) fn push(&mut self, bound: SegmentBound) -> IonResult<()> {
+    pub(crate) fn push(&mut self, bound: WindowBound) -> IonResult<()> {
         let mut record = [0u8; 24];
         record[0..8].copy_from_slice(&bound.array_ref_index.to_le_bytes());
         record[8..16].copy_from_slice(&bound.low.to_le_bytes());

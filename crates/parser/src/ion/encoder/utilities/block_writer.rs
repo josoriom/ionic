@@ -5,7 +5,7 @@ use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
 use std::collections::HashMap;
 
-use crate::encoder::utilities::sink::WriteBytes;
+use crate::encoder::utilities::output::WriteBytes;
 use crate::ion::byte_transpose::shuffle_with_tail;
 use crate::ion::packing::PackingId;
 use crate::ion::{IonError, IonResult};
@@ -133,7 +133,7 @@ impl BlockDirEntry {
         buffer.extend_from_slice(&self.payload_size.to_le_bytes());
         buffer.extend_from_slice(&self.uncompressed_len_bytes.to_le_bytes());
         buffer.extend_from_slice(&self.checksum.to_le_bytes());
-        buffer.extend_from_slice(&[0u8; 4]);
+        buffer.extend_from_slice(&0u32.to_le_bytes());
     }
 }
 
@@ -156,10 +156,11 @@ impl BlockDirectory {
     }
 
     fn seal_block(&mut self, block_id: u32, entry: BlockDirEntry) -> IonResult<()> {
-        self.entries
+        let slot = self
+            .entries
             .get_mut(block_id as usize)
-            .ok_or_else(|| IonError::from(format!("seal_block: unknown block_id={block_id}")))?
-            .clone_from(&entry);
+            .ok_or_else(|| IonError::from(format!("seal_block: unknown block_id={block_id}")))?;
+        slot.clone_from(&entry);
         Ok(())
     }
 
@@ -178,13 +179,15 @@ impl BlockDirectory {
 struct BlockGroup {
     array_type: u32,
     element_size: usize,
+    window_index: u32,
 }
 
 impl BlockGroup {
-    fn new(array_type: u32, element_size: usize) -> Self {
+    fn new(array_type: u32, element_size: usize, window_index: u32) -> Self {
         Self {
             array_type,
             element_size: element_size.max(1),
+            window_index,
         }
     }
 
@@ -439,17 +442,13 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
     where
         WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
-        let group = BlockGroup::new(array_type, element_size);
-        if item_byte_size > self.store.max_block_size {
-            self.add_isolated_block(group, item_byte_size, true, write_action)
-        } else {
-            self.add_normal_item(group, item_byte_size, write_action)
-        }
+        self.add_item_to_window(array_type, 0, item_byte_size, element_size, write_action)
     }
 
-    pub(crate) fn add_array_as_block<WriteAction>(
+    pub(crate) fn add_item_to_window<WriteAction>(
         &mut self,
         array_type: u32,
+        window_index: u32,
         item_byte_size: usize,
         element_size: usize,
         write_action: WriteAction,
@@ -457,8 +456,12 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
     where
         WriteAction: FnOnce(&mut Vec<u8>) -> IonResult<()>,
     {
-        let group = BlockGroup::new(array_type, element_size);
-        self.add_isolated_block(group, item_byte_size, false, write_action)
+        let group = BlockGroup::new(array_type, element_size, window_index);
+        if item_byte_size > self.store.max_block_size {
+            self.add_isolated_block(group, item_byte_size, true, write_action)
+        } else {
+            self.add_normal_item(group, item_byte_size, write_action)
+        }
     }
 
     fn add_isolated_block<WriteAction>(
@@ -659,6 +662,7 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
                     payload_size: block.bytes.len() as u64,
                     uncompressed_len_bytes: block.raw_len,
                     checksum: block.checksum,
+                    ..Default::default()
                 },
             )?;
             self.payload_bytes += block.bytes.len() as u64;
@@ -694,8 +698,8 @@ mod tests {
 
     #[test]
     fn block_group_keeps_array_type_and_element_size() {
-        let mz = BlockGroup::new(1000514, 8);
-        let intensity = BlockGroup::new(1000515, 4);
+        let mz = BlockGroup::new(1000514, 8, 0);
+        let intensity = BlockGroup::new(1000515, 4, 0);
         assert_ne!(mz, intensity);
         assert_eq!(mz.stride(), Stride::EightBytes);
         assert_eq!(intensity.stride(), Stride::FourBytes);
@@ -766,8 +770,8 @@ mod tests {
 
     #[test]
     fn open_blocks_insert_take_roundtrip() {
-        let group = BlockGroup::new(1000514, 4);
-        let other = BlockGroup::new(1000515, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
+        let other = BlockGroup::new(1000515, 4, 0);
         let mut open = OpenBlocks::new();
         assert!(!open.is_open(group));
         open.insert(
@@ -788,7 +792,7 @@ mod tests {
 
     #[test]
     fn open_blocks_byte_len() {
-        let group = BlockGroup::new(1000514, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
         let mut open = OpenBlocks::new();
         assert_eq!(open.byte_len(group), 0);
         open.insert(
@@ -805,7 +809,7 @@ mod tests {
 
     #[test]
     fn block_store_ensure_open_block_creates_new() {
-        let group = BlockGroup::new(1000514, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
         let mut store = BlockStore::new(1024);
         assert_eq!(store.block_count(), 0);
         store.ensure_open_block(group, 16).unwrap();
@@ -815,7 +819,7 @@ mod tests {
 
     #[test]
     fn block_store_ensure_open_block_is_idempotent() {
-        let group = BlockGroup::new(1000514, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
         let mut store = BlockStore::new(1024);
         store.ensure_open_block(group, 16).unwrap();
         store.ensure_open_block(group, 16).unwrap();
@@ -824,14 +828,14 @@ mod tests {
 
     #[test]
     fn block_store_would_overflow_empty_block_returns_false() {
-        let group = BlockGroup::new(1000514, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
         let store = BlockStore::new(16);
         assert!(!store.would_overflow(group, 20));
     }
 
     #[test]
     fn block_store_would_overflow_detects_threshold() {
-        let group = BlockGroup::new(1000514, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
         let mut store = BlockStore::new(16);
         store.ensure_open_block(group, 12).unwrap();
         store
@@ -846,7 +850,7 @@ mod tests {
 
     #[test]
     fn block_store_append_returns_correct_element_offsets() {
-        let group = BlockGroup::new(1000514, 8);
+        let group = BlockGroup::new(1000514, 8, 0);
         let mut store = BlockStore::new(1024);
         store.ensure_open_block(group, 24).unwrap();
         let (_, off0) = store
@@ -874,7 +878,7 @@ mod tests {
 
     #[test]
     fn block_store_open_isolated_block_replaces_open_block() {
-        let group = BlockGroup::new(1000514, 4);
+        let group = BlockGroup::new(1000514, 4, 0);
         let mut store = BlockStore::new(1024);
         store.ensure_open_block(group, 8).unwrap();
         let first_id = store.open_blocks.get_mut(group).unwrap().block_id;
@@ -908,9 +912,9 @@ mod tests {
 
     #[test]
     fn block_store_different_groups_independent() {
-        let mz = BlockGroup::new(1000514, 8);
-        let intensity = BlockGroup::new(1000515, 4);
-        let absent = BlockGroup::new(1000516, 2);
+        let mz = BlockGroup::new(1000514, 8, 0);
+        let intensity = BlockGroup::new(1000515, 4, 0);
+        let absent = BlockGroup::new(1000516, 2, 0);
         let mut store = BlockStore::new(1024);
         store.ensure_open_block(mz, 8).unwrap();
         store.ensure_open_block(intensity, 8).unwrap();
@@ -982,28 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn add_array_as_block_stays_on_parallel_path() {
-        let mut output = VecOutput(Vec::new());
-        let mut builder = BlockWriter::new(
-            &mut output,
-            64 * 1024 * 1024,
-            CompressionMode::<PassthroughCompressor>::Raw,
-            PackingId::Raw,
-        );
-        builder
-            .add_array_as_block(1, 8, 8, |buf| {
-                buf.extend_from_slice(&[1u8; 8]);
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(builder.pending.len(), 1);
-        assert!(
-            !builder.pending[0].compress_sequentially,
-            "split segment blocks must stay on the parallel path"
-        );
-    }
-
-    #[test]
     fn same_stride_different_array_types_get_different_blocks() {
         let mut output = VecOutput(Vec::new());
         let mut builder = BlockWriter::new(
@@ -1031,6 +1013,44 @@ mod tests {
             "different array types must never share a block"
         );
         assert_eq!(builder.finish().unwrap().block_count, 2);
+    }
+
+    #[test]
+    fn same_type_different_windows_get_different_blocks() {
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            64 * 1024 * 1024,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        let array_type = 1000514;
+        let (window_0_block, _) = builder
+            .add_item_to_window(array_type, 0, 8, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        let (window_1_block, _) = builder
+            .add_item_to_window(array_type, 1, 8, 4, |buf| {
+                buf.extend_from_slice(&[0u8; 8]);
+                Ok(())
+            })
+            .unwrap();
+        assert_ne!(
+            window_0_block, window_1_block,
+            "different windows must never share a block"
+        );
+        let block_count = builder.finish().unwrap().block_count as usize;
+        assert_eq!(block_count, 2);
+
+        let directory_start = output.0.len() - block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
+        let reserved_tail = |block_id: u32| -> u32 {
+            let at = directory_start + block_id as usize * BLOCK_DIRECTORY_ENTRY_SIZE + 28;
+            u32::from_le_bytes(output.0[at..at + 4].try_into().unwrap())
+        };
+        assert_eq!(reserved_tail(window_0_block), 0, "block directory tail must be reserved zero");
+        assert_eq!(reserved_tail(window_1_block), 0, "block directory tail must be reserved zero");
     }
 
     #[test]

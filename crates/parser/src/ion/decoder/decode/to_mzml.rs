@@ -54,15 +54,10 @@ impl<'d> MzmlConverter<'d> {
         global_lookup.get_param_rows_into(&owner_rows, run_id, &policy, &mut param_buffer);
         let (cv_params, user_params) = parse_cv_and_user_params(&param_buffer);
 
-        let spec_meta = decoder.spectrum_metadata()?;
-        let chrom_meta = decoder.chromatogram_metadata()?;
-        let spec_refs: Vec<&Metadatum> = spec_meta.iter().collect();
-        let chrom_refs: Vec<&Metadatum> = chrom_meta.iter().collect();
-
         let spectrum_list =
-            parse_spectrum_list(&spec_refs, &ChildrenLookup::new(&spec_meta), &policy);
+            assemble_spectrum_list(&decoder.spectrum_metadata_grouped()?, &policy);
         let chromatogram_list =
-            parse_chromatogram_list(&chrom_refs, &ChildrenLookup::new(&chrom_meta), &policy);
+            assemble_chromatogram_list(&decoder.chromatogram_metadata_grouped()?, &policy);
 
         let source_file_ref_list = parse_run_source_file_refs(&owner_rows, &global_lookup, run_id);
 
@@ -137,6 +132,55 @@ impl<'d> MzmlConverter<'d> {
 
         Ok(mzml)
     }
+}
+
+fn assemble_spectrum_list(
+    groups: &[Vec<Metadatum>],
+    policy: &DefaultMetadataPolicy,
+) -> Option<SpectrumList> {
+    let mut combined: Option<SpectrumList> = None;
+    let mut index_base = 0u32;
+    for group in groups {
+        let refs: Vec<&Metadatum> = group.iter().collect();
+        let Some(list) = parse_spectrum_list(&refs, &ChildrenLookup::new(group), policy, index_base)
+        else {
+            continue;
+        };
+        index_base += list.spectra.len() as u32;
+        match combined.as_mut() {
+            None => combined = Some(list),
+            Some(existing) => existing.spectra.extend(list.spectra),
+        }
+    }
+    if let Some(list) = combined.as_mut() {
+        list.count = Some(list.spectra.len());
+    }
+    combined
+}
+
+fn assemble_chromatogram_list(
+    groups: &[Vec<Metadatum>],
+    policy: &DefaultMetadataPolicy,
+) -> Option<ChromatogramList> {
+    let mut combined: Option<ChromatogramList> = None;
+    let mut index_base = 0u32;
+    for group in groups {
+        let refs: Vec<&Metadatum> = group.iter().collect();
+        let Some(list) =
+            parse_chromatogram_list(&refs, &ChildrenLookup::new(group), policy, index_base)
+        else {
+            continue;
+        };
+        index_base += list.chromatograms.len() as u32;
+        match combined.as_mut() {
+            None => combined = Some(list),
+            Some(existing) => existing.chromatograms.extend(list.chromatograms),
+        }
+    }
+    if let Some(list) = combined.as_mut() {
+        list.count = Some(list.chromatograms.len());
+    }
+    combined
 }
 
 pub(crate) trait BinaryArrayOwner {
@@ -322,24 +366,24 @@ fn raw_to_vec<T>(raw: &[u8], elem_size: usize, read: impl Fn(&[u8]) -> T) -> Ion
     Ok(out)
 }
 
-fn decoded_bytes_to_binary_data(bytes: &[u8], dtype: u8) -> IonResult<BinaryData> {
+pub(crate) fn decoded_bytes_to_binary_data(bytes: &[u8], dtype: u8) -> IonResult<NumericArray> {
     match dtype {
-        FILE_DTYPE_F64 => Ok(BinaryData::F64(raw_to_vec(bytes, 8, |c| {
+        FILE_DTYPE_F64 => Ok(NumericArray::F64(raw_to_vec(bytes, 8, |c| {
             f64::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_F32 => Ok(BinaryData::F32(raw_to_vec(bytes, 4, |c| {
+        FILE_DTYPE_F32 => Ok(NumericArray::F32(raw_to_vec(bytes, 4, |c| {
             f32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_F16 => Ok(BinaryData::F16(raw_to_vec(bytes, 2, |c| {
+        FILE_DTYPE_F16 => Ok(NumericArray::F16(raw_to_vec(bytes, 2, |c| {
             u16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I16 => Ok(BinaryData::I16(raw_to_vec(bytes, 2, |c| {
+        FILE_DTYPE_I16 => Ok(NumericArray::I16(raw_to_vec(bytes, 2, |c| {
             i16::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I32 => Ok(BinaryData::I32(raw_to_vec(bytes, 4, |c| {
+        FILE_DTYPE_I32 => Ok(NumericArray::I32(raw_to_vec(bytes, 4, |c| {
             i32::from_le_bytes(c.try_into().unwrap())
         })?)),
-        FILE_DTYPE_I64 => Ok(BinaryData::I64(raw_to_vec(bytes, 8, |c| {
+        FILE_DTYPE_I64 => Ok(NumericArray::I64(raw_to_vec(bytes, 8, |c| {
             i64::from_le_bytes(c.try_into().unwrap())
         })?)),
         _ => Err(IonError::from(format!(

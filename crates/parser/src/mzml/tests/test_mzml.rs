@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{BinaryData, MzML, NumericType},
+    mzml::structs::{NumericArray, MzML, NumericType},
     utilities::test::{CvRefMode, assert_cv, mzml, spectrum_precursor_list, spectrum_scan_list},
 };
 
@@ -888,8 +888,8 @@ fn anpc_mzml_spectrum_scan_1_binaries() {
     );
     assert_eq!(mz.numeric_type, Some(NumericType::Float64));
     match mz.binary.as_ref().expect("mz binary present") {
-        BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
-        other => panic!("mz expected BinaryData::F64, got {other:?}"),
+        NumericArray::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
+        other => panic!("mz expected NumericArray::F64, got {other:?}"),
     }
     assert!(
         it.cv_params
@@ -898,8 +898,8 @@ fn anpc_mzml_spectrum_scan_1_binaries() {
     );
     assert_eq!(it.numeric_type, Some(NumericType::Float32));
     match it.binary.as_ref().expect("intensity binary present") {
-        BinaryData::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
-        other => panic!("intensity expected BinaryData::F32, got {other:?}"),
+        NumericArray::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
+        other => panic!("intensity expected NumericArray::F32, got {other:?}"),
     }
 }
 
@@ -930,8 +930,8 @@ fn anpc_mzml_spectrum_scan_3476_binaries() {
     );
     assert_eq!(mz.numeric_type, Some(NumericType::Float64));
     match mz.binary.as_ref().expect("mz binary present") {
-        BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
-        other => panic!("mz expected BinaryData::F64, got {other:?}"),
+        NumericArray::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
+        other => panic!("mz expected NumericArray::F64, got {other:?}"),
     }
     assert!(
         it.cv_params
@@ -940,8 +940,8 @@ fn anpc_mzml_spectrum_scan_3476_binaries() {
     );
     assert_eq!(it.numeric_type, Some(NumericType::Float32));
     match it.binary.as_ref().expect("intensity binary present") {
-        BinaryData::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
-        other => panic!("intensity expected BinaryData::F32, got {other:?}"),
+        NumericArray::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
+        other => panic!("intensity expected NumericArray::F32, got {other:?}"),
     }
 }
 
@@ -976,8 +976,8 @@ fn anpc_mzml_chromatogram_tic_binaries() {
     );
     assert_eq!(time.numeric_type, Some(NumericType::Float64));
     match time.binary.as_ref().expect("time binary present") {
-        BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
-        other => panic!("time expected BinaryData::F64, got {other:?}"),
+        NumericArray::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
+        other => panic!("time expected NumericArray::F64, got {other:?}"),
     }
     assert!(
         inten
@@ -987,8 +987,8 @@ fn anpc_mzml_chromatogram_tic_binaries() {
     );
     assert_eq!(inten.numeric_type, Some(NumericType::Float32));
     match inten.binary.as_ref().expect("intensity binary present") {
-        BinaryData::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
-        other => panic!("intensity expected BinaryData::F32, got {other:?}"),
+        NumericArray::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
+        other => panic!("intensity expected NumericArray::F32, got {other:?}"),
     }
     assert!(
         ms_level
@@ -998,8 +998,8 @@ fn anpc_mzml_chromatogram_tic_binaries() {
     );
     assert_eq!(ms_level.numeric_type, Some(NumericType::Int64));
     match ms_level.binary.as_ref().expect("ms level binary present") {
-        BinaryData::I64(v) => assert_eq!(&v[..EXPECTED_0_9_I64.len()], &EXPECTED_0_9_I64),
-        other => panic!("ms level expected BinaryData::I64, got {other:?}"),
+        NumericArray::I64(v) => assert_eq!(&v[..EXPECTED_0_9_I64.len()], &EXPECTED_0_9_I64),
+        other => panic!("ms level expected NumericArray::I64, got {other:?}"),
     }
 }
 
@@ -1035,8 +1035,8 @@ fn anpc_mzml_chromatogram_bpc_binaries() {
     assert_eq!(time.numeric_type, Some(NumericType::Float64));
 
     match time.binary.as_ref().expect("time binary present") {
-        BinaryData::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
-        other => panic!("time expected BinaryData::F64, got {other:?}"),
+        NumericArray::F64(v) => assert_eq!(&v[..EXPECTED_0_9_F64.len()], &EXPECTED_0_9_F64),
+        other => panic!("time expected NumericArray::F64, got {other:?}"),
     }
     assert!(
         inten
@@ -1046,8 +1046,8 @@ fn anpc_mzml_chromatogram_bpc_binaries() {
     );
     assert_eq!(inten.numeric_type, Some(NumericType::Float32));
     match inten.binary.as_ref().expect("intensity binary present") {
-        BinaryData::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
-        other => panic!("intensity expected BinaryData::F32, got {other:?}"),
+        NumericArray::F32(v) => assert_eq!(&v[..EXPECTED_0_9_F32.len()], &EXPECTED_0_9_F32),
+        other => panic!("intensity expected NumericArray::F32, got {other:?}"),
     }
     assert!(
         ms_level
@@ -1057,7 +1057,7 @@ fn anpc_mzml_chromatogram_bpc_binaries() {
     );
     assert_eq!(ms_level.numeric_type, Some(NumericType::Int64));
     match ms_level.binary.as_ref().expect("ms level binary present") {
-        BinaryData::I64(v) => assert_eq!(&v[..EXPECTED_0_9_I64.len()], &EXPECTED_0_9_I64),
-        other => panic!("ms level expected BinaryData::I64, got {other:?}"),
+        NumericArray::I64(v) => assert_eq!(&v[..EXPECTED_0_9_I64.len()], &EXPECTED_0_9_I64),
+        other => panic!("ms level expected NumericArray::I64, got {other:?}"),
     }
 }

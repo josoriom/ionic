@@ -11,7 +11,7 @@ use proptest::prelude::*;
 fn roundtrip_f64_array() {
     let values = vec![1.0_f64, -2.5, 0.0, f64::MAX, f64::MIN, std::f64::consts::PI];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let got = bin.to_f64_vec();
@@ -22,7 +22,7 @@ fn roundtrip_f64_array() {
 fn roundtrip_f32_array() {
     let values = vec![1.0_f32, -2.5, 0.0, f32::MAX, f32::MIN, std::f32::consts::PI];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Float32, BinaryData::F32(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float32, NumericArray::F32(values.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let got = bin.to_f64_vec();
@@ -33,19 +33,18 @@ fn roundtrip_f32_array() {
 #[test]
 fn array_filter_label_matches_applied_transform() {
     let raw_filter = 0u8;
-    let delta_filter = 2u8;
     let f64_dtype = 1u8;
     let f32_dtype = 2u8;
 
     let f32_values = vec![10.0_f32, 11.0, 12.0, 13.0];
     let f32_len = f32_values.len();
     let f32_mzml =
-        mzml_with_single_array(NumericType::Float32, BinaryData::F32(f32_values), f32_len);
+        mzml_with_single_array(NumericType::Float32, NumericArray::F32(f32_values), f32_len);
 
     let f64_values = vec![100.0_f64, 100.5, 101.0, 101.5];
     let f64_len = f64_values.len();
     let f64_mzml =
-        mzml_with_single_array(NumericType::Float64, BinaryData::F64(f64_values), f64_len);
+        mzml_with_single_array(NumericType::Float64, NumericArray::F64(f64_values), f64_len);
 
     let f32_bytes = encode_to_ion(&f32_mzml, 9, false);
     let f32_decoder = IonReader::open(&f32_bytes, ReadOptions::default()).expect("open f32 ion");
@@ -59,33 +58,25 @@ fn array_filter_label_matches_applied_transform() {
         f32_refs
             .iter()
             .any(|a| a.dtype == f32_dtype && a.array_filter == raw_filter),
-        "an f32 array must be tagged raw, not delta"
+        "f32 intensity must be tagged raw"
     );
     assert!(
         f64_refs
             .iter()
-            .any(|a| a.dtype == f64_dtype && a.array_filter == delta_filter),
-        "an f64 array must carry the delta filter"
+            .any(|a| a.dtype == f64_dtype && a.array_filter == raw_filter),
+        "f64 intensity must be tagged raw (intensity is never delta-shuffled)"
     );
-    for aref in f32_refs.iter().chain(f64_refs.iter()) {
-        if aref.array_filter == delta_filter {
-            assert_eq!(
-                aref.dtype, f64_dtype,
-                "delta filter may only tag f64 arrays"
-            );
-        }
-    }
 }
 
 #[test]
 fn roundtrip_i64_array() {
     let values = vec![0_i64, 1, -1, i64::MAX, i64::MIN, 42];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Int64, BinaryData::I64(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Int64, NumericArray::I64(values.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     match bin {
-        BinaryData::I64(got) => assert_eq!(got, &values),
+        NumericArray::I64(got) => assert_eq!(got, &values),
         other => {
             let got = other.to_f64_vec();
             let expected: Vec<f64> = values.iter().map(|v| *v as f64).collect();
@@ -101,11 +92,11 @@ fn roundtrip_i64_array() {
 fn roundtrip_i32_array() {
     let values = vec![0_i32, 1, -1, i32::MAX, i32::MIN, 42];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Int32, BinaryData::I32(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Int32, NumericArray::I32(values.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     match bin {
-        BinaryData::I32(got) => assert_eq!(got, &values),
+        NumericArray::I32(got) => assert_eq!(got, &values),
         other => {
             let got = other.to_f64_vec();
             let expected: Vec<f64> = values.iter().map(|v| *v as f64).collect();
@@ -118,11 +109,11 @@ fn roundtrip_i32_array() {
 fn roundtrip_i16_array() {
     let values = vec![0_i16, 1, -1, i16::MAX, i16::MIN, 42];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Int16, BinaryData::I16(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Int16, NumericArray::I16(values.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     match bin {
-        BinaryData::I16(got) => assert_eq!(got, &values),
+        NumericArray::I16(got) => assert_eq!(got, &values),
         other => {
             let got = other.to_f64_vec();
             let expected: Vec<f64> = values.iter().map(|v| *v as f64).collect();
@@ -133,12 +124,12 @@ fn roundtrip_i16_array() {
 
 #[test]
 fn roundtrip_single_element_per_type() {
-    let cases: Vec<(NumericType, BinaryData)> = vec![
-        (NumericType::Float64, BinaryData::F64(vec![42.0])),
-        (NumericType::Float32, BinaryData::F32(vec![42.0])),
-        (NumericType::Int64, BinaryData::I64(vec![42])),
-        (NumericType::Int32, BinaryData::I32(vec![42])),
-        (NumericType::Int16, BinaryData::I16(vec![42])),
+    let cases: Vec<(NumericType, NumericArray)> = vec![
+        (NumericType::Float64, NumericArray::F64(vec![42.0])),
+        (NumericType::Float32, NumericArray::F32(vec![42.0])),
+        (NumericType::Int64, NumericArray::I64(vec![42])),
+        (NumericType::Int32, NumericArray::I32(vec![42])),
+        (NumericType::Int16, NumericArray::I16(vec![42])),
     ];
 
     for (nt, bin) in cases {
@@ -157,7 +148,7 @@ fn roundtrip_single_element_per_type() {
 fn roundtrip_at_compression_levels() {
     let values = vec![100.0_f64, 200.0, 300.0, 400.0, 500.0];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
 
     for level in [0, 3, 10, 22] {
         let mut buf = Vec::new();
@@ -180,7 +171,7 @@ fn roundtrip_at_compression_levels() {
 fn roundtrip_force_f32_downcasts() {
     let values = vec![100.0_f64, 200.0, 300.0];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
 
     let mut buf = Vec::new();
     encode(&mzml, 0, true, &mut buf).expect("encode with force_f32");
@@ -200,7 +191,7 @@ fn roundtrip_force_f32_downcasts() {
 
 fn encode_decode_mz_compressed(mz: Vec<f64>) -> Vec<f64> {
     let len = mz.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(mz), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(mz), len);
     let buf = encode_to_ion(&mzml, 3, false);
     let decoded = decode_ion(&buf).unwrap();
     first_spectrum_binary(&decoded).unwrap().to_f64_vec()
@@ -276,7 +267,7 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
 }
 
 #[test]
-fn delta_shuffle_applied_to_mz_and_intensity() {
+fn delta_on_mz_raw_on_intensity() {
     use ionic::ion::IonReader as IonDecoder;
     let mz: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
     let intensity: Vec<f64> = (0..100).map(|i| (i * 10) as f64).collect();
@@ -291,8 +282,8 @@ fn delta_shuffle_applied_to_mz_and_intensity() {
     let int_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
     assert_eq!(mz_ref.array_filter, 2, "m/z must use DeltaShuffle filter");
     assert_eq!(
-        int_ref.array_filter, 2,
-        "intensity must use DeltaShuffle filter"
+        int_ref.array_filter, 0,
+        "intensity must use raw filter (intensity is never delta-shuffled)"
     );
     let mut got_mz = Vec::new();
     decoder.read_array(mz_ref, &mut got_mz).unwrap();
@@ -311,7 +302,7 @@ fn format_version_always_matches_current() {
     use ionic::ion::{HEADER_FORMAT_VERSION_OFFSET, format::CURRENT_VERSION};
     let values = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
     let len = values.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
     for level in [0u8, 3, 22] {
         let buf = encode_to_ion(&mzml, level, false);
         let format_version = u16::from_le_bytes(
@@ -387,7 +378,7 @@ proptest! {
         let len = values.len();
         let mzml = mzml_with_single_array(
             NumericType::Float64,
-            BinaryData::F64(values.clone()),
+            NumericArray::F64(values.clone()),
             len,
         );
         let out = roundtrip(&mzml);
@@ -460,13 +451,13 @@ proptest! {
         let len = values.len();
         let mzml = mzml_with_single_array(
             NumericType::Int32,
-            BinaryData::I32(values.clone()),
+            NumericArray::I32(values.clone()),
             len,
         );
         let out = roundtrip(&mzml);
         let bin = first_spectrum_binary(&out).expect("should have binary data");
         match bin {
-            BinaryData::I32(got) => prop_assert_eq!(got, &values),
+            NumericArray::I32(got) => prop_assert_eq!(got, &values),
             other => {
                 let got = other.to_f64_vec();
                 let expected: Vec<f64> = values.iter().map(|v| *v as f64).collect();
@@ -482,13 +473,13 @@ proptest! {
         let len = values.len();
         let mzml = mzml_with_single_array(
             NumericType::Int16,
-            BinaryData::I16(values.clone()),
+            NumericArray::I16(values.clone()),
             len,
         );
         let out = roundtrip(&mzml);
         let bin = first_spectrum_binary(&out).expect("should have binary data");
         match bin {
-            BinaryData::I16(got) => prop_assert_eq!(got, &values),
+            NumericArray::I16(got) => prop_assert_eq!(got, &values),
             other => {
                 let got = other.to_f64_vec();
                 let expected: Vec<f64> = values.iter().map(|v| *v as f64).collect();

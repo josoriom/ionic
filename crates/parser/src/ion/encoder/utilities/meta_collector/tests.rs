@@ -367,14 +367,11 @@ fn array_policy_no_force_when_disabled() {
 
 #[test]
 fn group_local_node_ids_across_group_boundaries() {
-    use crate::ion::encoder::encode::{
-        DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
-        TARGET_BLOCK_UNCOMPRESSED_BYTES,
-    };
+    use crate::ion::encoder::encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES};
     use crate::ion::encoder::ion_writer::write_mzml_to_ion;
     use crate::ion::encoder::utilities::SectionStorage;
     use crate::mzml::structs::{
-        BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+        NumericArray, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
         SpectrumList,
     };
 
@@ -386,7 +383,7 @@ fn group_local_node_ids_across_group_boundaries() {
                 name: String::new(),
                 ..Default::default()
             }],
-            binary: Some(BinaryData::F64(data)),
+            binary: Some(NumericArray::F64(data)),
             ..Default::default()
         }
     }
@@ -435,7 +432,7 @@ fn group_local_node_ids_across_group_boundaries() {
             block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: false,
             section_storage: SectionStorage::Memory,
-            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+            mz_window: 0.0,
         },
         &mut output,
     )

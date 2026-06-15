@@ -35,7 +35,7 @@ fn parse_chromatogram_list_from_test_file() -> ChromatogramList {
     let meta_ref: Vec<&Metadatum> = meta.iter().collect();
     let children_lookup = ChildrenLookup::new(&meta);
     let policy = DefaultMetadataPolicy;
-    parse_chromatogram_list(&meta_ref, &children_lookup, &policy)
+    parse_chromatogram_list(&meta_ref, &children_lookup, &policy, 0)
         .expect("parse_chromatogram_list returned None")
 }
 

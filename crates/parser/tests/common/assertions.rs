@@ -524,15 +524,15 @@ pub(crate) fn rel_close_f64(a: f64, b: f64, eps_rel: f64, context: &str) {
     );
 }
 
-pub(crate) fn assert_binary_semantic_eq(left: &BinaryData, right: &BinaryData, context: &str) {
+pub(crate) fn assert_binary_semantic_eq(left: &NumericArray, right: &NumericArray, context: &str) {
     match (left, right) {
-        (BinaryData::F64(l), BinaryData::F64(r)) => {
+        (NumericArray::F64(l), NumericArray::F64(r)) => {
             assert_eq!(l.len(), r.len(), "{context}: f64 len mismatch");
             for (i, (lv, rv)) in l.iter().zip(r.iter()).enumerate() {
                 rel_close_f64(*lv, *rv, EPS_REL_F64, &format!("{context} f64[{i}]"));
             }
         }
-        (BinaryData::F32(l), BinaryData::F32(r)) => {
+        (NumericArray::F32(l), NumericArray::F32(r)) => {
             assert_eq!(l.len(), r.len(), "{context}: f32 len mismatch");
             for (i, (lv, rv)) in l.iter().zip(r.iter()).enumerate() {
                 rel_close_f64(
@@ -543,23 +543,23 @@ pub(crate) fn assert_binary_semantic_eq(left: &BinaryData, right: &BinaryData, c
                 );
             }
         }
-        (BinaryData::F16(l), BinaryData::F16(r)) => {
+        (NumericArray::F16(l), NumericArray::F16(r)) => {
             assert_eq!(l, r, "{context}: f16 payload mismatch")
         }
-        (BinaryData::I64(l), BinaryData::I64(r)) => {
+        (NumericArray::I64(l), NumericArray::I64(r)) => {
             assert_eq!(l, r, "{context}: i64 payload mismatch")
         }
-        (BinaryData::I32(l), BinaryData::I32(r)) => {
+        (NumericArray::I32(l), NumericArray::I32(r)) => {
             assert_eq!(l, r, "{context}: i32 payload mismatch")
         }
-        (BinaryData::I16(l), BinaryData::I16(r)) => {
+        (NumericArray::I16(l), NumericArray::I16(r)) => {
             assert_eq!(l, r, "{context}: i16 payload mismatch")
         }
         (l, r) => panic!("{context}: binary variant mismatch: left={l:?} right={r:?}"),
     }
 }
 
-pub(crate) fn binary_semantically_empty(binary: Option<&BinaryData>) -> bool {
+pub(crate) fn binary_semantically_empty(binary: Option<&NumericArray>) -> bool {
     match binary {
         None => true,
         Some(binary) => binary.is_empty(),

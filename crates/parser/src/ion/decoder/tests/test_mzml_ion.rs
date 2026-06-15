@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{BinaryData, MzML},
+    mzml::structs::{NumericArray, MzML},
     utilities::test::{
         CvRefMode, assert_cv, parse_ion_as_mzml, spectrum_precursor_list, spectrum_scan_list,
     },
@@ -877,7 +877,7 @@ fn spectrum0_mz_array_decodes_to_0_to_9_f64() {
 
     let bin = bda0.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F64(xs) => {
+        NumericArray::F64(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -888,7 +888,7 @@ fn spectrum0_mz_array_decodes_to_0_to_9_f64() {
                 [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F64, got {:?}", other),
+        other => panic!("expected NumericArray::F64, got {:?}", other),
     }
 }
 
@@ -905,7 +905,7 @@ fn spectrum0_intensity_array_decodes_to_0_to_9_f32() {
 
     let bin = bda1.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F32(xs) => {
+        NumericArray::F32(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -916,7 +916,7 @@ fn spectrum0_intensity_array_decodes_to_0_to_9_f32() {
                 [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F32, got {:?}", other),
+        other => panic!("expected NumericArray::F32, got {:?}", other),
     }
 }
 
@@ -933,7 +933,7 @@ fn chromatogram_tic_time_array_decodes_to_0_to_9_f64() {
 
     let bin = bda0.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F64(xs) => {
+        NumericArray::F64(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -944,7 +944,7 @@ fn chromatogram_tic_time_array_decodes_to_0_to_9_f64() {
                 [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F64, got {:?}", other),
+        other => panic!("expected NumericArray::F64, got {:?}", other),
     }
 }
 
@@ -961,7 +961,7 @@ fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
 
     let bin = bda1.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F32(xs) => {
+        NumericArray::F32(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -972,7 +972,7 @@ fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
                 [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F32, got {:?}", other),
+        other => panic!("expected NumericArray::F32, got {:?}", other),
     }
 }
 
@@ -988,7 +988,7 @@ fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
         .binary_data_arrays[2];
     let bin = bda2.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::I64(xs) => {
+        NumericArray::I64(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -996,6 +996,6 @@ fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
             );
             assert_eq!(&xs[..10], &[0, 0, 0, 0, 0, 10, 30, 50, 70, 90]);
         }
-        other => panic!("expected BinaryData::I64, got {:?}", other),
+        other => panic!("expected NumericArray::I64, got {:?}", other),
     }
 }

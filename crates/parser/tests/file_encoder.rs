@@ -113,13 +113,13 @@ fn large_array_roundtrip_stress() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(mz.clone()),
+                                NumericArray::F64(mz.clone()),
                                 Some(n),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(intensity.clone()),
+                                NumericArray::F64(intensity.clone()),
                                 Some(n),
                             ),
                         ],
@@ -165,13 +165,13 @@ fn build_multi_spectrum_mzml(n_spectra: usize, n_points: usize) -> MzML {
                         synthetic_binary_data_array(
                             "MS:1000514",
                             NumericType::Float64,
-                            BinaryData::F64(mz),
+                            NumericArray::F64(mz),
                             Some(n_points),
                         ),
                         synthetic_binary_data_array(
                             "MS:1000515",
                             NumericType::Float64,
-                            BinaryData::F64(intensity),
+                            NumericArray::F64(intensity),
                             Some(n_points),
                         ),
                     ],

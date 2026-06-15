@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
 pub struct SpectrumSummary {
-    pub rt_seconds: f64,
+    pub rt: f64,
+    pub rt_unit: u8,
     pub base_peak_mz: f64,
     pub selected_ion_mz: f64,
     pub base_peak_int: f64,

@@ -124,6 +124,19 @@ impl MetaGroupReader {
         Ok(rows)
     }
 
+    pub(crate) fn read_all_grouped(&self) -> IonResult<Vec<Vec<Metadatum>>> {
+        let mut groups = Vec::with_capacity(self.directory.len());
+        let mut seen = MetaCounts::default();
+        for group_index in 0..self.directory.len() as u64 {
+            let bytes = self.decode_group(group_index)?;
+            let (meta_count, numeric_count, string_count) = read_group_header(&bytes)?;
+            seen.add(meta_count, numeric_count, string_count);
+            groups.push(self.parse_group(&bytes, group_index)?);
+        }
+        self.check_totals(&seen)?;
+        Ok(groups)
+    }
+
     fn check_totals(&self, seen: &MetaCounts) -> IonResult<()> {
         if seen.rows != self.totals.rows
             || seen.numeric != self.totals.numeric

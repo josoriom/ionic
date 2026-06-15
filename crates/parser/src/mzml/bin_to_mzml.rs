@@ -1159,12 +1159,12 @@ fn write_binary_data_array(
         if let Some(nt) = bda.numeric_type {
             let ok = matches!(
                 (binary, nt),
-                (BinaryData::F64(_), NumericType::Float64)
-                    | (BinaryData::F32(_), NumericType::Float32)
-                    | (BinaryData::F16(_), NumericType::Float16)
-                    | (BinaryData::I64(_), NumericType::Int64)
-                    | (BinaryData::I32(_), NumericType::Int32)
-                    | (BinaryData::I16(_), NumericType::Int16)
+                (NumericArray::F64(_), NumericType::Float64)
+                    | (NumericArray::F32(_), NumericType::Float32)
+                    | (NumericArray::F16(_), NumericType::Float16)
+                    | (NumericArray::I64(_), NumericType::Int64)
+                    | (NumericArray::I32(_), NumericType::Int32)
+                    | (NumericArray::I16(_), NumericType::Int16)
             );
             if !ok {
                 return Err(BinToMzmlError::InvalidData("binary/numeric_type mismatch"));
@@ -1172,42 +1172,42 @@ fn write_binary_data_array(
         }
 
         let (mut raw_bytes, inferred_numeric_type) = match binary {
-            BinaryData::F64(v) => {
+            NumericArray::F64(v) => {
                 let mut bytes = Vec::with_capacity(v.len() * 8);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
                 (bytes, NumericType::Float64)
             }
-            BinaryData::F32(v) => {
+            NumericArray::F32(v) => {
                 let mut bytes = Vec::with_capacity(v.len() * 4);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
                 (bytes, NumericType::Float32)
             }
-            BinaryData::F16(v) => {
+            NumericArray::F16(v) => {
                 let mut bytes = Vec::with_capacity(v.len() * 2);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
                 (bytes, NumericType::Float16)
             }
-            BinaryData::I64(v) => {
+            NumericArray::I64(v) => {
                 let mut bytes = Vec::with_capacity(v.len() * 8);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
                 (bytes, NumericType::Int64)
             }
-            BinaryData::I32(v) => {
+            NumericArray::I32(v) => {
                 let mut bytes = Vec::with_capacity(v.len() * 4);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
                 (bytes, NumericType::Int32)
             }
-            BinaryData::I16(v) => {
+            NumericArray::I16(v) => {
                 let mut bytes = Vec::with_capacity(v.len() * 2);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());

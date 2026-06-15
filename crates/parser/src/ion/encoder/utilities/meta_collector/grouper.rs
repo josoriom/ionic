@@ -6,7 +6,7 @@ use crate::{
 use super::{
     MetaParamBuffer, MetadataWriter, PackedMeta, PackedMetaBuilder, compress_bytes_if_enabled,
 };
-use super::super::sink::SectionChunk;
+use super::super::output::SectionChunk;
 
 pub(crate) struct GroupedSection {
     pub(crate) section: SectionChunk,

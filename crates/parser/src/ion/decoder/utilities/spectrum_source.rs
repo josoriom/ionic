@@ -1,15 +1,44 @@
 use crate::accessions as acc_const;
 use crate::ion::attr_meta::parse_accession_tail;
-use crate::mzml::structs::{BinaryData, CvParam, MzML, Spectrum};
+use crate::mzml::structs::{NumericArray, CvParam, MzML, Spectrum};
 
 #[inline]
 fn acc(s: Option<&str>) -> u32 {
     parse_accession_tail(s).raw()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeUnit {
+    Second,
+    Minute,
+    Millisecond,
+    Other,
+}
+
+impl TimeUnit {
+    pub(crate) fn code(self) -> u8 {
+        match self {
+            TimeUnit::Other => 0,
+            TimeUnit::Second => 1,
+            TimeUnit::Minute => 2,
+            TimeUnit::Millisecond => 3,
+        }
+    }
+
+    pub(crate) fn from_code(code: u8) -> Self {
+        match code {
+            1 => TimeUnit::Second,
+            2 => TimeUnit::Minute,
+            3 => TimeUnit::Millisecond,
+            _ => TimeUnit::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScanSummary {
     pub rt: f64,
+    pub rt_unit: TimeUnit,
     pub ms_level: u8,
     pub polarity: u8,
     pub selected_ion_mz: f64,
@@ -97,6 +126,7 @@ impl ScanSource for MzML {
 
 pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
     let mut rt = f64::NAN;
+    let mut rt_unit = TimeUnit::Other;
     let mut ms_level = spectrum
         .ms_level
         .and_then(|level| u8::try_from(level).ok())
@@ -134,13 +164,15 @@ pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
             break 'find_rt;
         };
         for scan in &scan_list.scans {
-            if let Some(v) = rt_from_params(&scan.cv_params) {
-                rt = v;
+            if let Some((value, unit)) = rt_from_params(&scan.cv_params) {
+                rt = value;
+                rt_unit = unit;
                 break 'find_rt;
             }
         }
-        if let Some(v) = rt_from_params(&scan_list.cv_params) {
-            rt = v;
+        if let Some((value, unit)) = rt_from_params(&scan_list.cv_params) {
+            rt = value;
+            rt_unit = unit;
         }
     }
 
@@ -178,6 +210,7 @@ pub(crate) fn summary_from_spectrum(spectrum: &Spectrum) -> ScanSummary {
 
     ScanSummary {
         rt,
+        rt_unit,
         ms_level,
         polarity,
         base_peak_mz,
@@ -200,37 +233,33 @@ pub(crate) fn summary_from_spectra(
 }
 
 #[inline]
-fn rt_from_params(params: &[CvParam]) -> Option<f64> {
+fn rt_from_params(params: &[CvParam]) -> Option<(f64, TimeUnit)> {
     for param in params {
         if acc(param.accession.as_deref()) == acc_const::SCAN_START_TIME {
             let value: f64 = param.value.as_deref()?.parse().ok()?;
-            return minutes_from_value(
-                value,
+            if !value.is_finite() {
+                return None;
+            }
+            let unit = time_unit_from(
                 param.unit_accession.as_deref(),
                 param.unit_name.as_deref(),
             );
+            return Some((value, unit));
         }
     }
     None
 }
 
-fn minutes_from_value(
-    value: f64,
-    unit_accession: Option<&str>,
-    unit_name: Option<&str>,
-) -> Option<f64> {
-    if !value.is_finite() {
-        return None;
-    }
+fn time_unit_from(unit_accession: Option<&str>, unit_name: Option<&str>) -> TimeUnit {
     match acc(unit_accession) {
-        acc_const::UNIT_MINUTE => Some(value),
-        acc_const::UNIT_SECOND => Some(value / 60.0),
-        acc_const::UNIT_MS => Some(value / 60_000.0),
+        acc_const::UNIT_MINUTE => TimeUnit::Minute,
+        acc_const::UNIT_SECOND => TimeUnit::Second,
+        acc_const::UNIT_MS => TimeUnit::Millisecond,
         _ => match unit_name {
-            Some("minute" | "minutes") => Some(value),
-            Some("second" | "seconds") => Some(value / 60.0),
-            Some("millisecond" | "milliseconds") => Some(value / 60_000.0),
-            _ => None,
+            Some("minute" | "minutes") => TimeUnit::Minute,
+            Some("second" | "seconds") => TimeUnit::Second,
+            Some("millisecond" | "milliseconds") => TimeUnit::Millisecond,
+            _ => TimeUnit::Other,
         },
     }
 }
@@ -245,7 +274,7 @@ fn parse_u32(s: Option<&str>) -> u32 {
     s.and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
-pub(crate) fn binary_pair(spectrum: &Spectrum) -> Option<(&BinaryData, &BinaryData)> {
+pub(crate) fn binary_pair(spectrum: &Spectrum) -> Option<(&NumericArray, &NumericArray)> {
     let list = spectrum.binary_data_array_list.as_ref()?;
     let mut mz = None;
     let mut intensity = None;
@@ -300,14 +329,14 @@ pub(crate) fn load_scan_from_spectra(
     true
 }
 
-fn extend_from_binary(data: &BinaryData, out: &mut Vec<f64>, max: usize) {
+fn extend_from_binary(data: &NumericArray, out: &mut Vec<f64>, max: usize) {
     match data {
-        BinaryData::F64(v) => out.extend_from_slice(&v[..max]),
-        BinaryData::F32(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
-        BinaryData::I16(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
-        BinaryData::I32(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
-        BinaryData::I64(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
-        BinaryData::F16(v) => out.extend(v[..max].iter().copied().map(f16_bits_to_f64)),
+        NumericArray::F64(v) => out.extend_from_slice(&v[..max]),
+        NumericArray::F32(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
+        NumericArray::I16(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
+        NumericArray::I32(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
+        NumericArray::I64(v) => out.extend(v[..max].iter().map(|&x| x as f64)),
+        NumericArray::F16(v) => out.extend(v[..max].iter().copied().map(f16_bits_to_f64)),
     }
 }
 

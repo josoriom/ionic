@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{BinaryData, MzML, NumericType},
+    mzml::structs::{NumericArray, MzML, NumericType},
     utilities::test::{
         CvRefMode, assert_cv, assert_cv_absent, assert_cv_ref, assert_software_param,
         parse_ion_as_mzml, spectrum_by_id, spectrum_description, spectrum_precursor_list,
@@ -755,8 +755,8 @@ fn tiny2_srm_mzml0_99_1_ion_s101_mz_binary_payload() {
     let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S101 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S101 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S101 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -784,8 +784,8 @@ fn tiny2_srm_mzml0_99_1_ion_s101_intensity_binary_payload() {
     let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F32(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S101 intensity: expected BinaryData::F32, got {other:?}"),
+        Some(NumericArray::F32(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S101 intensity: expected NumericArray::F32, got {other:?}"),
         None => panic!("S101 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -813,8 +813,8 @@ fn tiny2_srm_mzml0_99_1_ion_s102_mz_binary_payload() {
     let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S102 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S102 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S102 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -842,8 +842,8 @@ fn tiny2_srm_mzml0_99_1_ion_s102_intensity_binary_payload() {
     let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F32(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S102 intensity: expected BinaryData::F32, got {other:?}"),
+        Some(NumericArray::F32(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S102 intensity: expected NumericArray::F32, got {other:?}"),
         None => panic!("S102 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }

@@ -10,7 +10,7 @@ use ionic::{
         decoder::decode::ReadOptions,
         encoder::{
             encode::{
-                DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
+                WriteOptions,
                 TARGET_BLOCK_UNCOMPRESSED_BYTES,
             },
             utilities::SectionStorage,
@@ -26,7 +26,7 @@ fn config() -> WriteOptions {
         block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_storage: SectionStorage::Memory,
-        segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+        mz_window: 0.0,
     }
 }
 
@@ -70,7 +70,7 @@ fn stream_writer_roundtrips_like_mzml_writer() {
     let mzml = parse_mzml(coordinate_xml()).unwrap();
     let mut reader = MzmlReader::from_mzml(mzml.clone());
     let mut bytes = Vec::new();
-    let mut writer = IonWriter::begin(&mut bytes, config()).unwrap();
+    let mut writer = IonWriter::create(&mut bytes, config()).unwrap();
     writer.write_stream(&mut reader).unwrap();
     let decoded = decode_ion(&bytes).unwrap();
     let diffs = canonical_diff_paths(&mzml, &decoded);
@@ -82,7 +82,7 @@ fn spectrum_summary_keeps_coordinates() {
     let mzml = parse_mzml(coordinate_xml()).unwrap();
     let mut reader = MzmlReader::from_mzml(mzml);
     let mut bytes = Vec::new();
-    let mut writer = IonWriter::begin(&mut bytes, config()).unwrap();
+    let mut writer = IonWriter::create(&mut bytes, config()).unwrap();
     writer.write_stream(&mut reader).unwrap();
     let ion = IonReader::open(&bytes, ReadOptions::default()).unwrap();
     let summary = ion.spec_summary(0).unwrap();
@@ -100,7 +100,7 @@ fn file_stream_reader_roundtrips_spectra_then_chromatograms() {
     let mzml = parse_mzml(mixed_xml()).unwrap();
     let mut reader = MzmlReader::open(&path).unwrap();
     let mut bytes = Vec::new();
-    let mut writer = IonWriter::begin(&mut bytes, config()).unwrap();
+    let mut writer = IonWriter::create(&mut bytes, config()).unwrap();
     writer.write_stream(&mut reader).unwrap();
     let decoded = decode_ion(&bytes).unwrap();
     let diffs = canonical_diff_paths(&mzml, &decoded);

@@ -85,13 +85,13 @@ fn mzml_child_order_subset_of_optional_elements() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0]),
+                                NumericArray::F64(vec![100.0, 200.0]),
                                 Some(2),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0]),
+                                NumericArray::F64(vec![10.0, 20.0]),
                                 Some(2),
                             ),
                         ],
@@ -201,13 +201,13 @@ fn empty_source_file_list_is_omitted() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0]),
+                                NumericArray::F64(vec![100.0, 200.0]),
                                 Some(2),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0]),
+                                NumericArray::F64(vec![10.0, 20.0]),
                                 Some(2),
                             ),
                         ],
@@ -265,13 +265,13 @@ fn nonempty_source_file_list_is_emitted() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0]),
+                                NumericArray::F64(vec![100.0, 200.0]),
                                 Some(2),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0]),
+                                NumericArray::F64(vec![10.0, 20.0]),
                                 Some(2),
                             ),
                         ],

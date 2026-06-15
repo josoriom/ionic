@@ -9,7 +9,7 @@ use crate::{
     },
     encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
     ion::{
-        IonError, IonResult, Range,
+        IonError, IonResult, ByteRange, Range,
         attr_meta::{
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
@@ -41,9 +41,9 @@ use crate::{
             Header, parse_header,
             parse_instrument_list, parse_referenceable_param_group_list, parse_sample_list,
             parse_scan_settings_list, parse_software_list, parse_spectrum, parse_spectrum_list,
-            segment_bounds::SegmentBoundsIndex,
+            window_bounds::WindowBoundsIndex,
             spectrum_source::{
-                ScanSource, ScanSummary, f16_bits_to_f64,
+                ScanSource, ScanSummary, TimeUnit, f16_bits_to_f64,
             },
         },
     },
@@ -71,7 +71,7 @@ mod spectra;
 mod to_mzml;
 
 pub use arrays::{ArrayRef, ArrayGroup};
-pub use windows::{ArrayWindow, MzPeaks, Target, ItemSlice};
+pub use windows::{DataXY, Pixel, Select, Window, Target, ItemSlice};
 pub use to_mzml::{Metadatum, MetadatumValue};
 
 pub(crate) use arrays::{
@@ -99,19 +99,19 @@ impl Default for ReadOptions {
     }
 }
 
-pub(crate) enum SegmentBoundsCache {
+pub(crate) enum WindowBoundsCache {
     Unloaded,
     Missing,
     BadChecksum,
     Malformed(String),
-    Loaded(SegmentBoundsIndex),
+    Loaded(WindowBoundsIndex),
 }
 
 pub struct IonReader {
     pub(crate) header: Header,
     pub(crate) source: Arc<dyn ReadBytes>,
-    pub(crate) spec_segment_bounds: SegmentBoundsCache,
-    pub(crate) chrom_segment_bounds: SegmentBoundsCache,
+    pub(crate) spec_window_bounds: WindowBoundsCache,
+    pub(crate) chrom_window_bounds: WindowBoundsCache,
     pub(crate) spec_summary_buf: Arc<[u8]>,
     pub(crate) chrom_summary_buf: Arc<[u8]>,
     pub(crate) spec_entries_buf: Arc<[u8]>,
@@ -148,7 +148,7 @@ impl IonReader {
     }
 
     pub fn open_remote(
-        read: impl Fn(Range) -> IonResult<Vec<u8>> + Send + Sync + 'static,
+        read: impl Fn(ByteRange) -> IonResult<Vec<u8>> + Send + Sync + 'static,
         config: ReadOptions,
     ) -> IonResult<Self> {
         let source = Arc::new(CallbackSource::new(read)) as Arc<dyn ReadBytes>;
@@ -156,18 +156,18 @@ impl IonReader {
     }
 
     pub fn open_source(source: Arc<dyn ReadBytes>, config: ReadOptions) -> IonResult<Self> {
-        let header_buf = source.read(Range { offset: 0, length: 1024 })?;
+        let header_buf = source.read(ByteRange { offset: 0, length: 1024 })?;
         let header = parse_header(&header_buf)?;
         let block_packing_id = PackingId::from_byte(header.default_array_filter)?;
 
-        let spec_summary_buf = source.read(Range { offset: header.off_spec_summary, length: header.len_spec_summary })?;
-        let chrom_summary_buf = source.read(Range { offset: header.off_chrom_summary, length: header.len_chrom_summary })?;
-        let spec_entries_buf = source.read(Range { offset: header.off_spec_entries, length: header.len_spec_entries })?;
-        let spec_array_refs = source.read(Range { offset: header.off_spec_arrayrefs, length: header.len_spec_arrayrefs })?;
-        let chrom_entries_buf = source.read(Range { offset: header.off_chrom_entries, length: header.len_chrom_entries })?;
+        let spec_summary_buf = source.read(ByteRange { offset: header.off_spec_summary, length: header.len_spec_summary })?;
+        let chrom_summary_buf = source.read(ByteRange { offset: header.off_chrom_summary, length: header.len_chrom_summary })?;
+        let spec_entries_buf = source.read(ByteRange { offset: header.off_spec_entries, length: header.len_spec_entries })?;
+        let spec_array_refs = source.read(ByteRange { offset: header.off_spec_arrayrefs, length: header.len_spec_arrayrefs })?;
+        let chrom_entries_buf = source.read(ByteRange { offset: header.off_chrom_entries, length: header.len_chrom_entries })?;
         let chrom_array_refs =
-            source.read(Range { offset: header.off_chrom_arrayrefs, length: header.len_chrom_arrayrefs })?;
-        let global_meta_buf = source.read(Range { offset: header.off_global_meta, length: header.len_global_meta })?;
+            source.read(ByteRange { offset: header.off_chrom_arrayrefs, length: header.len_chrom_arrayrefs })?;
+        let global_meta_buf = source.read(ByteRange { offset: header.off_global_meta, length: header.len_global_meta })?;
 
         if config.verify_checksums {
             check_crc(&spec_summary_buf, header.spec_summary_crc32, "spec_summary")?;
@@ -213,7 +213,7 @@ impl IonReader {
         };
 
         let spec_meta_reader = MetaGroupReader::new(
-            Arc::from(source.read(Range { offset: header.off_spec_meta, length: header.len_spec_meta })?),
+            Arc::from(source.read(ByteRange { offset: header.off_spec_meta, length: header.len_spec_meta })?),
             header.spec_meta_group_count,
             header.meta_group_size,
             header.spectrum_count,
@@ -230,7 +230,7 @@ impl IonReader {
         )?;
 
         let chrom_meta_reader = MetaGroupReader::new(
-            Arc::from(source.read(Range { offset: header.off_chrom_meta, length: header.len_chrom_meta })?),
+            Arc::from(source.read(ByteRange { offset: header.off_chrom_meta, length: header.len_chrom_meta })?),
             header.chrom_meta_group_count,
             header.meta_group_size,
             header.chrom_count,
@@ -249,8 +249,8 @@ impl IonReader {
         Ok(Self {
             header,
             source,
-            spec_segment_bounds: SegmentBoundsCache::Unloaded,
-            chrom_segment_bounds: SegmentBoundsCache::Unloaded,
+            spec_window_bounds: WindowBoundsCache::Unloaded,
+            chrom_window_bounds: WindowBoundsCache::Unloaded,
             spec_summary_buf: Arc::from(spec_summary_buf),
             chrom_summary_buf: Arc::from(chrom_summary_buf),
             spec_entries_buf: Arc::from(spec_entries_buf),
@@ -284,130 +284,130 @@ impl IonReader {
         self.header.chrom_count
     }
 
-    pub(crate) fn ensure_spec_segment_bounds(&mut self) -> IonResult<()> {
-        if matches!(self.spec_segment_bounds, SegmentBoundsCache::Unloaded) {
-            self.spec_segment_bounds = match self.load_spec_segment_bounds() {
-                Ok(index) => SegmentBoundsCache::Loaded(index),
-                Err(IonError::MissingSpectrumBounds) => SegmentBoundsCache::Missing,
-                Err(IonError::BadSpectrumBoundsChecksum) => SegmentBoundsCache::BadChecksum,
+    pub(crate) fn ensure_spec_window_bounds(&mut self) -> IonResult<()> {
+        if matches!(self.spec_window_bounds, WindowBoundsCache::Unloaded) {
+            self.spec_window_bounds = match self.load_spec_window_bounds() {
+                Ok(index) => WindowBoundsCache::Loaded(index),
+                Err(IonError::MissingSpectrumBounds) => WindowBoundsCache::Missing,
+                Err(IonError::BadSpectrumBoundsChecksum) => WindowBoundsCache::BadChecksum,
                 Err(IonError::MalformedSpectrumBounds(reason)) => {
-                    SegmentBoundsCache::Malformed(reason)
+                    WindowBoundsCache::Malformed(reason)
                 }
-                Err(other) => SegmentBoundsCache::Malformed(other.to_string()),
+                Err(other) => WindowBoundsCache::Malformed(other.to_string()),
             };
         }
-        match &self.spec_segment_bounds {
-            SegmentBoundsCache::Loaded(_) => Ok(()),
-            SegmentBoundsCache::Missing => Err(IonError::MissingSpectrumBounds),
-            SegmentBoundsCache::BadChecksum => Err(IonError::BadSpectrumBoundsChecksum),
-            SegmentBoundsCache::Malformed(reason) => {
+        match &self.spec_window_bounds {
+            WindowBoundsCache::Loaded(_) => Ok(()),
+            WindowBoundsCache::Missing => Err(IonError::MissingSpectrumBounds),
+            WindowBoundsCache::BadChecksum => Err(IonError::BadSpectrumBoundsChecksum),
+            WindowBoundsCache::Malformed(reason) => {
                 Err(IonError::MalformedSpectrumBounds(reason.clone()))
             }
-            SegmentBoundsCache::Unloaded => Err(IonError::MissingSpectrumBounds),
+            WindowBoundsCache::Unloaded => Err(IonError::MissingSpectrumBounds),
         }
     }
 
-    pub(crate) fn ensure_chrom_segment_bounds(&mut self) {
-        if !matches!(self.chrom_segment_bounds, SegmentBoundsCache::Unloaded) {
+    pub(crate) fn ensure_chrom_window_bounds(&mut self) {
+        if !matches!(self.chrom_window_bounds, WindowBoundsCache::Unloaded) {
             return;
         }
-        self.chrom_segment_bounds = match self.load_chrom_segment_bounds() {
-            Some(index) => SegmentBoundsCache::Loaded(index),
-            None => SegmentBoundsCache::Missing,
+        self.chrom_window_bounds = match self.load_chrom_window_bounds() {
+            Some(index) => WindowBoundsCache::Loaded(index),
+            None => WindowBoundsCache::Missing,
         };
     }
 
-    fn load_spec_segment_bounds(&self) -> IonResult<SegmentBoundsIndex> {
-        if self.header.len_spec_segment_bounds == 0 {
+    fn load_spec_window_bounds(&self) -> IonResult<WindowBoundsIndex> {
+        if self.header.len_spec_window_bounds == 0 {
             return Err(IonError::MissingSpectrumBounds);
         }
         let spec_array_ref_count = self.spec_array_refs.len() as u64 / ARRAY_REF_BYTES as u64;
         let bytes = self
             .source
-            .read(Range {
-                offset: self.header.off_spec_segment_bounds,
-                length: self.header.len_spec_segment_bounds,
+            .read(ByteRange {
+                offset: self.header.off_spec_window_bounds,
+                length: self.header.len_spec_window_bounds,
             })
             .map_err(|error| IonError::MalformedSpectrumBounds(format!("read failed: {error}")))?;
-        if crc32fast::hash(&bytes) != self.header.spec_segment_bounds_crc32 {
+        if crc32fast::hash(&bytes) != self.header.spec_window_bounds_crc32 {
             return Err(IonError::BadSpectrumBoundsChecksum);
         }
         let decompressed = self
-            .decompress_segment_bounds(&bytes, self.header.plain_len_spec_segment_bounds as usize)
+            .decompress_window_bounds(&bytes, self.header.plain_len_spec_window_bounds as usize)
             .map_err(|error| {
                 IonError::MalformedSpectrumBounds(format!("decompression failed: {error}"))
             })?;
-        SegmentBoundsIndex::from_bytes(&decompressed, spec_array_ref_count)
+        WindowBoundsIndex::from_bytes(&decompressed, spec_array_ref_count)
             .map_err(|error| IonError::MalformedSpectrumBounds(error.to_string()))
     }
 
-    fn load_chrom_segment_bounds(&self) -> Option<SegmentBoundsIndex> {
-        if self.header.len_chrom_segment_bounds == 0 {
+    fn load_chrom_window_bounds(&self) -> Option<WindowBoundsIndex> {
+        if self.header.len_chrom_window_bounds == 0 {
             return None;
         }
         let chrom_array_ref_count = self.chrom_array_refs.len() as u64 / ARRAY_REF_BYTES as u64;
         let bytes = self
             .source
-            .read(Range {
-                offset: self.header.off_chrom_segment_bounds,
-                length: self.header.len_chrom_segment_bounds,
+            .read(ByteRange {
+                offset: self.header.off_chrom_window_bounds,
+                length: self.header.len_chrom_window_bounds,
             })
             .ok()?;
-        if crc32fast::hash(&bytes) != self.header.chrom_segment_bounds_crc32 {
+        if crc32fast::hash(&bytes) != self.header.chrom_window_bounds_crc32 {
             return None;
         }
         let decompressed = self
-            .decompress_segment_bounds(&bytes, self.header.plain_len_chrom_segment_bounds as usize)
+            .decompress_window_bounds(&bytes, self.header.plain_len_chrom_window_bounds as usize)
             .ok()?;
-        SegmentBoundsIndex::from_bytes(&decompressed, chrom_array_ref_count).ok()
+        WindowBoundsIndex::from_bytes(&decompressed, chrom_array_ref_count).ok()
     }
 
-    fn decompress_segment_bounds(&self, bytes: &[u8], plain_len: usize) -> IonResult<Vec<u8>> {
+    fn decompress_window_bounds(&self, bytes: &[u8], plain_len: usize) -> IonResult<Vec<u8>> {
         match self.header.compression_codec {
             CODEC_NONE => {
                 if bytes.len() != plain_len {
-                    return Err("segment bounds: uncompressed length mismatch".into());
+                    return Err("window bounds: uncompressed length mismatch".into());
                 }
                 Ok(bytes.to_vec())
             }
             CODEC_ZSTD => decompress_zstd(bytes, plain_len, self.decompression_limit),
-            _ => Err("segment bounds: unsupported codec".into()),
+            _ => Err("window bounds: unsupported codec".into()),
         }
     }
 }
 
-pub fn plan_open_ranges(header_bytes: &[u8]) -> IonResult<Vec<Range>> {
+pub fn open_ranges(header_bytes: &[u8]) -> IonResult<Vec<ByteRange>> {
     if header_bytes.len() < 1024 {
-        return Err("plan_open_ranges: needs at least 1024 header bytes".into());
+        return Err("open_ranges: needs at least 1024 header bytes".into());
     }
     let header = parse_header(&header_bytes[..1024])?;
     open_byte_ranges(&header)
 }
 
-pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<Range>> {
+pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<ByteRange>> {
     let mut ranges = vec![
-        Range { offset: 0, length: 1024 },
-        Range { offset: header.off_spec_summary, length: header.len_spec_summary },
-        Range { offset: header.off_chrom_summary, length: header.len_chrom_summary },
-        Range { offset: header.off_spec_entries, length: header.len_spec_entries },
-        Range { offset: header.off_spec_arrayrefs, length: header.len_spec_arrayrefs },
-        Range { offset: header.off_chrom_entries, length: header.len_chrom_entries },
-        Range { offset: header.off_chrom_arrayrefs, length: header.len_chrom_arrayrefs },
-        Range { offset: header.off_global_meta, length: header.len_global_meta },
-        Range { offset: header.off_spec_meta, length: header.len_spec_meta },
-        Range { offset: header.off_chrom_meta, length: header.len_chrom_meta },
+        ByteRange { offset: 0, length: 1024 },
+        ByteRange { offset: header.off_spec_summary, length: header.len_spec_summary },
+        ByteRange { offset: header.off_chrom_summary, length: header.len_chrom_summary },
+        ByteRange { offset: header.off_spec_entries, length: header.len_spec_entries },
+        ByteRange { offset: header.off_spec_arrayrefs, length: header.len_spec_arrayrefs },
+        ByteRange { offset: header.off_chrom_entries, length: header.len_chrom_entries },
+        ByteRange { offset: header.off_chrom_arrayrefs, length: header.len_chrom_arrayrefs },
+        ByteRange { offset: header.off_global_meta, length: header.len_global_meta },
+        ByteRange { offset: header.off_spec_meta, length: header.len_spec_meta },
+        ByteRange { offset: header.off_chrom_meta, length: header.len_chrom_meta },
     ];
 
-    if header.len_spec_segment_bounds > 0 {
-        ranges.push(Range {
-            offset: header.off_spec_segment_bounds,
-            length: header.len_spec_segment_bounds,
+    if header.len_spec_window_bounds > 0 {
+        ranges.push(ByteRange {
+            offset: header.off_spec_window_bounds,
+            length: header.len_spec_window_bounds,
         });
     }
-    if header.len_chrom_segment_bounds > 0 {
-        ranges.push(Range {
-            offset: header.off_chrom_segment_bounds,
-            length: header.len_chrom_segment_bounds,
+    if header.len_chrom_window_bounds > 0 {
+        ranges.push(ByteRange {
+            offset: header.off_chrom_window_bounds,
+            length: header.len_chrom_window_bounds,
         });
     }
 

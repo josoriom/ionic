@@ -10,23 +10,23 @@ fn ion_roundtrip_preserves_rare_numeric_types() {
     let cases = [
         (
             NumericType::Float16,
-            BinaryData::F16(vec![0x0000, 0x3c00, 0x4000]),
-            BinaryData::F16(vec![0x0000, 0x3555, 0x3c00]),
+            NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
+            NumericArray::F16(vec![0x0000, 0x3555, 0x3c00]),
         ),
         (
             NumericType::Int16,
-            BinaryData::I16(vec![-10, 0, 10]),
-            BinaryData::I16(vec![-20, 0, 20]),
+            NumericArray::I16(vec![-10, 0, 10]),
+            NumericArray::I16(vec![-20, 0, 20]),
         ),
         (
             NumericType::Int32,
-            BinaryData::I32(vec![-1_000, 0, 1_000]),
-            BinaryData::I32(vec![-2_000, 0, 2_000]),
+            NumericArray::I32(vec![-1_000, 0, 1_000]),
+            NumericArray::I32(vec![-2_000, 0, 2_000]),
         ),
         (
             NumericType::Int64,
-            BinaryData::I64(vec![-1_000_000, 0, 1_000_000]),
-            BinaryData::I64(vec![-2_000_000, 0, 2_000_000]),
+            NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
+            NumericArray::I64(vec![-2_000_000, 0, 2_000_000]),
         ),
     ];
 
@@ -48,23 +48,23 @@ fn xml_roundtrip_preserves_rare_numeric_types_without_array_length() {
     let cases = [
         (
             NumericType::Float16,
-            BinaryData::F16(vec![0x0000, 0x3c00, 0x4000]),
-            BinaryData::F16(vec![0x0000, 0x3555, 0x3c00]),
+            NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
+            NumericArray::F16(vec![0x0000, 0x3555, 0x3c00]),
         ),
         (
             NumericType::Int16,
-            BinaryData::I16(vec![-10, 0, 10]),
-            BinaryData::I16(vec![-20, 0, 20]),
+            NumericArray::I16(vec![-10, 0, 10]),
+            NumericArray::I16(vec![-20, 0, 20]),
         ),
         (
             NumericType::Int32,
-            BinaryData::I32(vec![-1_000, 0, 1_000]),
-            BinaryData::I32(vec![-2_000, 0, 2_000]),
+            NumericArray::I32(vec![-1_000, 0, 1_000]),
+            NumericArray::I32(vec![-2_000, 0, 2_000]),
         ),
         (
             NumericType::Int64,
-            BinaryData::I64(vec![-1_000_000, 0, 1_000_000]),
-            BinaryData::I64(vec![-2_000_000, 0, 2_000_000]),
+            NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
+            NumericArray::I64(vec![-2_000_000, 0, 2_000_000]),
         ),
     ];
 
@@ -82,13 +82,13 @@ fn parser_honors_declared_shorter_array_length() {
     let cases = [
         (
             NumericType::Float16,
-            BinaryData::F16(vec![0x0000, 0x3c00, 0x4000]),
+            NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
         ),
-        (NumericType::Int16, BinaryData::I16(vec![-10, 0, 10])),
-        (NumericType::Int32, BinaryData::I32(vec![-1_000, 0, 1_000])),
+        (NumericType::Int16, NumericArray::I16(vec![-10, 0, 10])),
+        (NumericType::Int32, NumericArray::I32(vec![-1_000, 0, 1_000])),
         (
             NumericType::Int64,
-            BinaryData::I64(vec![-1_000_000, 0, 1_000_000]),
+            NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
         ),
     ];
 
@@ -127,13 +127,13 @@ fn encoder_preserves_integer_ms_level_arrays() {
                             helpers::synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0, 300.0]),
+                                NumericArray::F64(vec![100.0, 200.0, 300.0]),
                                 Some(3),
                             ),
                             helpers::synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![1.0, 2.0, 3.0]),
+                                NumericArray::F64(vec![1.0, 2.0, 3.0]),
                                 Some(3),
                             ),
                         ],
@@ -154,13 +154,13 @@ fn encoder_preserves_integer_ms_level_arrays() {
                             helpers::synthetic_binary_data_array(
                                 "MS:1000595",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![1.0, 2.0, 3.0]),
+                                NumericArray::F64(vec![1.0, 2.0, 3.0]),
                                 Some(3),
                             ),
                             helpers::synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0, 30.0]),
+                                NumericArray::F64(vec![10.0, 20.0, 30.0]),
                                 Some(3),
                             ),
                             BinaryDataArray {
@@ -176,7 +176,7 @@ fn encoder_preserves_integer_ms_level_arrays() {
                                     helpers::synthetic_ms_cv("MS:1000576", None),
                                 ],
                                 numeric_type: Some(NumericType::Int64),
-                                binary: Some(BinaryData::I64(vec![1, 1, 2])),
+                                binary: Some(NumericArray::I64(vec![1, 1, 2])),
                                 ..Default::default()
                             },
                         ],
@@ -199,7 +199,7 @@ fn encoder_preserves_integer_ms_level_arrays() {
     assert_eq!(ms_level.numeric_type, Some(NumericType::Int64));
 
     match ms_level.binary.as_ref().expect("ms level binary present") {
-        BinaryData::I64(v) => {
+        NumericArray::I64(v) => {
             assert!(!v.is_empty(), "ms level array must be non-empty");
         }
         other => panic!("ms level array must be I64, got {other:?}"),

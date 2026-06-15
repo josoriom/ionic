@@ -323,13 +323,10 @@ fn print_summary(view: &HeaderView<'_>) {
         ),
         None,
     );
-    let segment_size = view.read_header_u64(24);
+    let target_mz_window = view.read_header_u32(24);
     field(
-        "segment_size",
-        &format!(
-            "{segment_size} bytes  ({:.2} MB)",
-            segment_size as f64 / (1024.0 * 1024.0)
-        ),
+        "mz_window",
+        &format!("{target_mz_window}"),
         None,
     );
     field(

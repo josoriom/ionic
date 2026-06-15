@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use crate::ion::{
-    IonError, IonResult, Range,
+    IonError, IonResult, ByteRange,
     decoder::utilities::byte_source::ReadBytes,
     encoder::utilities::block_writer::{BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride},
     format::CODEC_NONE,
     packing::PackingId,
     utilities::{
-        common::{decompress_zstd, read_u32_le_at, read_u64_le_at, take},
+        common::{decompress_zstd, read_u32_le_at, read_u64_le_at},
         decompression_limit::DecompressionLimit,
     },
 };
@@ -132,9 +132,9 @@ impl<P: BlockProcessor> BlockReader<P> {
         })
     }
 
-    pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<Range> {
+    pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<ByteRange> {
         let entry = self.entries.get(block_id as usize)?;
-        Some(Range {
+        Some(ByteRange {
             offset: self.container_offset + entry.payload_offset,
             length: entry.payload_size,
         })
@@ -162,7 +162,7 @@ impl<P: BlockProcessor> BlockReader<P> {
             );
         }
 
-        let payload = self.source.read(Range {
+        let payload = self.source.read(ByteRange {
             offset: self.container_offset + entry.payload_offset,
             length: entry.payload_size,
         })?;
@@ -404,13 +404,13 @@ pub(crate) fn container_directory_range(
     container_len: u64,
     block_count: usize,
     ctx: &'static str,
-) -> IonResult<Range> {
+) -> IonResult<ByteRange> {
     let directory_byte_count = (block_count as u64) * (BLOCK_DIRECTORY_ENTRY_SIZE as u64);
     let directory_offset = container_offset
         .checked_add(container_len)
         .and_then(|end| end.checked_sub(directory_byte_count))
         .ok_or_else(|| IonError::from(format!("{ctx}: directory offset overflows")))?;
-    Ok(Range { offset: directory_offset, length: directory_byte_count })
+    Ok(ByteRange { offset: directory_offset, length: directory_byte_count })
 }
 
 #[inline]
@@ -454,7 +454,7 @@ fn read_entries(
         let payload_size = read_u64_le_at(directory_bytes, &mut read_pos, ctx)?;
         let uncompressed_len_bytes = read_u64_le_at(directory_bytes, &mut read_pos, ctx)?;
         let checksum = read_u32_le_at(directory_bytes, &mut read_pos, ctx)?;
-        let _ = take(directory_bytes, &mut read_pos, 4, ctx)?;
+        let _reserved = read_u32_le_at(directory_bytes, &mut read_pos, ctx)?;
         entries.push(BlockDirEntry {
             payload_offset,
             payload_size,

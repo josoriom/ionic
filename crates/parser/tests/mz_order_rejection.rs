@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use ionic::{
     ion::{
-        IonReader, ReadOptions,
+        IonReader, ReadOptions, Range,
         encoder::{
             encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES},
             ion_writer::IonWriter,
@@ -13,7 +13,7 @@ use ionic::{
         },
     },
     mzml::structs::{
-        BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+        NumericArray, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
         SpectrumList,
     },
 };
@@ -25,7 +25,7 @@ fn write_config() -> WriteOptions {
         block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
         parallel: false,
         section_storage: SectionStorage::Memory,
-        segment_size: 64,
+        mz_window: 0.0,
     }
 }
 
@@ -55,7 +55,7 @@ fn intensity_cv_param() -> CvParam {
 
 fn mz_array(values: Vec<f64>) -> BinaryDataArray {
     BinaryDataArray {
-        binary: Some(BinaryData::F64(values)),
+        binary: Some(NumericArray::F64(values)),
         cv_params: vec![mz_cv_param()],
         ..BinaryDataArray::default()
     }
@@ -63,7 +63,7 @@ fn mz_array(values: Vec<f64>) -> BinaryDataArray {
 
 fn intensity_array(values: Vec<f64>) -> BinaryDataArray {
     BinaryDataArray {
-        binary: Some(BinaryData::F64(values)),
+        binary: Some(NumericArray::F64(values)),
         cv_params: vec![intensity_cv_param()],
         ..BinaryDataArray::default()
     }
@@ -105,7 +105,7 @@ fn write_mzml_rejects_unsorted_mz_spectrum() {
         vec![1.0, 2.0, 3.0],
     )]);
     let mut bytes = Vec::new();
-    let result = IonWriter::begin(&mut bytes, write_config())
+    let result = IonWriter::create(&mut bytes, write_config())
         .expect("begin must succeed")
         .write_mzml(&mzml);
     match result {
@@ -133,7 +133,7 @@ fn write_stream_rejects_unsorted_mz_spectrum() {
     )]);
     let mut reader = MemoryReader::new(mzml);
     let mut bytes = Vec::new();
-    let result = IonWriter::begin(&mut bytes, write_config())
+    let result = IonWriter::create(&mut bytes, write_config())
         .expect("begin must succeed")
         .write_stream(&mut reader);
     match result {
@@ -159,7 +159,7 @@ fn write_mzml_rejects_second_spectrum_unsorted_names_correct_index() {
         spectrum_with_mz("scan=2", vec![100.0, 99.0, 101.0], vec![1.0, 2.0, 3.0]),
     ]);
     let mut bytes = Vec::new();
-    let result = IonWriter::begin(&mut bytes, write_config())
+    let result = IonWriter::create(&mut bytes, write_config())
         .expect("begin must succeed")
         .write_mzml(&mzml);
     match result {
@@ -182,7 +182,7 @@ fn write_mzml_accepts_sorted_mz_spectrum_and_roundtrips() {
         vec![1.0, 2.0, 3.0],
     )]);
     let mut bytes = Vec::new();
-    IonWriter::begin(&mut bytes, write_config())
+    IonWriter::create(&mut bytes, write_config())
         .expect("begin must succeed")
         .write_mzml(&mzml)
         .expect("sorted m/z must be accepted");
@@ -199,16 +199,17 @@ fn read_mz_range_works_on_sorted_spectrum() {
         vec![1.0, 2.0, 3.0],
     )]);
     let mut bytes = Vec::new();
-    IonWriter::begin(&mut bytes, write_config())
+    IonWriter::create(&mut bytes, write_config())
         .expect("begin must succeed")
         .write_mzml(&mzml)
         .expect("sorted m/z must be accepted");
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
     let mut decoder = IonReader::open_bytes(arc, ReadOptions::default()).expect("open must succeed");
-    decoder.require_bounds().expect("segment bounds must exist");
-    let window = decoder.read_mz_range(0, 150.0, 250.0).expect("read_mz_range must succeed");
-    assert_eq!(window.mz.len(), 1, "window [150, 250] must contain exactly one point (200.0)");
-    assert!((window.mz[0] - 200.0).abs() < 1e-9, "window point must be 200.0");
+    decoder.require_bounds().expect("window bounds must exist");
+    let window = decoder.read_window(0, Range { from: 150.0, to: 250.0 }).expect("read_mz_range must succeed");
+    let mz = window.x.to_f64();
+    assert_eq!(mz.len(), 1, "window [150, 250] must contain exactly one point (200.0)");
+    assert!((mz[0] - 200.0).abs() < 1e-9, "window point must be 200.0");
 }
 
 #[test]
@@ -219,7 +220,7 @@ fn write_mzml_accepts_equal_adjacent_mz_values() {
         vec![1.0, 2.0, 3.0],
     )]);
     let mut bytes = Vec::new();
-    IonWriter::begin(&mut bytes, write_config())
+    IonWriter::create(&mut bytes, write_config())
         .expect("begin must succeed")
         .write_mzml(&mzml)
         .expect("non-decreasing (equal adjacent values) must be accepted");

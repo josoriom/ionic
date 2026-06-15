@@ -13,10 +13,10 @@ use crate::mzml::structs::{
 };
 
 pub(crate) trait EmitAttributes {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>);
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>);
 }
 
-pub(crate) struct AttributeSink<'a> {
+pub(crate) struct AttributeCollector<'a> {
     out: &'a mut Vec<Metadatum>,
     tag_id: TagId,
     node_id: u32,
@@ -24,7 +24,7 @@ pub(crate) struct AttributeSink<'a> {
     next_item_index: u32,
 }
 
-impl<'a> AttributeSink<'a> {
+impl<'a> AttributeCollector<'a> {
     #[inline]
     pub fn push_required_str(&mut self, tail: AccessionTail, value: &str) {
         self.out.push(Metadatum {
@@ -89,14 +89,14 @@ pub(crate) fn assign_attributes_into<T: EmitAttributes>(
     parent_id: u32,
     out: &mut Vec<Metadatum>,
 ) {
-    let mut sink = AttributeSink {
+    let mut collector = AttributeCollector {
         out,
         tag_id,
         node_id,
         parent_id,
         next_item_index: 0,
     };
-    value.emit_attributes(&mut sink);
+    value.emit_attributes(&mut collector);
 }
 
 #[cfg(test)]
@@ -121,9 +121,9 @@ fn format_accession(tail: AccessionTail) -> String {
 }
 
 impl EmitAttributes for SpectrumList {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_opt_usize(ACC_ATTR_COUNT, self.count);
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_opt_usize(ACC_ATTR_COUNT, self.count);
+        collector.push_opt_str(
             ACC_ATTR_DEFAULT_DATA_PROCESSING_REF,
             self.default_data_processing_ref.as_deref(),
         );
@@ -131,25 +131,25 @@ impl EmitAttributes for SpectrumList {
 }
 
 impl EmitAttributes for Spectrum {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_required_str(ACC_ATTR_ID, &self.id);
-        sink.push_opt_u32(ACC_ATTR_INDEX, self.index);
-        sink.push_opt_u32(ACC_ATTR_SCAN_NUMBER, self.scan_number);
-        sink.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
-        sink.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_required_str(ACC_ATTR_ID, &self.id);
+        collector.push_opt_u32(ACC_ATTR_INDEX, self.index);
+        collector.push_opt_u32(ACC_ATTR_SCAN_NUMBER, self.scan_number);
+        collector.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
+        collector.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
+        collector.push_opt_str(
             ACC_ATTR_DATA_PROCESSING_REF,
             self.data_processing_ref.as_deref(),
         );
-        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
-        sink.push_opt_str(ACC_ATTR_SPOT_ID, self.spot_id.as_deref());
+        collector.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        collector.push_opt_str(ACC_ATTR_SPOT_ID, self.spot_id.as_deref());
     }
 }
 
 impl EmitAttributes for ChromatogramList {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_opt_usize(ACC_ATTR_COUNT, self.count);
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_opt_usize(ACC_ATTR_COUNT, self.count);
+        collector.push_opt_str(
             ACC_ATTR_DEFAULT_DATA_PROCESSING_REF,
             self.default_data_processing_ref.as_deref(),
         );
@@ -157,12 +157,12 @@ impl EmitAttributes for ChromatogramList {
 }
 
 impl EmitAttributes for Chromatogram {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_required_str(ACC_ATTR_ID, &self.id);
-        sink.push_opt_u32(ACC_ATTR_INDEX, self.index);
-        sink.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
-        sink.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_required_str(ACC_ATTR_ID, &self.id);
+        collector.push_opt_u32(ACC_ATTR_INDEX, self.index);
+        collector.push_opt_str(ACC_ATTR_NATIVE_ID, self.native_id.as_deref());
+        collector.push_opt_usize(ACC_ATTR_DEFAULT_ARRAY_LENGTH, self.default_array_length);
+        collector.push_opt_str(
             ACC_ATTR_DATA_PROCESSING_REF,
             self.data_processing_ref.as_deref(),
         );
@@ -170,10 +170,10 @@ impl EmitAttributes for Chromatogram {
 }
 
 impl EmitAttributes for BinaryDataArray {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_opt_usize(ACC_ATTR_ARRAY_LENGTH, self.array_length);
-        sink.push_opt_usize(ACC_ATTR_ENCODED_LENGTH, self.encoded_length);
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_opt_usize(ACC_ATTR_ARRAY_LENGTH, self.array_length);
+        collector.push_opt_usize(ACC_ATTR_ENCODED_LENGTH, self.encoded_length);
+        collector.push_opt_str(
             ACC_ATTR_DATA_PROCESSING_REF,
             self.data_processing_ref.as_deref(),
         );
@@ -181,10 +181,10 @@ impl EmitAttributes for BinaryDataArray {
 }
 
 impl EmitAttributes for Precursor {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
-        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
+        collector.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        collector.push_opt_str(
             ACC_ATTR_EXTERNAL_SPECTRUM_ID,
             self.external_spectrum_id.as_deref(),
         );
@@ -192,10 +192,10 @@ impl EmitAttributes for Precursor {
 }
 
 impl EmitAttributes for Product {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
-        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
+        collector.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        collector.push_opt_str(
             ACC_ATTR_EXTERNAL_SPECTRUM_ID,
             self.external_spectrum_id.as_deref(),
         );
@@ -203,17 +203,17 @@ impl EmitAttributes for Product {
 }
 
 impl EmitAttributes for Scan {
-    fn emit_attributes(&self, sink: &mut AttributeSink<'_>) {
-        sink.push_opt_str(
+    fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
+        collector.push_opt_str(
             ACC_ATTR_INSTRUMENT_CONFIGURATION_REF,
             self.instrument_configuration_ref.as_deref(),
         );
-        sink.push_opt_str(
+        collector.push_opt_str(
             ACC_ATTR_EXTERNAL_SPECTRUM_ID,
             self.external_spectrum_id.as_deref(),
         );
-        sink.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
-        sink.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
+        collector.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
+        collector.push_opt_str(ACC_ATTR_SPECTRUM_REF, self.spectrum_ref.as_deref());
     }
 }
 

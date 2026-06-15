@@ -252,6 +252,14 @@ pub(crate) fn unfilter_array_bytes(
                     out.extend_from_slice(&prev.to_le_bytes());
                 }
                 Ok(std::borrow::Cow::Owned(out))
+            } else if dtype == FILE_DTYPE_F32 {
+                let mut out = Vec::with_capacity(raw.len());
+                let mut prev: u32 = 0;
+                for chunk in raw.chunks_exact(4) {
+                    prev = prev.wrapping_add(u32::from_le_bytes(chunk.try_into().unwrap()));
+                    out.extend_from_slice(&prev.to_le_bytes());
+                }
+                Ok(std::borrow::Cow::Owned(out))
             } else {
                 Ok(std::borrow::Cow::Borrowed(raw))
             }
@@ -398,6 +406,19 @@ impl IonReader {
         decode_into(out, raw, array_ref.dtype, array_ref.array_filter)
     }
 
+    pub fn read_array_typed(&mut self, array_ref: &ArrayRef) -> IonResult<NumericArray> {
+        let (element_offset, count, stride) = aref_read_params(array_ref);
+        let raw = self.spec_container.get_array_bytes_from_block(
+            array_ref.block_id,
+            element_offset,
+            count,
+            stride,
+            "read_array_typed",
+        )?;
+        let values = unfilter_array_bytes(raw, array_ref.dtype, array_ref.array_filter)?;
+        super::to_mzml::decoded_bytes_to_binary_data(&values, array_ref.dtype)
+    }
+
     pub fn read_chromatogram_array(
         &mut self,
         array_ref: &ArrayRef,
@@ -424,10 +445,10 @@ impl IonReader {
             return Ok(());
         };
         self.read_array(first, out)?;
-        let mut segment = Vec::new();
+        let mut window = Vec::new();
         for array_ref in rest {
-            self.read_array(array_ref, &mut segment)?;
-            out.extend_from_slice(&segment);
+            self.read_array(array_ref, &mut window)?;
+            out.extend_from_slice(&window);
         }
         Ok(())
     }

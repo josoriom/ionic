@@ -6,7 +6,7 @@ use crate::{
         POSITIVE_SCAN,
     },
     encoder::utilities::{
-        sink::{WriteBytes, SectionStorage},
+        output::{WriteBytes, SectionStorage},
         le_writers::{
             write_f32_le, write_f32_slice_le, write_f64_le, write_f64_slice_le, write_i16_slice_le,
             write_i32_slice_le, write_i64_slice_le, write_u16_slice_le,
@@ -14,11 +14,11 @@ use crate::{
         meta_collector::{
             ArrayPolicy, array_type_accession_from_binary_data_array, parse_accession_tail_raw,
         },
-        segments::SegmentPlan,
     },
     ion::{
         IonError, IonResult,
         axes::axis_of,
+        windowing::{WindowRange, Windowing},
         encoder::utilities::{CompressionMode, BlockWriter, DefaultCompressor},
         filter_summary::{ChromatogramSummary, SpectrumSummary},
         packing::raw::RAW as RAW_PACKING,
@@ -26,11 +26,11 @@ use crate::{
         utilities::spectrum_source::{f16_bits_to_f64, summary_from_spectrum},
     },
     mzml::structs::{
-        BinaryData, BinaryDataArray, Chromatogram, CvParam, MzML, NumericType, Spectrum,
+        NumericArray, BinaryDataArray, Chromatogram, CvParam, MzML, NumericType, Spectrum,
     },
 };
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 16 * 1024 * 1024;
-pub const DEFAULT_TARGET_SEGMENT_BYTES: usize = 256 * 1024;
+pub const DEFAULT_MZ_WINDOW: f64 = 50.0;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
 
@@ -63,7 +63,8 @@ pub(crate) fn spec_summary_from_spectrum(spectrum: &Spectrum) -> SpectrumSummary
     let summary = summary_from_spectrum(spectrum);
     let (position_x, position_y, position_z) = get_spectrum_position(spectrum);
     SpectrumSummary {
-        rt_seconds: summary.rt * 60.0,
+        rt: summary.rt,
+        rt_unit: summary.rt_unit.code(),
         base_peak_mz: summary.base_peak_mz,
         selected_ion_mz: summary.selected_ion_mz,
         base_peak_int: summary.base_peak_int,
@@ -190,7 +191,13 @@ pub struct WriteOptions {
     pub block_size: usize,
     pub parallel: bool,
     pub section_storage: SectionStorage,
-    pub segment_size: usize,
+    pub mz_window: f64,
+}
+
+impl Default for WriteOptions {
+    fn default() -> Self {
+        Self::quick(22, false)
+    }
 }
 
 impl WriteOptions {
@@ -201,7 +208,7 @@ impl WriteOptions {
             block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_storage: SectionStorage::Memory,
-            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+            mz_window: DEFAULT_MZ_WINDOW,
         }
     }
 
@@ -213,8 +220,18 @@ impl WriteOptions {
         self.compression_is_enabled() as u8
     }
 
+    fn block_shuffle_is_enabled(self) -> bool {
+        if !self.compression_is_enabled() {
+            return false;
+        }
+        !matches!(
+            std::env::var("IONIC_BLOCK_SHUFFLE").as_deref(),
+            Ok("off") | Ok("raw") | Ok("0") | Ok("none")
+        )
+    }
+
     pub(crate) fn array_filter_id(self) -> u8 {
-        if self.compression_is_enabled() {
+        if self.block_shuffle_is_enabled() {
             PackingId::ByteShuffle as u8
         } else {
             PackingId::Raw as u8
@@ -232,7 +249,7 @@ impl WriteOptions {
     }
 
     pub(crate) fn block_packing_id(self) -> PackingId {
-        if self.compression_is_enabled() {
+        if self.block_shuffle_is_enabled() {
             PackingId::ByteShuffle
         } else {
             PackingId::Raw
@@ -322,12 +339,12 @@ impl<'a> ArrayData<'a> {
 
 fn array_data_from_binary_data_array(bda: &BinaryDataArray) -> Option<ArrayData<'_>> {
     match bda.binary.as_ref()? {
-        BinaryData::F16(e) => Some(ArrayData::F16(e)),
-        BinaryData::I16(e) => Some(ArrayData::I16(e)),
-        BinaryData::I32(e) => Some(ArrayData::I32(e)),
-        BinaryData::I64(e) => Some(ArrayData::I64(e)),
-        BinaryData::F32(e) => Some(ArrayData::F32(e)),
-        BinaryData::F64(e) => Some(ArrayData::F64(e)),
+        NumericArray::F16(e) => Some(ArrayData::F16(e)),
+        NumericArray::I16(e) => Some(ArrayData::I16(e)),
+        NumericArray::I32(e) => Some(ArrayData::I32(e)),
+        NumericArray::I64(e) => Some(ArrayData::I64(e)),
+        NumericArray::F32(e) => Some(ArrayData::F32(e)),
+        NumericArray::F64(e) => Some(ArrayData::F64(e)),
     }
 }
 
@@ -482,6 +499,7 @@ fn write_fixed_array_payload(
     match packing.id() {
         PackingId::DeltaShuffle => match (data, dtype_enum) {
             (ArrayData::F64(slice), Dtype::F64) => packing.encode(PackingInput::F64(slice), buf),
+            (ArrayData::F32(slice), Dtype::F32) => packing.encode(PackingInput::F32(slice), buf),
             _ => {
                 write_array_data(buf, data, dtype);
                 Ok(())
@@ -605,76 +623,6 @@ pub(crate) fn array_is_fixed_width_splittable(
     Ok(Some((encoding.data.element_count(), encoding.elem_bytes)))
 }
 
-pub(crate) fn write_array_segments(
-    bda: &BinaryDataArray,
-    config: WriteOptions,
-    policy: ArrayPolicy,
-    plan: &SegmentPlan,
-    container: &mut BlockWriter<'_, DefaultCompressor>,
-) -> IonResult<Vec<EncodedArrayRef>> {
-    let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
-        return Ok(Vec::new());
-    };
-    let ArrayEncoding {
-        data,
-        accession,
-        dtype,
-        dtype_enum,
-        elem_bytes,
-        packing,
-    } = encoding;
-
-    if packing.is_variable_length() {
-        return Err("write_array_segments: variable-length arrays cannot be split".into());
-    }
-
-    let mut refs = Vec::with_capacity(plan.count());
-    for (segment_index, range) in plan.iter().enumerate() {
-        let segment = data.slice(range.start, range.end);
-        let segment_element_count = range.element_count();
-        let (block_id, _) = container.add_array_as_block(
-            accession,
-            segment_element_count * elem_bytes,
-            elem_bytes,
-            |buf| write_fixed_array_payload(buf, segment, dtype, dtype_enum, packing),
-        )?;
-        refs.push(EncodedArrayRef {
-            element_offset: 0,
-            element_count: segment_element_count as u64,
-            block_id,
-            accession,
-            dtype,
-            array_filter: packing.id() as u8,
-            encoded_len: 0,
-            continues_previous_segment: (segment_index > 0) as u8,
-        });
-    }
-    Ok(refs)
-}
-
-pub(crate) fn get_segment_bounds(
-    bda: &BinaryDataArray,
-    plan: &SegmentPlan,
-    dtype: u8,
-) -> Option<Vec<(f64, f64)>> {
-    let data = array_data_from_binary_data_array(bda)?;
-    if data.is_empty() {
-        return None;
-    }
-    let accession = array_type_accession_from_binary_data_array(bda);
-    axis_of(accession)?;
-    if !data.is_monotonic_non_decreasing() {
-        return None;
-    }
-    let mut bounds = Vec::with_capacity(plan.count());
-    for range in plan.iter() {
-        let low = data.stored_value_at(range.start, dtype);
-        let high = data.stored_value_at(range.end - 1, dtype);
-        bounds.push((low, high));
-    }
-    Some(bounds)
-}
-
 pub(crate) fn check_spectrum_mz_order(
     arrays: &[BinaryDataArray],
     spectrum_index: usize,
@@ -714,6 +662,112 @@ pub(crate) fn get_array_bounds(bda: &BinaryDataArray, dtype: u8) -> Option<(f64,
     ))
 }
 
+pub(crate) fn window_ranges_for_item(
+    arrays: &[BinaryDataArray],
+    config: WriteOptions,
+    policy: ArrayPolicy,
+    mz_window: f64,
+) -> IonResult<Option<Vec<WindowRange>>> {
+    let windowing = Windowing::new(mz_window);
+    if !windowing.is_enabled() {
+        return Ok(None);
+    }
+    let Some(x_array) = arrays
+        .iter()
+        .find(|bda| array_type_accession_from_binary_data_array(bda) == policy.x_array_accession)
+    else {
+        return Ok(None);
+    };
+    let Some((x_count, _)) = array_is_fixed_width_splittable(x_array, config, policy)? else {
+        return Ok(None);
+    };
+    if x_count == 0 {
+        return Ok(None);
+    }
+    for bda in arrays {
+        match array_is_fixed_width_splittable(bda, config, policy)? {
+            Some((count, _)) if count == x_count => {}
+            _ => return Ok(None),
+        }
+    }
+    let Some(x_data) = array_data_from_binary_data_array(x_array) else {
+        return Ok(None);
+    };
+    let ranges = windowing.split_sorted(x_count, |index| x_data.value_at(index));
+    Ok(Some(ranges))
+}
+
+pub(crate) fn write_array_windows(
+    bda: &BinaryDataArray,
+    config: WriteOptions,
+    policy: ArrayPolicy,
+    windows: &[WindowRange],
+    container: &mut BlockWriter<'_, DefaultCompressor>,
+) -> IonResult<Vec<EncodedArrayRef>> {
+    let Some(encoding) = resolve_array_encoding(bda, config, policy)? else {
+        return Ok(Vec::new());
+    };
+    let ArrayEncoding {
+        data,
+        accession,
+        dtype,
+        dtype_enum,
+        elem_bytes,
+        packing,
+    } = encoding;
+
+    if packing.is_variable_length() {
+        return Err("write_array_windows: variable-length arrays cannot be windowed".into());
+    }
+
+    let mut refs = Vec::with_capacity(windows.len());
+    for (segment_index, window) in windows.iter().enumerate() {
+        let segment_data = data.slice(window.start, window.end);
+        let element_count = window.element_count();
+        let (block_id, element_offset) = container.add_item_to_window(
+            accession,
+            window.window_index,
+            element_count * elem_bytes,
+            elem_bytes,
+            |buf| write_fixed_array_payload(buf, segment_data, dtype, dtype_enum, packing),
+        )?;
+        refs.push(EncodedArrayRef {
+            element_offset,
+            element_count: element_count as u64,
+            block_id,
+            accession,
+            dtype,
+            array_filter: packing.id() as u8,
+            encoded_len: 0,
+            continues_previous_segment: (segment_index > 0) as u8,
+        });
+    }
+    Ok(refs)
+}
+
+pub(crate) fn get_window_bounds(
+    bda: &BinaryDataArray,
+    windows: &[WindowRange],
+    dtype: u8,
+) -> Option<Vec<(f64, f64)>> {
+    let data = array_data_from_binary_data_array(bda)?;
+    if data.is_empty() {
+        return None;
+    }
+    let accession = array_type_accession_from_binary_data_array(bda);
+    axis_of(accession)?;
+    if !data.is_monotonic_non_decreasing() {
+        return None;
+    }
+    let mut bounds = Vec::with_capacity(windows.len());
+    for window in windows {
+        let low = data.stored_value_at(window.start, dtype);
+        let high = data.stored_value_at(window.end - 1, dtype);
+        bounds.push((low, high));
+    }
+    Some(bounds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,7 +775,7 @@ mod tests {
         format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE},
         header::{
             HEADER_CHROM_BLOCK_COUNT, HEADER_SPECTRUM_BLOCK_COUNT, HEADER_TARGET_BLOCK_SIZE,
-            HEADER_TOTAL_FILE_SIZE,
+            HEADER_TARGET_MZ_WINDOW, HEADER_TOTAL_FILE_SIZE,
         },
     };
 
@@ -759,6 +813,19 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(size, TARGET_BLOCK_UNCOMPRESSED_BYTES as u64);
+    }
+
+    #[test]
+    fn encode_header_target_mz_window_matches_default() {
+        let mzml = MzML::default();
+        let mut buf = Vec::new();
+        encode(&mzml, 0, false, &mut buf).unwrap();
+        let window = u32::from_le_bytes(
+            buf[HEADER_TARGET_MZ_WINDOW..HEADER_TARGET_MZ_WINDOW + 4]
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(window, DEFAULT_MZ_WINDOW.round() as u32);
     }
 
     #[test]
@@ -852,7 +919,7 @@ mod tests {
             block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_storage: SectionStorage::Memory,
-            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+            mz_window: 0.0,
         };
         assert!(!config.compression_is_enabled());
         assert_eq!(config.codec_id(), 0);
@@ -868,7 +935,7 @@ mod tests {
             block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
             section_storage: SectionStorage::Memory,
-            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+            mz_window: 0.0,
         };
         assert!(config.compression_is_enabled());
         assert_eq!(config.codec_id(), 1);

@@ -34,7 +34,7 @@ impl Display for IonError {
             Self::UnsupportedFormatVersion(v) => write!(f, "unsupported format version: {v}"),
             Self::UnsupportedCodec(c) => write!(f, "unsupported compression codec: {c}"),
             Self::MissingSpectrumBounds => f.write_str(
-                "spectrum has no segment bounds (A3); re-encode the file with the current Ionic",
+                "spectrum has no window bounds (A3); re-encode the file with the current Ionic",
             ),
             Self::BadSpectrumBoundsChecksum => f.write_str("spectrum bounds (A3) checksum failed"),
             Self::MalformedSpectrumBounds(reason) => {

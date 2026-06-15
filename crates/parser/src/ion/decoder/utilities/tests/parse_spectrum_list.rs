@@ -16,7 +16,7 @@ fn parse_spectrum_list_from_test_file() -> SpectrumList {
     let children_lookup = ChildrenLookup::new(&meta);
     let meta_ref: Vec<&Metadatum> = meta.iter().collect();
     let policy = DefaultMetadataPolicy;
-    parse_spectrum_list(&meta_ref, &children_lookup, &policy)
+    parse_spectrum_list(&meta_ref, &children_lookup, &policy, 0)
         .expect("parse_spectrum_list returned None")
 }
 

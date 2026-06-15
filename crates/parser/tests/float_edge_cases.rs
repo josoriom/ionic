@@ -10,7 +10,7 @@ use proptest::prelude::*;
 fn f64_nan_roundtrip() {
     let input = vec![f64::NAN, 1.0, f64::NAN];
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(input.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let vals = bin.to_f64_vec();
@@ -24,7 +24,7 @@ fn f64_nan_roundtrip() {
 fn f64_inf_roundtrip() {
     let input = vec![f64::INFINITY, f64::NEG_INFINITY, 0.0];
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(input.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let vals = bin.to_f64_vec();
@@ -38,7 +38,7 @@ fn f64_inf_roundtrip() {
 fn f64_negative_zero_roundtrip() {
     let input = vec![-0.0_f64, 0.0_f64];
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(input.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let vals = bin.to_f64_vec();
@@ -52,7 +52,7 @@ fn f64_subnormal_roundtrip() {
     let input = vec![f64::MIN_POSITIVE / 2.0, -f64::MIN_POSITIVE / 2.0];
     assert!(input[0].is_subnormal(), "test value should be subnormal");
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(input.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let vals = bin.to_f64_vec();
@@ -65,7 +65,7 @@ fn f64_subnormal_roundtrip() {
 fn f64_max_min_roundtrip() {
     let input = vec![f64::MAX, f64::MIN, f64::EPSILON];
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(input.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     let vals = bin.to_f64_vec();
@@ -85,11 +85,11 @@ fn f32_special_values_roundtrip() {
         f32::EPSILON,
     ];
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float32, BinaryData::F32(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float32, NumericArray::F32(input.clone()), len);
     let out = roundtrip(&mzml);
     let bin = first_spectrum_binary(&out).expect("should have binary data");
     match bin {
-        BinaryData::F32(vals) => {
+        NumericArray::F32(vals) => {
             assert_eq!(vals.len(), input.len());
             for (i, (got, expected)) in vals.iter().zip(input.iter()).enumerate() {
                 if expected.is_nan() {
@@ -99,7 +99,7 @@ fn f32_special_values_roundtrip() {
                 }
             }
         }
-        BinaryData::F64(vals) => {
+        NumericArray::F64(vals) => {
             assert_eq!(vals.len(), input.len());
             for (i, (got, expected)) in vals.iter().zip(input.iter()).enumerate() {
                 if expected.is_nan() {
@@ -117,7 +117,7 @@ fn f32_special_values_roundtrip() {
 fn empty_f64_array_roundtrip() {
     let input: Vec<f64> = vec![];
     let len = input.len();
-    let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(input.clone()), len);
+    let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(input.clone()), len);
     let out = roundtrip(&mzml);
     let empty = vec![];
     let spectra = out
@@ -145,7 +145,7 @@ proptest! {
         values in prop::collection::vec(prop::num::f64::ANY, 0..128)
     ) {
         let len = values.len();
-        let mzml = mzml_with_single_array(NumericType::Float64, BinaryData::F64(values.clone()), len);
+        let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
         let out = roundtrip(&mzml);
         if values.is_empty() {
             return Ok(());
@@ -170,7 +170,7 @@ proptest! {
         values in prop::collection::vec(prop::num::f32::ANY, 0..128)
     ) {
         let len = values.len();
-        let mzml = mzml_with_single_array(NumericType::Float32, BinaryData::F32(values.clone()), len);
+        let mzml = mzml_with_single_array(NumericType::Float32, NumericArray::F32(values.clone()), len);
         let out = roundtrip(&mzml);
         if values.is_empty() {
             return Ok(());

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::ion::{IonError, IonResult, Range};
+use crate::ion::{IonError, IonResult, ByteRange};
 
 pub trait ReadBytes: Send + Sync {
-    fn read(&self, range: Range) -> IonResult<Vec<u8>>;
+    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>>;
 }
 
 pub struct BytesSource {
@@ -17,7 +17,7 @@ impl BytesSource {
 }
 
 impl ReadBytes for BytesSource {
-    fn read(&self, range: Range) -> IonResult<Vec<u8>> {
+    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
         let start = to_usize(range.offset, "offset")?;
         let end = start
             .checked_add(to_usize(range.length, "length")?)
@@ -43,7 +43,7 @@ impl FileSource {
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl ReadBytes for FileSource {
-    fn read(&self, range: Range) -> IonResult<Vec<u8>> {
+    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
         let start = to_usize(range.offset, "offset")?;
         let end = start
             .checked_add(to_usize(range.length, "length")?)
@@ -55,14 +55,14 @@ impl ReadBytes for FileSource {
     }
 }
 
-pub type RangeReader = dyn Fn(Range) -> IonResult<Vec<u8>> + Send + Sync;
+pub type RangeReader = dyn Fn(ByteRange) -> IonResult<Vec<u8>> + Send + Sync;
 
 pub struct CallbackSource {
     read: Box<RangeReader>,
 }
 
 impl CallbackSource {
-    pub fn new(read: impl Fn(Range) -> IonResult<Vec<u8>> + Send + Sync + 'static) -> Self {
+    pub fn new(read: impl Fn(ByteRange) -> IonResult<Vec<u8>> + Send + Sync + 'static) -> Self {
         Self {
             read: Box::new(read),
         }
@@ -70,7 +70,7 @@ impl CallbackSource {
 }
 
 impl ReadBytes for CallbackSource {
-    fn read(&self, range: Range) -> IonResult<Vec<u8>> {
+    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
         let bytes = (self.read)(range)?;
         allow_len(&bytes, range.length)?;
         Ok(bytes)

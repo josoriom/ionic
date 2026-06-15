@@ -20,14 +20,12 @@ use regex::Regex;
 use serde::Serialize;
 
 use ionic::{
+    deprecated::read_old_file_to_mzml,
     ion::{
-        ReadOptions, FileWriter, IonReader, TempFile,
+        FileWriter, IonReader, ReadOptions, TempFile,
         encoder::{
-            encode::{
-                DEFAULT_TARGET_SEGMENT_BYTES, WriteOptions,
-                TARGET_BLOCK_UNCOMPRESSED_BYTES,
-            },
-            ion_writer::IonWriter,
+            encode::{DEFAULT_MZ_WINDOW, TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
+            ion_writer::{IonWriter, write_mzml_to_ion},
             utilities::SectionStorage,
         },
         format::{CURRENT_VERSION, FILE_TRAILER, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION},
@@ -116,20 +114,22 @@ struct ConvertArgs {
     #[arg(short = 'i', long = "input-path", required = true)]
     input_path: PathBuf,
 
-    #[arg(short = 'o', long = "output-path", required = true)]
-    output_path: PathBuf,
+    #[arg(short = 'o', long = "output-path")]
+    output_path: Option<PathBuf>,
 
     #[arg(
         long = "level",
         default_value_t = 22,
-        value_parser = clap::value_parser!(u8).range(0..=22)
+        value_parser = clap::value_parser!(u8).range(0..=22),
+        help = "zstd compression level for data blocks; 0 disables compression"
     )]
     compression_level: u8,
 
     #[arg(
         long = "block-size",
         default_value_t = TARGET_BLOCK_UNCOMPRESSED_BYTES as f64 / (1024.0 * 1024.0),
-        value_name = "MB"
+        value_name = "MB",
+        help = "Target uncompressed size of a data block before zstd"
     )]
     block_size_mb: f64,
 
@@ -149,7 +149,8 @@ struct ConvertArgs {
         long = "cores",
         default_value_t = 0u16,
         value_parser = clap::value_parser!(u16).range(0..=1024),
-        value_name = "N"
+        value_name = "N",
+        help = "Worker threads for conversion; 0 uses all available cores, 1 stays single-core"
     )]
     cores: u16,
 
@@ -159,12 +160,19 @@ struct ConvertArgs {
     #[arg(long = "section-storage", value_enum, default_value_t = SectionStorageArg::Memory)]
     section_storage: SectionStorageArg,
 
+    #[arg(long = "update", default_value_t = false, action = ArgAction::SetTrue)]
+    update: bool,
+
     #[arg(
-        long = "segment-size",
-        default_value_t = DEFAULT_TARGET_SEGMENT_BYTES as f64 / 1024.0,
-        value_name = "KB"
+        long = "mz-window",
+        default_value_t = DEFAULT_MZ_WINDOW,
+        value_name = "TH",
+        help = "m/z window width (Th) for the windowed layout; smaller is finer EIC, larger compresses better"
     )]
-    segment_size_kb: f64,
+    mz_window: f64,
+
+    #[arg(long = "dry-run", default_value_t = false, action = ArgAction::SetTrue)]
+    dry_run: bool,
 
     #[command(flatten)]
     which: ConvertWhich,
@@ -308,7 +316,7 @@ fn load_spectrum_at(file_path: &Path, index: usize) -> Result<Option<Spectrum>, 
         "ion" => {
             let mut ion = IonReader::open_file(file_path, ReadOptions::default())
                 .map_err(|e| format!("IonReader::open_file failed: {e}"))?;
-            ion.get_spectrum(index)
+            ion.spectrum(index)
                 .map_err(|e| format!("get_spectrum failed: {e}"))
         }
         "mzml" => {
@@ -353,9 +361,7 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     if ext == "ion" {
         let ion = IonReader::open_file(file_path, ReadOptions::default())
             .map_err(|e| format!("IonReader::open_file failed: {e}"))?;
-        return ion
-            .metadata()
-            .map_err(|e| format!("metadata failed: {e}"));
+        return ion.metadata().map_err(|e| format!("metadata failed: {e}"));
     }
     if ext == "mzml" {
         return parse_mzml(&bytes).map_err(|e| format!("parse_mzml failed: {e}"));
@@ -377,8 +383,10 @@ fn write_mzml_as_ion(
         let mut output_file =
             FileWriter::open_path(temp_output.path()).map_err(|error| error.to_string())?;
         let mut ion_writer =
-            IonWriter::begin(&mut output_file, config).map_err(|error| error.to_string())?;
-        ion_writer.write_stream(&mut input_reader).map_err(|error| error.to_string())?;
+            IonWriter::create(&mut output_file, config).map_err(|error| error.to_string())?;
+        ion_writer
+            .write_stream(&mut input_reader)
+            .map_err(|error| error.to_string())?;
         drop(ion_writer);
         output_file.flush().map_err(|error| error.to_string())?;
     }
@@ -531,11 +539,97 @@ fn size_to_bytes(value: f64, unit_bytes: f64, flag: &str) -> Result<usize, Strin
     Ok(bytes as usize)
 }
 
+fn update_one(
+    file: &Path,
+    output_root: &Path,
+    config: WriteOptions,
+    dry_run: bool,
+) -> Result<(u64, u64), String> {
+    let old_bytes = fs::read(file).map_err(|e| format!("read failed: {e}"))?;
+
+    let old_mzml = read_old_file_to_mzml(&old_bytes).map_err(|e| e.to_string())?;
+
+    let mut new_bytes: Vec<u8> = Vec::new();
+    write_mzml_to_ion(&old_mzml, config, &mut new_bytes).map_err(|e| e.to_string())?;
+
+    let mut new_reader =
+        IonReader::open_bytes(Arc::from(new_bytes.as_slice()), ReadOptions::default())
+            .map_err(|e| e.to_string())?;
+    let new_mzml = new_reader.to_mzml().map_err(|e| e.to_string())?;
+    let before = bin_to_mzml(&old_mzml).map_err(|e| e.to_string())?;
+    let after = bin_to_mzml(&new_mzml).map_err(|e| e.to_string())?;
+    if before != after {
+        return Err("verify failed: re-decoded mzML differs from the original".to_string());
+    }
+
+    let old_len = old_bytes.len() as u64;
+    let new_len = new_bytes.len() as u64;
+
+    if !dry_run {
+        let name = file.file_name().ok_or("file has no name")?;
+        let out_path = output_root.join(name);
+        let temp_path = out_path.with_extension("ion.tmp");
+        fs::write(&temp_path, &new_bytes).map_err(|e| format!("write temp failed: {e}"))?;
+        fs::rename(&temp_path, &out_path).map_err(|e| format!("rename failed: {e}"))?;
+    }
+
+    Ok((old_len, new_len))
+}
+
+fn run_update(
+    input_root: &Path,
+    output_root: &Path,
+    filter: Option<&dyn Fn(&str) -> bool>,
+    config: WriteOptions,
+    dry_run: bool,
+) -> Result<(), String> {
+    const MB: f64 = 1024.0 * 1024.0;
+
+    let files = collect_files_with_exts(input_root, &["ion"], filter)?;
+    if files.is_empty() {
+        return Err(format!(
+            "no matching .ion files found under {}",
+            input_root.display()
+        ));
+    }
+
+    let mut ok = 0u32;
+    let mut failed = 0u32;
+    for file in &files {
+        let name = basename(file);
+        match update_one(file, output_root, config, dry_run) {
+            Ok((old_len, new_len)) => {
+                ok += 1;
+                let tag = if dry_run { "[dry-run]" } else { "[ok]" };
+                println!(
+                    "{tag} {name}  {:.2} MB -> {:.2} MB",
+                    old_len as f64 / MB,
+                    new_len as f64 / MB
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("[error] {name}: {e}");
+            }
+        }
+    }
+
+    println!("updated={ok} failed={failed} dry_run={dry_run}");
+    if failed > 0 {
+        return Err(format!("{failed} file(s) failed to update"));
+    }
+    Ok(())
+}
+
 fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
 
     let input_root = resolve_user_path(&cwd, &cmd.input_path);
-    let output_root = resolve_user_path(&cwd, &cmd.output_path);
+    let output_root = match &cmd.output_path {
+        Some(path) => resolve_user_path(&cwd, path),
+        None if cmd.update => input_root.clone(),
+        None => return Err("--output-path is required".to_string()),
+    };
 
     fs::create_dir_all(&output_root).map_err(|e| format!("create output dir failed: {e}"))?;
 
@@ -548,7 +642,23 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     const MB: f64 = 1024.0 * 1024.0;
 
     let block_size = size_to_bytes(cmd.block_size_mb, MB, "--block-size")?;
-    let segment_size = size_to_bytes(cmd.segment_size_kb, 1024.0, "--segment-size")?;
+    if cmd.update {
+        let windowed = WriteOptions {
+            compression_level: cmd.compression_level,
+            force_f32: false,
+            block_size,
+            parallel: false,
+            section_storage: cmd.section_storage.storage(),
+            mz_window: cmd.mz_window,
+        };
+        return run_update(
+            &input_root,
+            &output_root,
+            filter.as_deref(),
+            windowed,
+            cmd.dry_run,
+        );
+    }
 
     let cores = match cmd.cores {
         0 => std::thread::available_parallelism()
@@ -693,7 +803,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 block_size,
                 parallel: matches!(encoding, Encoding::Parallel),
                 section_storage: cmd.section_storage.storage(),
-                segment_size,
+                mz_window: cmd.mz_window,
             };
             if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {
                 had_failed.store(true, Ordering::Relaxed);

@@ -222,8 +222,17 @@ pub(crate) fn packing_for(
             _ => &delta_shuffle::DELTA_SHUFFLE,
         };
     }
+    let is_delta_axis = matches!(
+        array_type,
+        MZ_ARRAY
+            | TIME_ARRAY
+            | ION_MOBILITY_ARRAY
+            | MEAN_ION_MOBILITY_ARRAY
+            | RAW_ION_MOBILITY_ARRAY
+            | RAW_ION_MOBILITY_DRIFT_TIME_ARRAY
+    );
     match dtype {
-        Dtype::F64 => &delta_shuffle::DELTA_SHUFFLE,
+        Dtype::F64 | Dtype::F32 if is_delta_axis => &delta_shuffle::DELTA_SHUFFLE,
         _ => &raw::RAW,
     }
 }

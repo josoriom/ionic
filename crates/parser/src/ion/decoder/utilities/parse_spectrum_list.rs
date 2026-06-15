@@ -28,6 +28,7 @@ pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
     metadata: &[&Metadatum],
     children_lookup: &ChildrenLookup,
     policy: &P,
+    index_base: u32,
 ) -> Option<SpectrumList> {
     let mut owner_rows = OwnerRows::with_capacity(metadata.len());
     for &entry in metadata {
@@ -59,7 +60,7 @@ pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
                 &owner_rows,
                 children_lookup,
                 spectrum_id,
-                index as u32,
+                index_base + index as u32,
                 policy,
                 &mut param_buffer,
             )

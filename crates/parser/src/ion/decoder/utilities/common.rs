@@ -15,7 +15,7 @@ use crate::{
         attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
     },
     mzml::schema::{SchemaNode, SchemaTree as Schema, TagId},
-    mzml::structs::{BinaryData, BinaryDataArray, BinaryDataArrayList},
+    mzml::structs::{NumericArray, BinaryDataArray, BinaryDataArrayList},
 };
 
 #[allow(dead_code)]
@@ -307,12 +307,12 @@ pub(crate) fn decoded_len(bda: &BinaryDataArray) -> usize {
     match bda.binary.as_ref() {
         None => 0,
         Some(bin) => match bin {
-            BinaryData::F16(v) => v.len(),
-            BinaryData::F32(v) => v.len(),
-            BinaryData::F64(v) => v.len(),
-            BinaryData::I16(v) => v.len(),
-            BinaryData::I32(v) => v.len(),
-            BinaryData::I64(v) => v.len(),
+            NumericArray::F16(v) => v.len(),
+            NumericArray::F32(v) => v.len(),
+            NumericArray::F64(v) => v.len(),
+            NumericArray::I16(v) => v.len(),
+            NumericArray::I32(v) => v.len(),
+            NumericArray::I64(v) => v.len(),
         },
     }
 }

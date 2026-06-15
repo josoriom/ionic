@@ -12,16 +12,15 @@ use crate::{
     encoder::scan_stream::ScanStream,
     encoder::utilities::{
         SectionChunk,
-        sink::WriteBytes,
+        output::WriteBytes,
         make_chunk,
         meta_collector::{
             ArrayPolicy, GroupedSection, LOCAL_LIST_NODE_ID, MetaCollector, MetaGrouper,
-            MzmlListItem, array_type_accession_from_binary_data_array, compress_bytes_if_enabled,
+            MzmlListItem, compress_bytes_if_enabled,
             serialize_global_meta_with_counts,
         },
-        segments::{SegmentPlan, allow_split, get_segment_ranges},
         tables::{
-            ArrayRefTable, IndexTable, SegmentBound, SegmentBoundsTable, SummaryTable,
+            ArrayRefTable, IndexTable, WindowBound, WindowBoundsTable, SummaryTable,
             write_aligned,
         },
     },
@@ -30,14 +29,16 @@ use crate::{
         encoder::{
             encode::{
                 CHROM_SUMMARY_SIZE, EncodedArrayRef, WriteOptions, SPEC_SUMMARY_SIZE,
-                allow_compression_level, array_is_fixed_width_splittable, check_spectrum_mz_order,
-                encode_single_array, extract_chrom_summary, get_segment_bounds,
-                spec_summary_from_spectrum, write_array_segments,
+                allow_compression_level, check_spectrum_mz_order,
+                encode_single_array, extract_chrom_summary, get_window_bounds,
+                spec_summary_from_spectrum, window_ranges_for_item,
+                write_array_windows,
             },
             utilities::{BlockWriter, DefaultCompressor},
         },
         format::{FILE_TRAILER, HEADER_SIZE},
         header::Header,
+        windowing::WindowRange,
         meta_groups::METADATA_GROUP_SIZE,
         utilities::EmitAttributes,
     },
@@ -47,7 +48,7 @@ use crate::{
 fn spec_summary_bytes(spec: &Spectrum) -> [u8; SPEC_SUMMARY_SIZE] {
     let s = spec_summary_from_spectrum(spec);
     let mut buf = [0u8; SPEC_SUMMARY_SIZE];
-    buf[0..8].copy_from_slice(&s.rt_seconds.to_le_bytes());
+    buf[0..8].copy_from_slice(&s.rt.to_le_bytes());
     buf[8..16].copy_from_slice(&s.base_peak_mz.to_le_bytes());
     buf[16..24].copy_from_slice(&s.selected_ion_mz.to_le_bytes());
     buf[24..32].copy_from_slice(&s.base_peak_int.to_le_bytes());
@@ -57,6 +58,7 @@ fn spec_summary_bytes(spec: &Spectrum) -> [u8; SPEC_SUMMARY_SIZE] {
     buf[42..46].copy_from_slice(&s.position_x.to_le_bytes());
     buf[46..50].copy_from_slice(&s.position_y.to_le_bytes());
     buf[50..54].copy_from_slice(&s.position_z.to_le_bytes());
+    buf[54] = s.rt_unit;
     buf
 }
 
@@ -73,46 +75,11 @@ fn chrom_summary_bytes(chrom: &Chromatogram) -> [u8; CHROM_SUMMARY_SIZE] {
     buf
 }
 
-fn allow_split_for_item(
-    arrays: &[BinaryDataArray],
-    config: WriteOptions,
-    policy: ArrayPolicy,
-) -> IonResult<Option<SegmentPlan>> {
-    let Some(x_array) = arrays
-        .iter()
-        .find(|bda| array_type_accession_from_binary_data_array(bda) == policy.x_array_accession)
-    else {
-        return Ok(None);
-    };
-
-    let Some((x_count, x_elem_bytes)) = array_is_fixed_width_splittable(x_array, config, policy)?
-    else {
-        return Ok(None);
-    };
-    if x_count == 0 {
-        return Ok(None);
-    }
-
-    for bda in arrays {
-        match array_is_fixed_width_splittable(bda, config, policy)? {
-            Some((count, _)) if count == x_count => {}
-            _ => return Ok(None),
-        }
-    }
-
-    let plan = get_segment_ranges(x_count, x_elem_bytes, config.segment_size);
-    let x_array_bytes = x_count * x_elem_bytes;
-    if !allow_split(x_array_bytes, config.segment_size, &plan) {
-        return Ok(None);
-    }
-    Ok(Some(plan))
-}
-
 struct ArrayWriteState<'a> {
     arefs: &'a mut ArrayRefTable,
     cursor: &'a mut u64,
     seen: &'a mut Vec<u32>,
-    segment_bounds: &'a mut SegmentBoundsTable,
+    window_bounds: &'a mut WindowBoundsTable,
 }
 
 impl ArrayWriteState<'_> {
@@ -151,7 +118,7 @@ fn write_single_array(
     state.emit(&aref)?;
 
     if let Some((low, high)) = get_array_bounds(bda, aref.dtype) {
-        state.segment_bounds.push(SegmentBound {
+        state.window_bounds.push(WindowBound {
             array_ref_index: ref_index,
             low,
             high,
@@ -160,25 +127,25 @@ fn write_single_array(
     Ok(())
 }
 
-fn write_split_array(
+fn write_windowed_array(
     bda: &BinaryDataArray,
     config: WriteOptions,
     policy: ArrayPolicy,
-    plan: &SegmentPlan,
+    windows: &[WindowRange],
     container: &mut BlockWriter<'_, DefaultCompressor>,
     state: &mut ArrayWriteState<'_>,
 ) -> IonResult<()> {
-    let refs = write_array_segments(bda, config, policy, plan, container)?;
+    let refs = write_array_windows(bda, config, policy, windows, container)?;
     let Some(first) = refs.first() else {
         return Ok(());
     };
-    let bounds = get_segment_bounds(bda, plan, first.dtype);
+    let bounds = get_window_bounds(bda, windows, first.dtype);
     for (segment_index, aref) in refs.iter().enumerate() {
         let ref_index = *state.cursor;
         state.emit(aref)?;
         if let Some(bounds) = bounds.as_ref() {
             let (low, high) = bounds[segment_index];
-            state.segment_bounds.push(SegmentBound {
+            state.window_bounds.push(WindowBound {
                 array_ref_index: ref_index,
                 low,
                 high,
@@ -192,7 +159,7 @@ fn encode_arrays_for<T>(
     item: &T,
     config: WriteOptions,
     policy: ArrayPolicy,
-    allow_splitting: bool,
+    windowable: bool,
     container: &mut BlockWriter<'_, DefaultCompressor>,
     index: &mut IndexTable,
     state: &mut ArrayWriteState<'_>,
@@ -203,15 +170,17 @@ where
     let aref_start = *state.cursor;
 
     if let Some(list) = item.array_list() {
-        let plan = if allow_splitting {
-            allow_split_for_item(&list.binary_data_arrays, config, policy)?
+        let windows = if windowable {
+            window_ranges_for_item(&list.binary_data_arrays, config, policy, config.mz_window)?
         } else {
             None
         };
 
         for bda in &list.binary_data_arrays {
-            match plan.as_ref() {
-                Some(plan) => write_split_array(bda, config, policy, plan, container, state)?,
+            match windows.as_ref() {
+                Some(windows) => {
+                    write_windowed_array(bda, config, policy, windows, container, state)?
+                }
                 None => write_single_array(bda, config, policy, container, state)?,
             }
         }
@@ -243,8 +212,8 @@ struct ItemStream {
     index: IndexTable,
     arefs: ArrayRefTable,
     grouper: MetaGrouper,
-    segment_bounds: SegmentBoundsTable,
-    allow_splitting: bool,
+    window_bounds: WindowBoundsTable,
+    windowable: bool,
     count: usize,
     aref_cursor: u64,
     seen: Vec<u32>,
@@ -259,7 +228,7 @@ struct StreamParts {
     summary: SectionChunk,
     index: SectionChunk,
     arefs: SectionChunk,
-    segment_bounds: SectionChunk,
+    window_bounds: SectionChunk,
     count: usize,
     type_count: usize,
     container_offset: u64,
@@ -275,7 +244,7 @@ impl ItemStream {
         summary_size: usize,
         table_hint: usize,
         config: WriteOptions,
-        allow_splitting: bool,
+        windowable: bool,
     ) -> IonResult<Self> {
         let mode = config.section_storage;
         Ok(Self {
@@ -295,12 +264,12 @@ impl ItemStream {
                 config.compression_level,
                 make_chunk(mode, &format!("{tag}-meta"), 0)?,
             ),
-            segment_bounds: SegmentBoundsTable::new(make_chunk(
+            window_bounds: WindowBoundsTable::new(make_chunk(
                 mode,
-                &format!("{tag}-segment-bounds"),
+                &format!("{tag}-window-bounds"),
                 0,
             )?),
-            allow_splitting,
+            windowable,
             count: 0,
             aref_cursor: 0,
             seen: Vec::with_capacity(8),
@@ -331,13 +300,13 @@ impl ItemStream {
             arefs: &mut self.arefs,
             cursor: &mut self.aref_cursor,
             seen: &mut self.seen,
-            segment_bounds: &mut self.segment_bounds,
+            window_bounds: &mut self.window_bounds,
         };
         encode_arrays_for(
             item,
             config,
             policy,
-            self.allow_splitting,
+            self.windowable,
             container,
             &mut self.index,
             &mut state,
@@ -361,7 +330,7 @@ impl ItemStream {
             summary: self.summary.finish(),
             index: self.index.finish(),
             arefs: self.arefs.finish(),
-            segment_bounds: self.segment_bounds.finish(),
+            window_bounds: self.window_bounds.finish(),
             count: self.count,
             type_count: self.seen.len(),
             container_offset: self.container_offset,
@@ -448,16 +417,16 @@ pub struct IonWriter<'out> {
 }
 
 impl<'out> IonWriter<'out> {
-    pub fn begin(sink: &'out mut dyn WriteBytes, config: WriteOptions) -> IonResult<Self> {
+    pub fn create(output: &'out mut dyn WriteBytes, config: WriteOptions) -> IonResult<Self> {
         allow_compression_level(config.compression_level)?;
-        sink.write(&[0u8; HEADER_SIZE])?;
+        output.write(&[0u8; HEADER_SIZE])?;
 
         let collector = MetaCollector::new();
         let spec_list_id = LOCAL_LIST_NODE_ID;
         let chrom_list_id = LOCAL_LIST_NODE_ID;
 
         Ok(Self {
-            output: sink,
+            output,
             config,
             collector,
             spec_list_id,
@@ -540,7 +509,7 @@ impl<'out> IonWriter<'out> {
         self.write_reader(scans)
     }
 
-    fn write_segment_bounds(&mut self, bounds: SectionChunk) -> IonResult<SectionPlacement> {
+    fn write_window_bounds(&mut self, bounds: SectionChunk) -> IonResult<SectionPlacement> {
         let raw = bounds.into_vec()?;
         let plain_len = raw.len() as u64;
         if raw.is_empty() {
@@ -603,8 +572,8 @@ impl<'out> IonWriter<'out> {
         let off_chrom_meta = write_chunk(self.output, chrom.grouped.section)?.0;
         let off_global_meta = write_aligned(self.output, &global_bytes)?;
 
-        let a3 = self.write_segment_bounds(spec.segment_bounds)?;
-        let b3 = self.write_segment_bounds(chrom.segment_bounds)?;
+        let a3 = self.write_window_bounds(spec.window_bounds)?;
+        let b3 = self.write_window_bounds(chrom.window_bounds)?;
 
         self.output.write(&FILE_TRAILER)?;
         let total_file_size = self.output.position()?;
@@ -669,14 +638,14 @@ impl<'out> IonWriter<'out> {
             spec_directory_crc32: spec.directory_crc32,
             chrom_directory_crc32: chrom.directory_crc32,
 
-            off_spec_segment_bounds: a3.offset,
-            len_spec_segment_bounds: a3.length,
-            off_chrom_segment_bounds: b3.offset,
-            len_chrom_segment_bounds: b3.length,
-            plain_len_spec_segment_bounds: a3.plain_len,
-            plain_len_chrom_segment_bounds: b3.plain_len,
-            spec_segment_bounds_crc32: a3.crc32,
-            chrom_segment_bounds_crc32: b3.crc32,
+            off_spec_window_bounds: a3.offset,
+            len_spec_window_bounds: a3.length,
+            off_chrom_window_bounds: b3.offset,
+            len_chrom_window_bounds: b3.length,
+            plain_len_spec_window_bounds: a3.plain_len,
+            plain_len_chrom_window_bounds: b3.plain_len,
+            spec_window_bounds_crc32: a3.crc32,
+            chrom_window_bounds_crc32: b3.crc32,
 
             spec_summary_crc32,
             spec_entries_crc32,
@@ -687,7 +656,7 @@ impl<'out> IonWriter<'out> {
             spec_meta_crc32,
             chrom_meta_crc32,
             global_meta_crc32,
-            segment_size: self.config.segment_size as u64,
+            target_mz_window: self.config.mz_window.round() as u32,
             header_crc32: 0,
             ..Header::default()
         };
@@ -706,5 +675,5 @@ pub fn write_mzml_to_ion(
     output: &mut dyn WriteBytes,
 ) -> IonResult<()> {
     allow_compression_level(config.compression_level)?;
-    IonWriter::begin(output, config)?.write_mzml(mzml)
+    IonWriter::create(output, config)?.write_mzml(mzml)
 }

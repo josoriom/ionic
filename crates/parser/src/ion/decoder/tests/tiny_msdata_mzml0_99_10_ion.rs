@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{BinaryData, MzML, NumericType},
+    mzml::structs::{NumericArray, MzML, NumericType},
     utilities::test::{
         CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_description,
         spectrum_precursor_list, spectrum_scan_list,
@@ -780,8 +780,8 @@ fn tiny_msdata_mzml0_99_10_s19_mz_binary() {
     let expected: Vec<f64> = [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0].to_vec();
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S19 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S19 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S19 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -809,8 +809,8 @@ fn tiny_msdata_mzml0_99_10_s19_intensity_binary() {
     let expected: Vec<f64> = [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0].to_vec();
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S19 intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S19 intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("S19 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -839,8 +839,8 @@ fn tiny_msdata_mzml0_99_10_s20_mz_binary() {
     let expected: Vec<f64> = [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0].to_vec();
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S20 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S20 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S20 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -868,8 +868,8 @@ fn tiny_msdata_mzml0_99_10_s20_intensity_binary() {
     let expected: Vec<f64> = [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0].to_vec();
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S20 intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S20 intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("S20 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
