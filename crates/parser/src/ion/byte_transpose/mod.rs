@@ -21,13 +21,38 @@ use simd_wasm32 as platform;
 use simd_x86_64 as platform;
 
 #[inline]
+pub(crate) fn shuffle_with_tail(input: &[u8], output: &mut [u8], stride: usize) {
+    debug_assert!(stride > 0);
+    debug_assert_eq!(input.len(), output.len());
+    let aligned = if stride > 1 {
+        input.len() - (input.len() % stride)
+    } else {
+        input.len()
+    };
+    shuffle(&input[..aligned], &mut output[..aligned], stride);
+    if aligned < input.len() {
+        output[aligned..].copy_from_slice(&input[aligned..]);
+    }
+}
+
+#[inline]
 pub(crate) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
-    platform::shuffle(input, output, stride);
+    match stride {
+        2 => platform::shuffle2(input, output),
+        4 => platform::shuffle4(input, output),
+        8 => platform::shuffle8(input, output),
+        _ => scalar::shuffle_any(input, output, stride),
+    }
 }
 
 #[inline]
 pub(crate) fn unshuffle(input: &[u8], output: &mut [u8], stride: usize) {
-    platform::unshuffle(input, output, stride);
+    match stride {
+        2 => platform::unshuffle2(input, output),
+        4 => platform::unshuffle4(input, output),
+        8 => platform::unshuffle8(input, output),
+        _ => scalar::unshuffle_any(input, output, stride),
+    }
 }
 
 #[cfg(test)]
@@ -41,13 +66,13 @@ mod tests {
     fn do_shuffle(input: &[u8], stride: usize) -> Vec<u8> {
         let aligned = (input.len() / stride) * stride;
         let mut out = vec![0u8; aligned];
-        platform::shuffle(&input[..aligned], &mut out, stride);
+        super::shuffle(&input[..aligned], &mut out, stride);
         out
     }
 
     fn do_unshuffle(input: &[u8], stride: usize) -> Vec<u8> {
         let mut out = vec![0u8; input.len()];
-        platform::unshuffle(input, &mut out, stride);
+        super::unshuffle(input, &mut out, stride);
         out
     }
 

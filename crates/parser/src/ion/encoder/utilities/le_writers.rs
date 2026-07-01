@@ -6,6 +6,7 @@ pub(crate) fn write_u32_le(buf: &mut Vec<u8>, v: u32) {
 }
 
 #[inline]
+#[cfg(test)]
 pub(crate) fn write_u64_le(buf: &mut Vec<u8>, v: u64) {
     buf.extend_from_slice(&v.to_le_bytes());
 }

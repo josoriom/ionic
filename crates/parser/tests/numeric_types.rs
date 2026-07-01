@@ -1,9 +1,8 @@
 mod common;
 
-use common::BinaryDataExt;
 use common::assertions::*;
+use common::helpers;
 use common::helpers::*;
-use common::test_files;
 use ionic::mzml::structs::*;
 
 #[test]
@@ -11,23 +10,23 @@ fn ion_roundtrip_preserves_rare_numeric_types() {
     let cases = [
         (
             NumericType::Float16,
-            BinaryData::F16(vec![0x0000, 0x3c00, 0x4000]),
-            BinaryData::F16(vec![0x0000, 0x3555, 0x3c00]),
+            NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
+            NumericArray::F16(vec![0x0000, 0x3555, 0x3c00]),
         ),
         (
             NumericType::Int16,
-            BinaryData::I16(vec![-10, 0, 10]),
-            BinaryData::I16(vec![-20, 0, 20]),
+            NumericArray::I16(vec![-10, 0, 10]),
+            NumericArray::I16(vec![-20, 0, 20]),
         ),
         (
             NumericType::Int32,
-            BinaryData::I32(vec![-1_000, 0, 1_000]),
-            BinaryData::I32(vec![-2_000, 0, 2_000]),
+            NumericArray::I32(vec![-1_000, 0, 1_000]),
+            NumericArray::I32(vec![-2_000, 0, 2_000]),
         ),
         (
             NumericType::Int64,
-            BinaryData::I64(vec![-1_000_000, 0, 1_000_000]),
-            BinaryData::I64(vec![-2_000_000, 0, 2_000_000]),
+            NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
+            NumericArray::I64(vec![-2_000_000, 0, 2_000_000]),
         ),
     ];
 
@@ -49,23 +48,23 @@ fn xml_roundtrip_preserves_rare_numeric_types_without_array_length() {
     let cases = [
         (
             NumericType::Float16,
-            BinaryData::F16(vec![0x0000, 0x3c00, 0x4000]),
-            BinaryData::F16(vec![0x0000, 0x3555, 0x3c00]),
+            NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
+            NumericArray::F16(vec![0x0000, 0x3555, 0x3c00]),
         ),
         (
             NumericType::Int16,
-            BinaryData::I16(vec![-10, 0, 10]),
-            BinaryData::I16(vec![-20, 0, 20]),
+            NumericArray::I16(vec![-10, 0, 10]),
+            NumericArray::I16(vec![-20, 0, 20]),
         ),
         (
             NumericType::Int32,
-            BinaryData::I32(vec![-1_000, 0, 1_000]),
-            BinaryData::I32(vec![-2_000, 0, 2_000]),
+            NumericArray::I32(vec![-1_000, 0, 1_000]),
+            NumericArray::I32(vec![-2_000, 0, 2_000]),
         ),
         (
             NumericType::Int64,
-            BinaryData::I64(vec![-1_000_000, 0, 1_000_000]),
-            BinaryData::I64(vec![-2_000_000, 0, 2_000_000]),
+            NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
+            NumericArray::I64(vec![-2_000_000, 0, 2_000_000]),
         ),
     ];
 
@@ -73,7 +72,7 @@ fn xml_roundtrip_preserves_rare_numeric_types_without_array_length() {
         let src =
             synthetic_numeric_matrix_mzml(numeric_type, spectrum_binary, chromatogram_binary, None);
         let xml = ionic::mzml::bin_to_mzml::bin_to_mzml(&src).expect("bin_to_mzml should succeed");
-        let reparsed = common::parse_xml(&xml);
+        let reparsed = ionic::mzml::parse_mzml::parse_mzml(&xml).expect("reparse should succeed");
         assert_mzml_semantic_eq(&src, &reparsed);
     }
 }
@@ -83,13 +82,13 @@ fn parser_honors_declared_shorter_array_length() {
     let cases = [
         (
             NumericType::Float16,
-            BinaryData::F16(vec![0x0000, 0x3c00, 0x4000]),
+            NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
         ),
-        (NumericType::Int16, BinaryData::I16(vec![-10, 0, 10])),
-        (NumericType::Int32, BinaryData::I32(vec![-1_000, 0, 1_000])),
+        (NumericType::Int16, NumericArray::I16(vec![-10, 0, 10])),
+        (NumericType::Int32, NumericArray::I32(vec![-1_000, 0, 1_000])),
         (
             NumericType::Int64,
-            BinaryData::I64(vec![-1_000_000, 0, 1_000_000]),
+            NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
         ),
     ];
 
@@ -111,8 +110,87 @@ fn parser_honors_declared_shorter_array_length() {
 
 #[test]
 fn encoder_preserves_integer_ms_level_arrays() {
-    let src = test_files::anpc_test_mzml();
-    let bytes = common::encode_to_ion(src, 10, false);
+    let src = MzML {
+        cv_list: Some(helpers::default_cv_list_like_writer()),
+        file_description: Some(helpers::minimal_file_description()),
+        run: Run {
+            id: "int-array-test".to_string(),
+            spectrum_list: Some(SpectrumList {
+                count: Some(1),
+                spectra: vec![Spectrum {
+                    id: "scan=1".to_string(),
+                    index: Some(0),
+                    default_array_length: Some(3),
+                    binary_data_array_list: Some(BinaryDataArrayList {
+                        count: Some(2),
+                        binary_data_arrays: vec![
+                            helpers::synthetic_binary_data_array(
+                                "MS:1000514",
+                                NumericType::Float64,
+                                NumericArray::F64(vec![100.0, 200.0, 300.0]),
+                                Some(3),
+                            ),
+                            helpers::synthetic_binary_data_array(
+                                "MS:1000515",
+                                NumericType::Float64,
+                                NumericArray::F64(vec![1.0, 2.0, 3.0]),
+                                Some(3),
+                            ),
+                        ],
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            chromatogram_list: Some(ChromatogramList {
+                count: Some(1),
+                chromatograms: vec![Chromatogram {
+                    id: "TIC".to_string(),
+                    index: Some(0),
+                    default_array_length: Some(3),
+                    binary_data_array_list: Some(BinaryDataArrayList {
+                        count: Some(3),
+                        binary_data_arrays: vec![
+                            helpers::synthetic_binary_data_array(
+                                "MS:1000595",
+                                NumericType::Float64,
+                                NumericArray::F64(vec![1.0, 2.0, 3.0]),
+                                Some(3),
+                            ),
+                            helpers::synthetic_binary_data_array(
+                                "MS:1000515",
+                                NumericType::Float64,
+                                NumericArray::F64(vec![10.0, 20.0, 30.0]),
+                                Some(3),
+                            ),
+                            BinaryDataArray {
+                                array_length: Some(3),
+                                cv_params: vec![
+                                    CvParam {
+                                        cv_ref: Some("MS".to_string()),
+                                        accession: Some("MS:1000786".to_string()),
+                                        name: "ms level array".to_string(),
+                                        ..Default::default()
+                                    },
+                                    helpers::synthetic_ms_cv(helpers::precision_accession(NumericType::Int64), None),
+                                    helpers::synthetic_ms_cv("MS:1000576", None),
+                                ],
+                                numeric_type: Some(NumericType::Int64),
+                                binary: Some(NumericArray::I64(vec![1, 1, 2])),
+                                ..Default::default()
+                            },
+                        ],
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let bytes = common::encode_to_ion(&src, 10, false);
     let out = common::decode_ion(&bytes).expect("decode should succeed");
 
     let tic = common::chromatogram_by_id(&out, "TIC");
@@ -121,7 +199,7 @@ fn encoder_preserves_integer_ms_level_arrays() {
     assert_eq!(ms_level.numeric_type, Some(NumericType::Int64));
 
     match ms_level.binary.as_ref().expect("ms level binary present") {
-        BinaryData::I64(v) => {
+        NumericArray::I64(v) => {
             assert!(!v.is_empty(), "ms level array must be non-empty");
         }
         other => panic!("ms level array must be I64, got {other:?}"),

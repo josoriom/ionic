@@ -2,8 +2,7 @@ mod common;
 
 use common::assertions::*;
 use common::test_files;
-use ionic::mzml::bin_to_mzml::bin_to_mzml;
-use ionic::mzml::parse_mzml::parse_indexed_mzml;
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_indexed_mzml};
 
 #[test]
 fn test_file_indices_match_model() {
@@ -61,7 +60,7 @@ fn serializer_emits_parseable_index_entries() {
     for (label, src) in test_files_list {
         let xml =
             bin_to_mzml(src).unwrap_or_else(|e| panic!("bin_to_mzml failed for {label}: {e}"));
-        let indexed = parse_indexed_mzml(xml.as_bytes())
+        let indexed = parse_indexed_mzml(&xml)
             .unwrap_or_else(|e| panic!("parse_indexed_mzml failed for generated {label}: {e}"));
         assert_mzml_semantic_eq(src, &indexed.mzml);
         assert_index_offsets_match_model(&indexed, label);

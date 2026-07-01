@@ -1,13 +1,16 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 use quick_xml::events::BytesStart;
 use std::io::BufRead;
 
 use crate::{
-    BinaryData, BinaryDataArray, BinaryDataArrayList, NumericType,
+    accessions::{
+        ACC_COMPRESSION_ZLIB, ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR, ACC_FLOAT_64BIT_STR,
+        ACC_INT_16BIT_STR, ACC_INT_32BIT_STR, ACC_INT_64BIT_STR,
+    },
     mzml::{
         schema::TagId,
+        structs::{NumericArray, BinaryDataArray, BinaryDataArrayList, NumericType},
         utilities::{
             ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize, read_base64_binary,
             read_cv_param, read_ref_group_ref, read_user_param,
@@ -19,9 +22,10 @@ pub(crate) fn parse_bda_list<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<BinaryDataArrayList, ParseError> {
+    let count = attr_usize(start, b"count");
     let mut list = BinaryDataArrayList {
-        count: attr_usize(start, b"count"),
-        ..Default::default()
+        count,
+        binary_data_arrays: Vec::with_capacity(count.unwrap_or(0)),
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();
@@ -53,7 +57,7 @@ pub(crate) fn parse_bda<R: BufRead>(
         data_processing_ref: attr(start, b"dataProcessingRef"),
         ..Default::default()
     };
-    let mut raw_ion: Vec<u8> = Vec::new();
+    let mut base64_bytes: Vec<u8> = Vec::new();
 
     ws.for_each_child(start, |ws, event| {
         let (tag, element, _) = event.into_parts();
@@ -72,10 +76,10 @@ pub(crate) fn parse_bda<R: BufRead>(
             }
             TagId::Binary => {
                 if let Some(len) = bda.encoded_length {
-                    raw_ion.reserve(len);
+                    base64_bytes.reserve(len);
                 }
                 let closing = element.name().as_ref().to_vec();
-                read_base64_binary(ws, &closing, &mut raw_ion)?;
+                read_base64_binary(ws, &closing, &mut base64_bytes)?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -85,21 +89,30 @@ pub(crate) fn parse_bda<R: BufRead>(
     let encoding = encoding_for_array(&bda);
     bda.numeric_type = Some(encoding.numeric_type);
 
-    if !raw_ion.is_empty() {
-        let mut decoded = Vec::with_capacity(raw_ion.len() * 3 / 4 + 8);
-        STANDARD.decode_vec(&raw_ion, &mut decoded)?;
-        if encoding.is_zlib_compressed {
-            decoded = decompress_to_vec_zlib(&decoded)
-                .map_err(|e| ParseError::Decompress(format!("{e:?}")))?;
-        }
-        bda.binary = Some(decode_binary_data(
-            encoding.numeric_type,
-            &decoded,
-            bda.array_length,
-        ));
+    if !base64_bytes.is_empty() {
+        bda.pending_zlib = encoding.is_zlib_compressed;
+        bda.pending_base64 = Some(base64_bytes);
     }
 
     Ok(bda)
+}
+
+pub(crate) fn finalize_bda(bda: &mut BinaryDataArray) -> Result<(), ParseError> {
+    let Some(base64_bytes) = bda.pending_base64.take() else {
+        return Ok(());
+    };
+    let mut decoded = Vec::with_capacity(base64_bytes.len() * 3 / 4 + 8);
+    STANDARD.decode_vec(&base64_bytes, &mut decoded)?;
+    if bda.pending_zlib {
+        decoded = decompress_to_vec_zlib(&decoded)
+            .map_err(|e| ParseError::Decompress(format!("{e:?}")))?;
+    }
+    bda.binary = Some(decode_binary_data(
+        bda.numeric_type.unwrap_or(NumericType::Float64),
+        &decoded,
+        bda.array_length,
+    ));
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -114,9 +127,17 @@ fn encoding_for_array(bda: &BinaryDataArray) -> BinaryArrayEncoding {
             .iter()
             .any(|p| p.accession.as_deref() == Some(acc))
     };
-    let is_zlib_compressed = has("MS:1000574");
-    let (f64, f32, f16) = (has("MS:1000523"), has("MS:1000521"), has("MS:1000520"));
-    let (i64, i32, i16) = (has("MS:1000522"), has("MS:1000519"), has("MS:1000518"));
+    let is_zlib_compressed = has(ACC_COMPRESSION_ZLIB);
+    let (f64, f32, f16) = (
+        has(ACC_FLOAT_64BIT_STR),
+        has(ACC_FLOAT_32BIT_STR),
+        has(ACC_FLOAT_16BIT_STR),
+    );
+    let (i64, i32, i16) = (
+        has(ACC_INT_64BIT_STR),
+        has(ACC_INT_32BIT_STR),
+        has(ACC_INT_16BIT_STR),
+    );
 
     let numeric_type = if let Some(declared) = bda.numeric_type {
         declared
@@ -148,35 +169,35 @@ fn decode_binary_data(
     numeric_type: NumericType,
     decoded: &[u8],
     array_length: Option<usize>,
-) -> BinaryData {
+) -> NumericArray {
     match numeric_type {
         NumericType::Float64 => {
-            BinaryData::F64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
+            NumericArray::F64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
                 f64::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Float32 => {
-            BinaryData::F32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
+            NumericArray::F32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
                 f32::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Float16 => {
-            BinaryData::F16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
+            NumericArray::F16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
                 u16::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Int64 => {
-            BinaryData::I64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
+            NumericArray::I64(decode_packed_numeric_bytes(decoded, 8, array_length, |c| {
                 i64::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Int32 => {
-            BinaryData::I32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
+            NumericArray::I32(decode_packed_numeric_bytes(decoded, 4, array_length, |c| {
                 i32::from_le_bytes(c.try_into().unwrap())
             }))
         }
         NumericType::Int16 => {
-            BinaryData::I16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
+            NumericArray::I16(decode_packed_numeric_bytes(decoded, 2, array_length, |c| {
                 i16::from_le_bytes(c.try_into().unwrap())
             }))
         }

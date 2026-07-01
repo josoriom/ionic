@@ -10,13 +10,10 @@ pub mod test_files;
 
 #[allow(unused_imports)]
 pub(crate) use binary_ext::BinaryDataExt;
-use ionic::ion::DecoderConfig;
-
-use std::collections::BTreeSet;
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{collections::BTreeSet, fs, path::PathBuf, sync::OnceLock};
 
 use ionic::{
-    ion::{Decoder, IonResult, WritingMode, encode},
+    ion::{IonReader, ReadOptions, IonResult, encode},
     mzml::{
         parse_mzml::{parse_indexed_mzml, parse_mzml},
         structs::*,
@@ -55,19 +52,12 @@ pub(crate) fn parse_indexed(rel: &str) -> IndexedmzML {
 
 pub(crate) fn encode_to_ion(mzml: &MzML, compression_level: u8, force_f32: bool) -> Vec<u8> {
     let mut out = Vec::new();
-    encode(
-        mzml,
-        compression_level,
-        force_f32,
-        WritingMode::Memory,
-        &mut out,
-    )
-    .expect("encode should succeed");
+    encode(mzml, compression_level, force_f32, &mut out).expect("encode should succeed");
     out
 }
 
 pub(crate) fn decode_ion(bytes: &[u8]) -> IonResult<MzML> {
-    let mut decoder = Decoder::open(bytes, DecoderConfig::default())?;
+    let mut decoder = IonReader::open(bytes, ReadOptions::default())?;
     decoder.to_mzml()
 }
 
@@ -261,6 +251,32 @@ pub(crate) fn scan_start_time_seconds(s: &Spectrum) -> Option<f64> {
     }
 }
 
+pub(crate) fn scan_start_time_raw(s: &Spectrum) -> Option<f64> {
+    let scan = scan_list_of_spectrum(s)?.scans.first()?;
+    let p = cv_param_by_accession(&scan.cv_params, "MS:1000016")?;
+    p.value.as_deref()?.parse::<f64>().ok()
+}
+
+pub(crate) fn scan_start_time_unit_code(s: &Spectrum) -> u8 {
+    let Some(scan) = scan_list_of_spectrum(s).and_then(|list| list.scans.first()) else {
+        return 0;
+    };
+    let Some(p) = cv_param_by_accession(&scan.cv_params, "MS:1000016") else {
+        return 0;
+    };
+    match p.unit_accession.as_deref() {
+        Some("UO:0000031") | Some("MS:1000038") => 2,
+        Some("UO:0000010") | Some("MS:1000039") => 1,
+        Some("UO:0000028") => 3,
+        _ => match p.unit_name.as_deref() {
+            Some("minute" | "minutes") => 2,
+            Some("second" | "seconds") => 1,
+            Some("millisecond" | "milliseconds") => 3,
+            _ => 0,
+        },
+    }
+}
+
 pub(crate) fn id_name_value_pairs(id: &str) -> Vec<(&str, &str)> {
     id.split_whitespace()
         .filter_map(|tok| tok.split_once('='))
@@ -372,7 +388,7 @@ pub(crate) fn fnv64_str(s: &str) -> u64 {
     fnv64_bytes(s.as_bytes())
 }
 
-pub(crate) fn hash_binary_payload(bin: &BinaryData) -> u64 {
+pub(crate) fn hash_binary_payload(bin: &NumericArray) -> u64 {
     use binary_ext::BinaryDataExt;
     fnv64_bytes(&bin.to_le_bytes())
 }
@@ -475,7 +491,7 @@ pub(crate) fn semantic_fingerprint(mzml: &MzML) -> String {
     format!("{state:016x}")
 }
 
-pub(crate) fn first_spectrum_binary(mzml: &MzML) -> Option<&BinaryData> {
+pub(crate) fn first_spectrum_binary(mzml: &MzML) -> Option<&NumericArray> {
     mzml.run
         .spectrum_list
         .as_ref()?

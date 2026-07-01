@@ -3,15 +3,16 @@ mod common;
 use common::assertions::*;
 use common::test_files;
 use common::{chromatograms, decode_ion, encode_to_ion, spectra};
+use ionic::ion::format::FILE_SIGNATURE;
 
 #[test]
 fn tiny_11_level12_with_header_check() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 12, false);
     assert_eq!(
-        &bytes[..8],
-        b"START\0\0\0",
-        "encoded header signature must be START\\0\\0\\0"
+        &bytes[..FILE_SIGNATURE.len()],
+        &FILE_SIGNATURE,
+        "encoded header signature must match FILE_SIGNATURE"
     );
     let decoded = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &decoded);
@@ -21,7 +22,7 @@ fn tiny_11_level12_with_header_check() {
 fn tiny_10_level0_with_header_check() {
     let src = test_files::tiny_pwiz_10();
     let bytes = encode_to_ion(src, 0, false);
-    assert_eq!(&bytes[..8], b"START\0\0\0");
+    assert_eq!(&bytes[..FILE_SIGNATURE.len()], &FILE_SIGNATURE);
     let decoded = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &decoded);
 }

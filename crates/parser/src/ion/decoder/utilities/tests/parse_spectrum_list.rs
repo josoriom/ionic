@@ -1,89 +1,23 @@
-use std::{fs, path::PathBuf};
-
-use crate::ion::decoder::decode::Metadatum;
-use crate::ion::utilities::children_lookup::{ChildrenLookup, DefaultMetadataPolicy};
-use crate::ion::utilities::{parse_header, parse_metadata, parse_spectrum_list};
-use crate::{CvParam, SpectrumList};
+use crate::{
+    ion::{
+        decoder::decode::Metadatum,
+        utilities::{
+            children_lookup::{ChildrenLookup, DefaultMetadataPolicy},
+            parse_spectrum_list,
+        },
+    },
+    mzml::structs::{CvParam, SpectrumList},
+};
 
 const PATH: &str = "data/ion/test.ion";
 
-fn read_bytes(path: &str) -> Vec<u8> {
-    let full = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-    fs::read(&full).unwrap_or_else(|e| panic!("cannot read {:?}: {}", full, e))
-}
-
-fn parse_metadata_section_from_test_file(
-    start_off: u64,
-    end_off: u64,
-    item_count: u64,
-    expected_item_count: u64,
-    meta_count: u64,
-    num_count: u64,
-    str_count: u64,
-    codec_id: u8,
-    expected_uncompressed: u64,
-    section_name: &str,
-) -> Vec<Metadatum> {
-    let bytes = read_bytes(PATH);
-
-    let c0 = start_off as usize;
-    let c1 = end_off as usize;
-
-    assert!(
-        c0 < c1,
-        "invalid metadata offsets for {section_name}: start >= end"
-    );
-    assert!(
-        c1 <= bytes.len(),
-        "invalid metadata offsets for {section_name}: end out of bounds"
-    );
-
-    assert_eq!(
-        item_count, expected_item_count,
-        "test.ion should contain {expected_item_count} {section_name} items"
-    );
-
-    let slice = &bytes[c0..c1];
-
-    let expected = if codec_id == crate::ion::utilities::parse_metadata::HDR_CODEC_ZSTD {
-        usize::try_from(expected_uncompressed)
-            .unwrap_or_else(|_| panic!("{section_name}: expected_uncompressed overflow"))
-    } else {
-        0
-    };
-
-    let meta = parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
-    )
-    .expect("parse_metadata failed");
-
-    meta
-}
-
 fn parse_spectrum_list_from_test_file() -> SpectrumList {
-    let bytes = read_bytes(PATH);
-    let header = parse_header(&bytes).expect("parse_header failed");
-
-    let meta = parse_metadata_section_from_test_file(
-        header.off_spec_meta,
-        header.off_chrom_meta,
-        header.spectrum_count,
-        2,
-        header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
-        header.compression_codec,
-        header.spec_meta_uncompressed_bytes,
-        "spectra",
-    );
-
+    let meta = super::meta::spectra_metadata(PATH);
     let children_lookup = ChildrenLookup::new(&meta);
     let meta_ref: Vec<&Metadatum> = meta.iter().collect();
     let policy = DefaultMetadataPolicy;
-
-    let spectrum_list = parse_spectrum_list(&meta_ref, &children_lookup, &policy)
-        .expect("parse_spectrum_list returned None");
-    spectrum_list
+    parse_spectrum_list(&meta_ref, &children_lookup, &policy, 0)
+        .expect("parse_spectrum_list returned None")
 }
 
 #[derive(Clone, Copy, Debug)]

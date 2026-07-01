@@ -10,6 +10,10 @@ jobs:
     name: test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
 
+    env:
+      CARGO_NET_RETRY: 10
+      CARGO_HTTP_TIMEOUT: 120
+
     strategy:
       fail-fast: false
       matrix:
@@ -34,17 +38,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+          target: ${{ matrix.target }}
+          cache-key: ${{ matrix.target }}
+          rustflags: ""
 
       - name: Run tests
-        run: cargo test --all-features --target ${{ matrix.target }}
+        run: cargo test --locked --all-features --target ${{ matrix.target }}
+
+  version:
+    name: version sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-key: version-sync
+          rustflags: ""
+
+      - name: Check config.json matches Cargo.toml and the format constants
+        run: cargo run -p xtask -- check
 
   test-wasm:
     name: test (wasm32 byte_transpose)
@@ -55,17 +73,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: wasm32-unknown-unknown
+          target: wasm32-unknown-unknown
+          cache-key: wasm32-byte-transpose
+          rustflags: ""
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: wasm32-byte-transpose
 
       - name: Run tests
         run: wasm-pack test --node .github/workflows/byte_transpose_wasm

@@ -1,5 +1,4 @@
 use crate::{
-    Chromatogram, ChromatogramList,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -18,8 +17,8 @@ use crate::{
     mzml::{
         schema::TagId,
         structs::{
-            Activation, IsolationWindow, Precursor, Product, ReferenceableParamGroupRef,
-            SelectedIon, SelectedIonList,
+            Activation, Chromatogram, ChromatogramList, IsolationWindow, Precursor, Product,
+            ReferenceableParamGroupRef, SelectedIon, SelectedIonList,
         },
     },
 };
@@ -29,6 +28,7 @@ pub(crate) fn parse_chromatogram_list<P: MetadataPolicy>(
     metadata: &[&Metadatum],
     children_lookup: &ChildrenLookup,
     policy: &P,
+    index_base: u32,
 ) -> Option<ChromatogramList> {
     let mut owner_rows = OwnerRows::with_capacity(metadata.len());
     for &entry in metadata {
@@ -60,7 +60,7 @@ pub(crate) fn parse_chromatogram_list<P: MetadataPolicy>(
                 &owner_rows,
                 children_lookup,
                 chromatogram_id,
-                index as u32,
+                index_base + index as u32,
                 policy,
                 &mut param_buffer,
             )
@@ -75,7 +75,7 @@ pub(crate) fn parse_chromatogram_list<P: MetadataPolicy>(
 }
 
 #[inline]
-fn parse_chromatogram<'a, P: MetadataPolicy>(
+pub(crate) fn parse_chromatogram<'a, P: MetadataPolicy>(
     owner_rows: &'a OwnerRows<'a>,
     children_lookup: &ChildrenLookup,
     chromatogram_id: u32,

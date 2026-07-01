@@ -1,6 +1,6 @@
 [package]
 name = "ionic"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
@@ -10,13 +10,19 @@ miniz_oxide = { workspace = true }
 once_cell = { workspace = true }
 quick-xml = { workspace = true }
 serde_json = { workspace = true }
+hashbrown = "0.17.1"
+itoa = { workspace = true }
+crc32fast = "1.5.0"
+sha1 = "0.11"
+
+[target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies]
 zstd = { workspace = true }
 rayon = { workspace = true }
-hashbrown = "0.16.1"
-crc32fast = "1.5.0"
-sha1 = "0.10"
 memmap2 = "0.9"
+
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "wasi")))'.dependencies]
+ruzstd = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"
-sha1 = "0.10"
+sha1 = "0.11"

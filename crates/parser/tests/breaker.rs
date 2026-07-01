@@ -213,7 +213,7 @@ fn scan_referenceable_param_group_refs_not_lost() {
 }
 
 #[test]
-fn binary_data_array_refs_not_lost() {
+fn binary_data_array_addresses_not_lost() {
     let mut src = test_files::tiny_pwiz_11().clone();
     let ref_group_id = "pwiz-breaker-bda-ref-group";
     ensure_referenceable_param_group(&mut src, ref_group_id);

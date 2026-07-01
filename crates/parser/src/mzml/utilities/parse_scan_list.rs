@@ -14,8 +14,10 @@ pub(crate) fn parse_scan_list<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<ScanList, ParseError> {
+    let count = attr_usize(start, b"count");
     let mut scan_list = ScanList {
-        count: attr_usize(start, b"count"),
+        count,
+        scans: Vec::with_capacity(count.unwrap_or(0)),
         ..Default::default()
     };
 

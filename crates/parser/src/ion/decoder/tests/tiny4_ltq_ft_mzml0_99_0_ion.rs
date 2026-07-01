@@ -3,8 +3,8 @@ use std::sync::OnceLock;
 use crate::{
     mzml::structs::MzML,
     utilities::test::{
-        CvRefMode, assert_cv, assert_cv_ref, assert_software_param, parse_b, spectrum_by_id,
-        spectrum_description, spectrum_precursor_list, spectrum_scan_list,
+        CvRefMode, assert_cv, assert_cv_ref, assert_software_param, parse_ion_as_mzml,
+        spectrum_by_id, spectrum_description, spectrum_precursor_list, spectrum_scan_list,
     },
 };
 
@@ -15,7 +15,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::AllowMissingMs;
 
 #[test]
 fn tiny1_mzml0_99_0_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -323,15 +323,10 @@ fn tiny1_mzml0_99_0_header_sections() {
 
 #[test]
 fn tiny1_mzml0_99_0_spectrum_s19() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
     assert_eq!(run.id.as_str(), "Exp01");
     assert_eq!(run.sample_ref.as_deref(), Some("1"));
-    // TODO: Fix default_instrument_configuration_ref parsing
-    // assert_eq!(
-    //     run.default_instrument_configuration_ref.as_deref(),
-    //     Some("LTQ")
-    // );
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
     assert_eq!(sl.spectra.len(), 2);
 
@@ -402,11 +397,6 @@ fn tiny1_mzml0_99_0_spectrum_s19() {
     let scl = spectrum_scan_list(s);
     assert_eq!(scl.scans.len(), 1);
     let scan0 = &scl.scans[0];
-    // TODO: Fix instrument_configuration_ref parsing
-    // assert_eq!(
-    //     scan0.instrument_configuration_ref.as_deref(),
-    //     Some("LCQ Deca")
-    // );
     assert_cv(
         CV_REF_MODE,
         &scan0.cv_params,
@@ -521,7 +511,7 @@ fn tiny1_mzml0_99_0_spectrum_s19() {
 
 #[test]
 fn tiny1_mzml0_99_0_spectrum_s20() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let s = spectrum_by_id(mzml, "S20");
     assert!(s.cv_params.iter().any(|cv| cv.name == "MSn spectrum"));
@@ -639,8 +629,6 @@ fn tiny1_mzml0_99_0_spectrum_s20() {
     let scl = spectrum_scan_list(s);
     assert_eq!(scl.scans.len(), 1);
     let scan0 = &scl.scans[0];
-    // TODO: Fix instrument_configuration_ref parsing
-    // assert_eq!(scan0.instrument_configuration_ref.as_deref(), Some("LTQ"));
     assert_cv(
         CV_REF_MODE,
         &scan0.cv_params,

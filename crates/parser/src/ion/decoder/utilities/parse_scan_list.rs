@@ -1,5 +1,4 @@
 use crate::{
-    ScanList, ScanWindow, ScanWindowList,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -14,7 +13,7 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{ReferenceableParamGroupRef, Scan},
+        structs::{ReferenceableParamGroupRef, Scan, ScanList, ScanWindow, ScanWindowList},
     },
 };
 

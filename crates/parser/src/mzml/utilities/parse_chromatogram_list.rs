@@ -16,10 +16,11 @@ pub(crate) fn parse_chromatogram_list<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<ChromatogramList, ParseError> {
+    let count = attr_usize(start, b"count");
     let mut list = ChromatogramList {
-        count: attr_usize(start, b"count"),
+        count,
         default_data_processing_ref: attr(start, b"defaultDataProcessingRef"),
-        ..Default::default()
+        chromatograms: Vec::with_capacity(count.unwrap_or(0)),
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();
@@ -40,7 +41,7 @@ pub(crate) fn parse_chromatogram_list<R: BufRead>(
     Ok(list)
 }
 
-fn parse_chromatogram<R: BufRead>(
+pub(crate) fn parse_chromatogram<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<Chromatogram, ParseError> {

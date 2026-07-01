@@ -1,5 +1,4 @@
 use crate::{
-    Product, ProductList,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -14,7 +13,7 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{IsolationWindow, ReferenceableParamGroupRef},
+        structs::{IsolationWindow, Product, ProductList, ReferenceableParamGroupRef},
     },
 };
 

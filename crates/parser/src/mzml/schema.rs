@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::default::Default;
-use std::sync::OnceLock;
+use std::{collections::HashMap, default::Default, sync::OnceLock};
 
+#[allow(dead_code)]
 static SCHEMA: OnceLock<SchemaTree> = OnceLock::new();
 
+#[allow(dead_code)]
 pub(crate) fn schema() -> &'static SchemaTree {
     SCHEMA.get_or_init(|| {
         let mut tree: SchemaTree =

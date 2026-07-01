@@ -1,6 +1,6 @@
 mod common;
 
-use ionic::ion::{Decoder, DecoderConfig, WritingMode, encode};
+use ionic::ion::{IonReader, ReadOptions, encode};
 use ionic::mzml::{
     bin_to_mzml::bin_to_mzml,
     parse_mzml::{parse_indexed_mzml, parse_mzml},
@@ -71,7 +71,8 @@ fn bin_to_mzml_minimal_mzml_succeeds() {
         result.is_ok(),
         "minimal MzML with file_description should succeed"
     );
-    let xml_str = result.unwrap();
+    let xml_bytes = result.unwrap();
+    let xml_str = std::str::from_utf8(&xml_bytes).expect("output must be valid UTF-8");
     assert!(xml_str.contains("<mzML"), "output should contain <mzML tag");
     assert!(
         xml_str.contains("empty-run"),
@@ -83,7 +84,7 @@ fn bin_to_mzml_minimal_mzml_succeeds() {
 fn encode_empty_mzml() {
     let mzml = MzML::default();
     let mut buf = Vec::new();
-    let result = encode(&mzml, 0, false, WritingMode::Memory, &mut buf);
+    let result = encode(&mzml, 0, false, &mut buf);
     assert!(result.is_ok(), "encoding empty MzML should succeed");
     assert!(!buf.is_empty(), "output should not be empty");
 }
@@ -109,7 +110,7 @@ fn encode_mzml_no_arrays() {
         ..Default::default()
     };
     let mut buf = Vec::new();
-    let result = encode(&mzml, 0, false, WritingMode::Memory, &mut buf);
+    let result = encode(&mzml, 0, false, &mut buf);
     assert!(
         result.is_ok(),
         "encoding MzML with spectrum but no arrays should succeed"
@@ -118,7 +119,7 @@ fn encode_mzml_no_arrays() {
 
 #[test]
 fn decoder_open_empty_bytes() {
-    let result = Decoder::open(b"", DecoderConfig::default());
+    let result = IonReader::open(b"", ReadOptions::default());
     assert!(
         result.is_err(),
         "empty bytes should not be a valid Ion container"
@@ -128,7 +129,7 @@ fn decoder_open_empty_bytes() {
 #[test]
 fn decoder_open_garbage() {
     let garbage = vec![0xDE, 0xAD, 0xBE, 0xEF];
-    let result = Decoder::open(&garbage, DecoderConfig::default());
+    let result = IonReader::open(&garbage, ReadOptions::default());
     assert!(
         result.is_err(),
         "garbage should not be a valid Ion container"
@@ -137,7 +138,7 @@ fn decoder_open_garbage() {
 
 #[test]
 fn decoder_open_too_small() {
-    let result = Decoder::open(&[0x01, 0x02, 0x03], DecoderConfig::default());
+    let result = IonReader::open(&[0x01, 0x02, 0x03], ReadOptions::default());
     assert!(
         result.is_err(),
         "3 bytes should not be a valid Ion container"
@@ -155,9 +156,9 @@ fn roundtrip_empty_mzml() {
         ..Default::default()
     };
     let mut buf = Vec::new();
-    encode(&mzml, 0, false, WritingMode::Memory, &mut buf).expect("encode should succeed");
+    encode(&mzml, 0, false, &mut buf).expect("encode should succeed");
 
-    let mut decoder = Decoder::open(&buf, DecoderConfig::default()).expect("decoder should open");
+    let mut decoder = IonReader::open(&buf, ReadOptions::default()).expect("decoder should open");
     let decoded = decoder.to_mzml().expect("to_mzml should succeed");
     assert_eq!(decoded.run.id, "roundtrip-empty");
 }

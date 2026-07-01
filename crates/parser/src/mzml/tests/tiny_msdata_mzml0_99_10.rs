@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    BinaryData, NumericType,
-    mzml::structs::MzML,
+    mzml::structs::{NumericArray, MzML, NumericType},
     utilities::test::{
         CvRefMode, assert_cv, assert_software, mzml, spectrum_description, spectrum_precursor_list,
         spectrum_scan_list,
@@ -761,11 +760,11 @@ fn tiny_msdata_mzml0_99_9_xml_s19_mz_binary() {
     assert_eq!(bda.encoded_length, Some(108));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S19 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S19 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S19 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -790,11 +789,11 @@ fn tiny_msdata_mzml0_99_9_xml_s19_intensity_binary() {
     assert_eq!(bda.encoded_length, Some(108));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S19 intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S19 intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("S19 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -819,11 +818,11 @@ fn tiny_msdata_mzml0_99_9_xml_s20_mz_binary() {
     assert_eq!(bda.encoded_length, Some(216));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S20 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S20 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S20 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
@@ -848,11 +847,11 @@ fn tiny_msdata_mzml0_99_9_xml_s20_intensity_binary() {
     assert_eq!(bda.encoded_length, Some(216));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S20 intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S20 intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("S20 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }

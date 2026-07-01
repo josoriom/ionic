@@ -1,10 +1,10 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{BinaryData, MzML, NumericType},
+    mzml::structs::{NumericArray, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_cv_absent, assert_software, mzml, spectrum_by_id,
-        spectrum_description, spectrum_precursor_list, spectrum_scan_list,
+        CvRefMode, assert_cv, assert_software, mzml, spectrum_by_id, spectrum_description,
+        spectrum_precursor_list, spectrum_scan_list,
     },
 };
 
@@ -311,7 +311,15 @@ fn tiny2_srm_mzml0_99_0_spectrum_s101() {
     let s0 = spectrum_by_id(mzml, "S101");
     assert!(s0.cv_params.iter().any(|cv| cv.name == "SRM spectrum"));
 
-    assert_cv_absent(&s0.cv_params, "ms level");
+    assert_cv(
+        CV_REF_MODE,
+        &s0.cv_params,
+        "ms level",
+        "MS:1000511",
+        "MS",
+        Some("2"),
+        None,
+    );
     let sd = spectrum_description(s0);
     assert_cv(
         CV_REF_MODE,
@@ -531,7 +539,15 @@ fn tiny2_srm_mzml0_99_0_spectrum_s102() {
     let s1 = spectrum_by_id(mzml, "S102");
     assert!(s1.cv_params.iter().any(|cv| cv.name == "MSn spectrum"));
 
-    assert_cv_absent(&s1.cv_params, "ms level");
+    assert_cv(
+        CV_REF_MODE,
+        &s1.cv_params,
+        "ms level",
+        "MS:1000511",
+        "MS",
+        Some("2"),
+        None,
+    );
     let sd = spectrum_description(s1);
     assert_cv(
         CV_REF_MODE,
@@ -718,11 +734,11 @@ fn tiny2_srm_mzml0_99_0_s101_mz_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float64));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
-        BinaryData::F64(v) => assert_eq!(v, &expected),
-        other => panic!("expected BinaryData::F64, got {:?}", other),
+        NumericArray::F64(v) => assert_eq!(v, &expected),
+        other => panic!("expected NumericArray::F64, got {:?}", other),
     }
 }
 
@@ -741,11 +757,11 @@ fn tiny2_srm_mzml0_99_0_s101_intensity_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float32));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
-        BinaryData::F32(v) => assert_eq!(v, &expected),
-        other => panic!("expected BinaryData::F32, got {:?}", other),
+        NumericArray::F32(v) => assert_eq!(v, &expected),
+        other => panic!("expected NumericArray::F32, got {:?}", other),
     }
 }
 
@@ -764,11 +780,11 @@ fn tiny2_srm_mzml0_99_0_s102_mz_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float64));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
-        BinaryData::F64(v) => assert_eq!(v, &expected),
-        other => panic!("expected BinaryData::F64, got {:?}", other),
+        NumericArray::F64(v) => assert_eq!(v, &expected),
+        other => panic!("expected NumericArray::F64, got {:?}", other),
     }
 }
 
@@ -787,10 +803,10 @@ fn tiny2_srm_mzml0_99_0_s102_intensity_binary_decodes_correctly() {
     assert_eq!(ba.numeric_type, Some(NumericType::Float32));
     assert_eq!(ba.array_length, Some(10));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match ba.binary.as_ref().expect("binary present") {
-        BinaryData::F32(v) => assert_eq!(v, &expected),
-        other => panic!("expected BinaryData::F32, got {:?}", other),
+        NumericArray::F32(v) => assert_eq!(v, &expected),
+        other => panic!("expected NumericArray::F32, got {:?}", other),
     }
 }

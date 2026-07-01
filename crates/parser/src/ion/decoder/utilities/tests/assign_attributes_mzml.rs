@@ -1,7 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs,
-    path::PathBuf,
     sync::OnceLock,
 };
 
@@ -9,7 +7,7 @@ use crate::{
     ion::{
         attr_meta::*,
         decoder::decode::{Metadatum, MetadatumValue},
-        utilities::{assign_attributes, common::find_node_by_tag, parse_header, parse_metadata},
+        utilities::{assign_attributes, common::find_node_by_tag},
     },
     mzml::{
         schema::{TagId, schema},
@@ -23,37 +21,8 @@ static MZML_CACHE: OnceLock<MzML> = OnceLock::new();
 const MZML_PATH: &str = "data/mzml/test.mzML";
 const ION_PATH: &str = "data/ion/test.ion";
 
-fn read_bytes(path: &str) -> Vec<u8> {
-    let full = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-    fs::read(&full).unwrap_or_else(|e| panic!("cannot read {:?}: {}", full, e))
-}
-
 fn spectra_meta_from_test_ion() -> Vec<Metadatum> {
-    let bytes = read_bytes(ION_PATH);
-    let header = parse_header(&bytes).expect("parse_header failed");
-
-    let c0 = header.off_spec_meta as usize;
-    let c1 = header.off_chrom_meta as usize;
-
-    assert!(c0 < c1, "invalid spectra meta offsets (start >= end)");
-    assert!(
-        c1 <= bytes.len(),
-        "invalid spectra meta offsets (end out of bounds)"
-    );
-
-    let expected = usize::try_from(header.spec_meta_uncompressed_bytes)
-        .expect("spec_meta_uncompressed_bytes overflow");
-
-    parse_metadata(
-        &bytes[c0..c1],
-        header.spectrum_count,
-        header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
-        header.compression_codec,
-        expected,
-    )
-    .expect("parse_metadata(spectra) failed")
+    super::meta::spectra_metadata(ION_PATH)
 }
 
 fn schema_attrs_for_tag(tag: TagId) -> &'static HashMap<String, Vec<String>> {
@@ -105,7 +74,7 @@ pub(crate) fn tail_to_field_key(tail: AccessionTail) -> Option<&'static str> {
     }
 }
 
-fn find_by_tail<'a>(meta: &'a [Metadatum], tail: AccessionTail) -> Option<&'a Metadatum> {
+fn find_by_tail(meta: &[Metadatum], tail: AccessionTail) -> Option<&Metadatum> {
     meta.iter().find(|m| {
         m.accession
             .as_deref()

@@ -36,7 +36,7 @@ pub(crate) fn precision_accession(numeric_type: NumericType) -> &'static str {
 pub(crate) fn synthetic_binary_data_array(
     role_accession: &str,
     numeric_type: NumericType,
-    binary: BinaryData,
+    binary: NumericArray,
     declared_length: Option<usize>,
 ) -> BinaryDataArray {
     BinaryDataArray {
@@ -93,8 +93,8 @@ pub(crate) fn default_cv_list_like_writer() -> CvList {
 
 pub(crate) fn synthetic_numeric_matrix_mzml(
     numeric_type: NumericType,
-    spectrum_binary: BinaryData,
-    chromatogram_binary: BinaryData,
+    spectrum_binary: NumericArray,
+    chromatogram_binary: NumericArray,
     declared_length: Option<usize>,
 ) -> MzML {
     let spectrum_default_array_length = declared_length.or_else(|| Some(spectrum_binary.len()));
@@ -169,7 +169,7 @@ pub(crate) fn synthetic_numeric_matrix_mzml(
 pub(crate) fn single_array_xml(
     role_accession: &str,
     numeric_type: NumericType,
-    binary: &BinaryData,
+    binary: &NumericArray,
     declared_length: Option<usize>,
 ) -> String {
     let encoded = BASE64_STANDARD.encode(binary.to_le_bytes());
@@ -263,7 +263,7 @@ pub(crate) fn ensure_referenceable_param_group(mzml: &mut MzML, id: &str) {
 
 pub(crate) fn mzml_with_single_array(
     numeric_type: NumericType,
-    binary: BinaryData,
+    binary: NumericArray,
     len: usize,
 ) -> MzML {
     MzML {
@@ -279,7 +279,7 @@ pub(crate) fn mzml_with_single_array(
                     binary_data_array_list: Some(BinaryDataArrayList {
                         count: Some(1),
                         binary_data_arrays: vec![synthetic_binary_data_array(
-                            "MS:1000514",
+                            "MS:1000515",
                             numeric_type,
                             binary,
                             Some(len),
@@ -325,7 +325,7 @@ pub(crate) fn build_mzml(spectra: Vec<Spectrum>, chromatograms: Vec<Chromatogram
     }
 }
 
-pub(crate) fn parse_single_array_xml(xml: &str) -> Option<BinaryData> {
+pub(crate) fn parse_single_array_xml(xml: &str) -> Option<NumericArray> {
     let mzml = parse_mzml(xml.as_bytes()).expect("parse should succeed");
     let spectra = mzml.run.spectrum_list.as_ref()?.spectra.first()?;
     let bda = spectra
@@ -348,13 +348,13 @@ pub(crate) fn make_spectrum_f64(id: &str, mz: Vec<f64>, intensity: Vec<f64>) -> 
                 synthetic_binary_data_array(
                     "MS:1000514",
                     NumericType::Float64,
-                    BinaryData::F64(mz),
+                    NumericArray::F64(mz),
                     Some(len),
                 ),
                 synthetic_binary_data_array(
                     "MS:1000515",
                     NumericType::Float64,
-                    BinaryData::F64(intensity),
+                    NumericArray::F64(intensity),
                     Some(len),
                 ),
             ],
@@ -375,13 +375,13 @@ pub(crate) fn make_chromatogram_f64(id: &str, time: Vec<f64>, intensity: Vec<f64
                 synthetic_binary_data_array(
                     "MS:1000595",
                     NumericType::Float64,
-                    BinaryData::F64(time),
+                    NumericArray::F64(time),
                     Some(len),
                 ),
                 synthetic_binary_data_array(
                     "MS:1000515",
                     NumericType::Float64,
-                    BinaryData::F64(intensity),
+                    NumericArray::F64(intensity),
                     Some(len),
                 ),
             ],
@@ -477,13 +477,13 @@ pub fn full_mzml_all_optional_fields() -> MzML {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0, 300.0]),
+                                NumericArray::F64(vec![100.0, 200.0, 300.0]),
                                 Some(3),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0, 30.0]),
+                                NumericArray::F64(vec![10.0, 20.0, 30.0]),
                                 Some(3),
                             ),
                         ],
@@ -493,6 +493,5 @@ pub fn full_mzml_all_optional_fields() -> MzML {
             }),
             ..Default::default()
         },
-        ..Default::default()
     }
 }

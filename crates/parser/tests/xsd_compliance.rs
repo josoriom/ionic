@@ -5,7 +5,7 @@ use common::helpers::{
     minimal_file_description, minimal_instrument_list, minimal_software_list,
     synthetic_binary_data_array,
 };
-use ionic::mzml::{bin_to_mzml::convert_bin_to_mzml_bytes, structs::*};
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, structs::*};
 
 const MZML_CHILD_ORDER: &[&str] = &[
     "cvList",
@@ -45,7 +45,7 @@ fn assert_xsd_order(positions: &[(&str, usize)]) {
 #[test]
 fn mzml_child_element_order_all_sections() {
     let mzml = full_mzml_all_optional_fields();
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes).expect("valid UTF-8");
 
     let positions = extract_mzml_child_positions(&xml);
@@ -85,13 +85,13 @@ fn mzml_child_order_subset_of_optional_elements() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0]),
+                                NumericArray::F64(vec![100.0, 200.0]),
                                 Some(2),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0]),
+                                NumericArray::F64(vec![10.0, 20.0]),
                                 Some(2),
                             ),
                         ],
@@ -104,7 +104,7 @@ fn mzml_child_order_subset_of_optional_elements() {
         ..Default::default()
     };
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes).expect("valid UTF-8");
 
     let positions = extract_mzml_child_positions(&xml);
@@ -127,7 +127,7 @@ fn mzml_child_order_subset_of_optional_elements() {
 #[test]
 fn indexed_mzml_contains_file_checksum() {
     let mzml = full_mzml_all_optional_fields();
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes).expect("valid UTF-8");
 
     let fc_open = xml.find("<fileChecksum>");
@@ -201,13 +201,13 @@ fn empty_source_file_list_is_omitted() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0]),
+                                NumericArray::F64(vec![100.0, 200.0]),
                                 Some(2),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0]),
+                                NumericArray::F64(vec![10.0, 20.0]),
                                 Some(2),
                             ),
                         ],
@@ -220,7 +220,7 @@ fn empty_source_file_list_is_omitted() {
         ..Default::default()
     };
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes).expect("valid UTF-8");
 
     assert!(
@@ -265,13 +265,13 @@ fn nonempty_source_file_list_is_emitted() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![100.0, 200.0]),
+                                NumericArray::F64(vec![100.0, 200.0]),
                                 Some(2),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float64,
-                                BinaryData::F64(vec![10.0, 20.0]),
+                                NumericArray::F64(vec![10.0, 20.0]),
                                 Some(2),
                             ),
                         ],
@@ -284,7 +284,7 @@ fn nonempty_source_file_list_is_emitted() {
         ..Default::default()
     };
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes).expect("valid UTF-8");
 
     assert!(
@@ -300,7 +300,7 @@ fn nonempty_source_file_list_is_emitted() {
 #[test]
 fn file_checksum_is_valid_sha1() {
     let mzml = full_mzml_all_optional_fields();
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("serialization should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("serialization should succeed");
     let xml = String::from_utf8(bytes.clone()).expect("valid UTF-8");
 
     let fc_tag = "<fileChecksum>";
@@ -313,7 +313,11 @@ fn file_checksum_is_valid_sha1() {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(&bytes[..hash_input_end]);
-    let computed = format!("{:x}", hasher.finalize());
+    let computed = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
 
     assert_eq!(
         claimed, computed,

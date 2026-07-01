@@ -1,4 +1,4 @@
-use crate::mzml::structs::*;
+use crate::{accessions::ACC_MS_LEVEL, mzml::structs::*};
 
 #[allow(dead_code)]
 pub enum ParamEvent {
@@ -141,7 +141,7 @@ impl_param_collector!(ScanList         { cv: cv_params, user: user_params, ref: 
 
 impl ParamCollector for Spectrum {
     fn receive_cv(&mut self, p: CvParam) {
-        if self.ms_level.is_none() && p.accession.as_deref() == Some("MS:1000511") {
+        if self.ms_level.is_none() && p.accession.as_deref() == Some(ACC_MS_LEVEL) {
             self.ms_level = p.value.as_deref().and_then(|v| v.parse().ok());
         }
         self.cv_params.push(p);

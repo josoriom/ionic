@@ -1,0 +1,663 @@
+use super::*;
+use crate::ion::windowing::window_index;
+
+fn window_span(width: f64, from: f64, to: f64, window_count: usize) -> Option<(usize, usize)> {
+    if window_count == 0 {
+        return None;
+    }
+    let low = window_index(width, from) as usize;
+    if low >= window_count {
+        return None;
+    }
+    Some((low, (window_index(width, to) as usize).min(window_count - 1)))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataXY {
+    pub x: NumericArray,
+    pub y: NumericArray,
+}
+
+impl DataXY {
+    pub(crate) fn empty() -> Self {
+        Self {
+            x: NumericArray::F64(Vec::new()),
+            y: NumericArray::F64(Vec::new()),
+        }
+    }
+}
+
+impl NumericArray {
+    pub fn to_f64(&self) -> Vec<f64> {
+        match self {
+            NumericArray::F64(values) => values.clone(),
+            NumericArray::F32(values) => values.iter().map(|&value| value as f64).collect(),
+            NumericArray::F16(values) => values.iter().copied().map(f16_bits_to_f64).collect(),
+            NumericArray::I16(values) => values.iter().map(|&value| value as f64).collect(),
+            NumericArray::I32(values) => values.iter().map(|&value| value as f64).collect(),
+            NumericArray::I64(values) => values.iter().map(|&value| value as f64).collect(),
+        }
+    }
+
+    pub(crate) fn extend_f64(&self, out: &mut Vec<f64>) {
+        match self {
+            NumericArray::F64(values) => out.extend_from_slice(values),
+            NumericArray::F32(values) => out.extend(values.iter().map(|&value| value as f64)),
+            NumericArray::F16(values) => out.extend(values.iter().copied().map(f16_bits_to_f64)),
+            NumericArray::I16(values) => out.extend(values.iter().map(|&value| value as f64)),
+            NumericArray::I32(values) => out.extend(values.iter().map(|&value| value as f64)),
+            NumericArray::I64(values) => out.extend(values.iter().map(|&value| value as f64)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pixel {
+    pub x: Range,
+    pub y: Range,
+    pub z: Range,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Select {
+    All,
+    Rt(Range),
+    Area(Pixel),
+}
+
+pub struct Window<'a> {
+    pub index: usize,
+    pub summary: &'a ScanSummary,
+    pub mz: &'a [f64],
+    pub intensity: &'a [f64],
+}
+
+fn position_in_range(value: u32, range: Range) -> bool {
+    let value = value as f64;
+    value >= range.from && value <= range.to
+}
+
+fn scan_is_selected(select: &Select, summary: &ScanSummary) -> bool {
+    match select {
+        Select::All => true,
+        Select::Rt(range) => summary.rt >= range.from && summary.rt <= range.to,
+        Select::Area(pixel) => {
+            position_in_range(summary.position_x, pixel.x)
+                && position_in_range(summary.position_y, pixel.y)
+                && position_in_range(summary.position_z, pixel.z)
+        }
+    }
+}
+
+fn scan_summary_from_record(record: &SpectrumSummary) -> ScanSummary {
+    ScanSummary {
+        rt: record.rt,
+        rt_unit: TimeUnit::from_code(record.rt_unit),
+        ms_level: record.ms_level,
+        polarity: record.polarity,
+        selected_ion_mz: record.selected_ion_mz,
+        base_peak_mz: record.base_peak_mz,
+        base_peak_int: record.base_peak_int,
+        total_ion_current: record.total_ion_current,
+        position_x: record.position_x,
+        position_y: record.position_y,
+        position_z: record.position_z,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Spec,
+    Chrom,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ItemSlice {
+    pub item_index: u64,
+    pub array_address_index: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowRead {
+    pub(crate) mz_address: ArrayAddress,
+    pub(crate) intensity_address: ArrayAddress,
+}
+
+fn empty_array(dtype: u8) -> NumericArray {
+    match dtype {
+        FILE_DTYPE_F32 => NumericArray::F32(Vec::new()),
+        FILE_DTYPE_F16 => NumericArray::F16(Vec::new()),
+        FILE_DTYPE_I16 => NumericArray::I16(Vec::new()),
+        FILE_DTYPE_I32 => NumericArray::I32(Vec::new()),
+        FILE_DTYPE_I64 => NumericArray::I64(Vec::new()),
+        _ => NumericArray::F64(Vec::new()),
+    }
+}
+
+fn group_dtype(group: &ArrayGroup) -> u8 {
+    group
+        .refs
+        .first()
+        .map(|array_address| array_address.dtype)
+        .unwrap_or(FILE_DTYPE_F64)
+}
+
+fn value_at(array: &NumericArray, index: usize) -> f64 {
+    match array {
+        NumericArray::F64(values) => values[index],
+        NumericArray::F32(values) => values[index] as f64,
+        NumericArray::F16(values) => f16_bits_to_f64(values[index]),
+        NumericArray::I16(values) => values[index] as f64,
+        NumericArray::I32(values) => values[index] as f64,
+        NumericArray::I64(values) => values[index] as f64,
+    }
+}
+
+fn append_range(dst: &mut NumericArray, src: &NumericArray, start: usize, end: usize) {
+    match (dst, src) {
+        (NumericArray::F64(d), NumericArray::F64(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::F32(d), NumericArray::F32(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::F16(d), NumericArray::F16(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::I16(d), NumericArray::I16(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::I32(d), NumericArray::I32(s)) => d.extend_from_slice(&s[start..end]),
+        (NumericArray::I64(d), NumericArray::I64(s)) => d.extend_from_slice(&s[start..end]),
+        _ => {}
+    }
+}
+
+fn range_in_sorted(x: &NumericArray, low: f64, high: f64, paired: usize) -> (usize, usize) {
+    match x {
+        NumericArray::F64(values) => {
+            let values = &values[..paired];
+            (
+                values.partition_point(|&value| value < low),
+                values.partition_point(|&value| value <= high),
+            )
+        }
+        NumericArray::F32(values) => {
+            let values = &values[..paired];
+            (
+                values.partition_point(|&value| (value as f64) < low),
+                values.partition_point(|&value| (value as f64) <= high),
+            )
+        }
+        _ => (0, paired),
+    }
+}
+
+fn is_sorted(x: &NumericArray, len: usize) -> bool {
+    (1..len).all(|index| value_at(x, index - 1) <= value_at(x, index))
+}
+
+pub(crate) fn keep_pairs_sorted(
+    x: &NumericArray,
+    y: &NumericArray,
+    low: f64,
+    high: f64,
+    x_out: &mut NumericArray,
+    y_out: &mut NumericArray,
+) {
+    let paired = x.len().min(y.len());
+    let (start, end) = range_in_sorted(x, low, high, paired);
+    append_range(x_out, x, start, end);
+    append_range(y_out, y, start, end);
+}
+
+pub(crate) fn keep_pairs(
+    x: &NumericArray,
+    y: &NumericArray,
+    low: f64,
+    high: f64,
+    x_out: &mut NumericArray,
+    y_out: &mut NumericArray,
+) {
+    let paired = x.len().min(y.len());
+    if is_sorted(x, paired) {
+        keep_pairs_sorted(x, y, low, high, x_out, y_out);
+        return;
+    }
+    for index in 0..paired {
+        let value = value_at(x, index);
+        if value >= low && value <= high {
+            append_range(x_out, x, index, index + 1);
+            append_range(y_out, y, index, index + 1);
+        }
+    }
+}
+
+fn first_at_or_after_rt(
+    window_directory: &WindowDirectory,
+    positions: std::ops::Range<usize>,
+    target: f64,
+    rt_of: &dyn Fn(u32) -> f64,
+) -> usize {
+    let (mut low, mut high) = (positions.start, positions.end);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if rt_of(window_directory.row(middle).spectrum_index) < target {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
+fn first_after_rt(
+    window_directory: &WindowDirectory,
+    positions: std::ops::Range<usize>,
+    target: f64,
+    rt_of: &dyn Fn(u32) -> f64,
+) -> usize {
+    let (mut low, mut high) = (positions.start, positions.end);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if rt_of(window_directory.row(middle).spectrum_index) <= target {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
+impl IonReader {
+    pub fn read_spectrum_window(
+        &mut self,
+        index: usize,
+        x_array_accession: u32,
+        y_array_accession: u32,
+        low: f64,
+        high: f64,
+    ) -> IonResult<DataXY> {
+        self.read_spectrum_window_inner(index, x_array_accession, y_array_accession, low, high)
+    }
+
+    pub fn require_bounds(&mut self) -> IonResult<()> {
+        self.ensure_spec_window_directory()
+    }
+
+    pub(crate) fn get_spectrum_mz_windows(
+        &mut self,
+        scan_index: usize,
+        mz_from: f64,
+        mz_to: f64,
+    ) -> IonResult<Vec<WindowRead>> {
+        if !mz_from.is_finite() || !mz_to.is_finite() {
+            return Err("mz window bounds must be finite".into());
+        }
+        if mz_from > mz_to {
+            return Err("mz window: from is greater than to".into());
+        }
+        if scan_index >= self.header.spectrum_count as usize {
+            return Err("spectrum index out of range".into());
+        }
+
+        self.require_bounds()?;
+
+        let width = self.header.target_mz_window as f64;
+        let rows = {
+            let window_directory = match &self.spec_window_directory {
+                WindowDirectoryCache::Loaded(index) => index,
+                _ => return Err(IonError::MissingSpectrumBounds),
+            };
+            let Some((window_low, window_high)) =
+                window_span(width, mz_from, mz_to, window_directory.window_count())
+            else {
+                return Ok(Vec::new());
+            };
+            let mut rows = Vec::new();
+            for window in window_low..=window_high {
+                if let Some(row) = window_directory.find_in_window(window, scan_index as u32) {
+                    rows.push(row);
+                }
+            }
+            rows
+        };
+
+        let mut windows = Vec::with_capacity(rows.len());
+        for row in rows {
+            windows.push(WindowRead {
+                mz_address: self.array_address_at(row.mz_address)?,
+                intensity_address: self.array_address_at(row.intensity_address)?,
+            });
+        }
+        Ok(windows)
+    }
+
+    fn array_address_at(&self, ref_index: u32) -> IonResult<ArrayAddress> {
+        let start = ref_index as usize * ARRAY_ADDRESS_BYTES;
+        let bytes = self
+            .spec_array_addresses
+            .get(start..start + ARRAY_ADDRESS_BYTES)
+            .ok_or_else(|| IonError::from("window directory: array ref index out of range"))?;
+        Ok(parse_array_address(bytes))
+    }
+
+    fn spec_rt_supports_binary_search(&self) -> bool {
+        if let Some(value) = self.spec_rt_finite_ascending.get() {
+            return value;
+        }
+        let mut previous = f64::NEG_INFINITY;
+        let mut ok = true;
+        for index in 0..self.header.spectrum_count as usize {
+            let rt = self
+                .spec_summary(index)
+                .map(|summary| summary.rt)
+                .unwrap_or(f64::NAN);
+            if !rt.is_finite() || rt < previous {
+                ok = false;
+                break;
+            }
+            previous = rt;
+        }
+        self.spec_rt_finite_ascending.set(Some(ok));
+        ok
+    }
+
+    pub fn eic(&mut self, mz: Range, rt: Range) -> IonResult<Vec<(f64, f64)>> {
+        if !mz.from.is_finite() || !mz.to.is_finite() || mz.from > mz.to {
+            return Err("eic: m/z range must be finite and ordered".into());
+        }
+        self.require_bounds()?;
+
+        let binary_search = self.spec_rt_supports_binary_search();
+        let rows = {
+            let width = self.header.target_mz_window as f64;
+            let window_directory = match &self.spec_window_directory {
+                WindowDirectoryCache::Loaded(index) => index,
+                _ => return Err(IonError::MissingSpectrumBounds),
+            };
+            let Some((window_low, window_high)) =
+                window_span(width, mz.from, mz.to, window_directory.window_count())
+            else {
+                return Ok(Vec::new());
+            };
+            let rt_of = |spectrum_index: u32| {
+                self.spec_summary(spectrum_index as usize)
+                    .map(|summary| summary.rt)
+                    .unwrap_or(f64::NAN)
+            };
+            let mut rows = Vec::new();
+            for window in window_low..=window_high {
+                let positions = window_directory.window_range(window);
+                if binary_search {
+                    let start = first_at_or_after_rt(window_directory, positions.clone(), rt.from, &rt_of);
+                    let end = first_after_rt(window_directory, start..positions.end, rt.to, &rt_of);
+                    for position in start..end {
+                        rows.push(window_directory.row(position));
+                    }
+                } else {
+                    for position in positions {
+                        let row = window_directory.row(position);
+                        let value = rt_of(row.spectrum_index);
+                        if value >= rt.from && value <= rt.to {
+                            rows.push(row);
+                        }
+                    }
+                }
+            }
+            rows
+        };
+
+        let mut totals: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+        for row in rows {
+            let mz_address = self.array_address_at(row.mz_address)?;
+            let intensity_address = self.array_address_at(row.intensity_address)?;
+            let mz_segment = self.read_array_typed(&mz_address)?;
+            let intensity_segment = self.read_array_typed(&intensity_address)?;
+            let paired = mz_segment.len().min(intensity_segment.len());
+            let (start, end) = range_in_sorted(&mz_segment, mz.from, mz.to, paired);
+            let mut sum = 0.0;
+            for position in start..end {
+                sum += value_at(&intensity_segment, position);
+            }
+            *totals.entry(row.spectrum_index).or_insert(0.0) += sum;
+        }
+
+        let mut points: Vec<(f64, f64)> = totals
+            .into_iter()
+            .filter_map(|(spectrum, intensity)| {
+                self.spec_summary(spectrum as usize)
+                    .map(|summary| (summary.rt, intensity))
+            })
+            .collect();
+        points.sort_by(|left, right| left.0.total_cmp(&right.0));
+        Ok(points)
+    }
+
+    pub(crate) fn spec_block_byte_range(&self, block_id: u32) -> IonResult<ByteRange> {
+        self.spec_container
+            .block_byte_range(block_id)
+            .ok_or_else(|| IonError::from("spectrum block id out of range"))
+    }
+
+    pub fn byte_ranges(&mut self, scan_index: usize, mz: Range) -> IonResult<Vec<ByteRange>> {
+        let windows = self.get_spectrum_mz_windows(scan_index, mz.from, mz.to)?;
+
+        let mut block_ids = Vec::with_capacity(windows.len() * 2);
+        for window in &windows {
+            block_ids.push(window.mz_address.block_id);
+            block_ids.push(window.intensity_address.block_id);
+        }
+        block_ids.sort_unstable();
+        block_ids.dedup();
+
+        let mut ranges = Vec::with_capacity(block_ids.len());
+        for block_id in block_ids {
+            ranges.push(self.spec_block_byte_range(block_id)?);
+        }
+        ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+        Ok(ranges)
+    }
+
+    pub fn read_window(&mut self, index: usize, mz: Range) -> IonResult<DataXY> {
+        let windows = self.get_spectrum_mz_windows(index, mz.from, mz.to)?;
+
+        let mz_dtype = windows
+            .first()
+            .map(|s| s.mz_address.dtype)
+            .unwrap_or(FILE_DTYPE_F64);
+        let intensity_dtype = windows
+            .first()
+            .map(|s| s.intensity_address.dtype)
+            .unwrap_or(FILE_DTYPE_F64);
+        let mut mz_out = empty_array(mz_dtype);
+        let mut intensity_out = empty_array(intensity_dtype);
+        for window in windows {
+            let mz_segment = self.read_array_typed(&window.mz_address)?;
+            let intensity_segment = self.read_array_typed(&window.intensity_address)?;
+            keep_pairs_sorted(
+                &mz_segment,
+                &intensity_segment,
+                mz.from,
+                mz.to,
+                &mut mz_out,
+                &mut intensity_out,
+            );
+        }
+
+        Ok(DataXY {
+            x: mz_out,
+            y: intensity_out,
+        })
+    }
+
+    pub fn scans_in(
+        &mut self,
+        mz: Range,
+        select: Select,
+        ms_level: Option<u8>,
+        visit: &mut dyn FnMut(&Window),
+    ) -> IonResult<()> {
+        self.require_bounds()?;
+        let count = self.header.spectrum_count as usize;
+        let mut mz_out: Vec<f64> = Vec::new();
+        let mut intensity_out: Vec<f64> = Vec::new();
+        for index in 0..count {
+            let Some(record) = self.spec_summary(index) else {
+                continue;
+            };
+            if let Some(level) = ms_level {
+                if record.ms_level != level {
+                    continue;
+                }
+            }
+            let summary = scan_summary_from_record(&record);
+            if !scan_is_selected(&select, &summary) {
+                continue;
+            }
+            let Some(refs) = self.spectrum_arrays(index) else {
+                continue;
+            };
+            let has_mz = refs
+                .iter()
+                .any(|r| r.array_type == crate::accessions::MZ_ARRAY);
+            let has_intensity = refs.iter().any(|r| r.array_type == ACC_INT);
+            if !has_mz || !has_intensity {
+                continue;
+            }
+            let data = self.read_window(index, mz)?;
+            mz_out.clear();
+            data.x.extend_f64(&mut mz_out);
+            intensity_out.clear();
+            data.y.extend_f64(&mut intensity_out);
+            let window = Window {
+                index,
+                summary: &summary,
+                mz: &mz_out,
+                intensity: &intensity_out,
+            };
+            visit(&window);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_spectrum_window_inner(
+        &mut self,
+        index: usize,
+        x_array_accession: u32,
+        y_array_accession: u32,
+        low: f64,
+        high: f64,
+    ) -> IonResult<DataXY> {
+        if index >= self.header.spectrum_count as usize {
+            return Err("spectrum index out of range".into());
+        }
+        if low > high {
+            return Ok(DataXY::empty());
+        }
+        if x_array_accession == ACC_MZ && y_array_accession == ACC_INT {
+            return self.read_window(index, Range { from: low, to: high });
+        }
+
+        let Some(array_addresses) =
+            read_array_addresses_from_buffers(&self.spec_entries_buf, &self.spec_array_addresses, index)
+        else {
+            return Ok(DataXY::empty());
+        };
+        let groups = group_arrays(array_addresses.as_slice())?;
+
+        let mut x_group = None;
+        let mut y_group = None;
+        for group in &groups {
+            if group.array_type == x_array_accession && x_group.is_none() {
+                x_group = Some(group);
+            } else if group.array_type == y_array_accession && y_group.is_none() {
+                y_group = Some(group);
+            }
+        }
+
+        let (Some(x_group), Some(y_group)) = (x_group, y_group) else {
+            return Ok(DataXY::empty());
+        };
+
+        self.read_full_window(x_group, y_group, low, high)
+    }
+
+    pub(crate) fn read_full_window(
+        &mut self,
+        x_group: &ArrayGroup,
+        y_group: &ArrayGroup,
+        low: f64,
+        high: f64,
+    ) -> IonResult<DataXY> {
+        let x = self.read_group_typed(x_group)?;
+        let y = self.read_group_typed(y_group)?;
+
+        let mut x_out = empty_array(group_dtype(x_group));
+        let mut y_out = empty_array(group_dtype(y_group));
+        keep_pairs(&x, &y, low, high, &mut x_out, &mut y_out);
+        Ok(DataXY { x: x_out, y: y_out })
+    }
+
+    fn read_group_typed(&mut self, group: &ArrayGroup) -> IonResult<NumericArray> {
+        let mut out = empty_array(group_dtype(group));
+        for array_address in &group.refs {
+            let window = self.read_array_typed(array_address)?;
+            append_range(&mut out, &window, 0, window.len());
+        }
+        Ok(out)
+    }
+
+    pub fn candidate_items(
+        &mut self,
+        target: Target,
+        axis_accession: u32,
+        lo: f64,
+        hi: f64,
+    ) -> IonResult<Vec<ItemSlice>> {
+        let is_axis = match target {
+            Target::Spec => axis_accession == ACC_MZ,
+            Target::Chrom => axis_accession == crate::accessions::TIME_ARRAY,
+        };
+        if !is_axis {
+            return Ok(Vec::new());
+        }
+
+        match target {
+            Target::Spec => {
+                let _ = self.ensure_spec_window_directory();
+            }
+            Target::Chrom => self.ensure_chrom_window_directory(),
+        }
+
+        let width = self.header.target_mz_window as f64;
+        let window_directory = match target {
+            Target::Spec => &self.spec_window_directory,
+            Target::Chrom => &self.chrom_window_directory,
+        };
+        let WindowDirectoryCache::Loaded(window_directory) = window_directory else {
+            return Ok(Vec::new());
+        };
+
+        let Some((window_low, window_high)) = window_span(width, lo, hi, window_directory.window_count()) else {
+            return Ok(Vec::new());
+        };
+
+        let mut result = Vec::new();
+        for window in window_low..=window_high {
+            for position in window_directory.window_range(window) {
+                let row = window_directory.row(position);
+                result.push(ItemSlice {
+                    item_index: row.spectrum_index as u64,
+                    array_address_index: row.mz_address as u64,
+                });
+            }
+        }
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_span;
+
+    #[test]
+    fn window_span_clamps_to_available_windows() {
+        assert_eq!(window_span(250.0, 260.0, 600.0, 4), Some((1, 2)));
+        assert_eq!(window_span(250.0, 0.0, 100000.0, 4), Some((0, 3)));
+        assert_eq!(window_span(250.0, 100000.0, 100000.0, 4), None);
+        assert_eq!(window_span(250.0, 0.0, 100.0, 0), None);
+    }
+}

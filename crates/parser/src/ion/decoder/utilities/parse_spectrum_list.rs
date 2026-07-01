@@ -1,11 +1,12 @@
 use crate::{
-    Spectrum, SpectrumDescription, SpectrumList,
+    accessions::ACC_MS_LEVEL,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF, ACC_ATTR_DEFAULT_ARRAY_LENGTH,
-            ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_ID, ACC_ATTR_INDEX, ACC_ATTR_NATIVE_ID,
-            ACC_ATTR_REF, ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPOT_ID,
+            ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_ID, ACC_ATTR_INDEX, ACC_ATTR_MS_LEVEL,
+            ACC_ATTR_NATIVE_ID, ACC_ATTR_REF, ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF,
+            ACC_ATTR_SPOT_ID,
         },
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
@@ -14,16 +15,20 @@ use crate::{
             parse_product_list, parse_scan_list,
         },
     },
-    mzml::{schema::TagId, structs::ReferenceableParamGroupRef},
+    mzml::{
+        schema::TagId,
+        structs::{
+            CvParam, ReferenceableParamGroupRef, Spectrum, SpectrumDescription, SpectrumList,
+        },
+    },
 };
-
-const ACC_MS_LEVEL: &str = "MS:1000511";
 
 #[inline]
 pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
     metadata: &[&Metadatum],
     children_lookup: &ChildrenLookup,
     policy: &P,
+    index_base: u32,
 ) -> Option<SpectrumList> {
     let mut owner_rows = OwnerRows::with_capacity(metadata.len());
     for &entry in metadata {
@@ -55,7 +60,7 @@ pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
                 &owner_rows,
                 children_lookup,
                 spectrum_id,
-                index as u32,
+                index_base + index as u32,
                 policy,
                 &mut param_buffer,
             )
@@ -70,7 +75,7 @@ pub(crate) fn parse_spectrum_list<P: MetadataPolicy>(
 }
 
 #[inline]
-fn parse_spectrum<'a, P: MetadataPolicy>(
+pub(crate) fn parse_spectrum<'a, P: MetadataPolicy>(
     owner_rows: &'a OwnerRows<'a>,
     children_lookup: &ChildrenLookup,
     spectrum_id: u32,
@@ -102,11 +107,13 @@ fn parse_spectrum<'a, P: MetadataPolicy>(
         user_params.retain(|p| !description.user_params.iter().any(|dp| p.name == dp.name));
     }
 
-    let ms_level = cv_params
-        .iter()
-        .find(|p| p.accession.as_deref() == Some(ACC_MS_LEVEL))
-        .and_then(|p| p.value.as_deref())
-        .and_then(|v| v.parse::<u32>().ok());
+    let ms_level = get_attr_u32(rows, ACC_ATTR_MS_LEVEL)
+        .or_else(|| get_ms_level(&cv_params))
+        .or_else(|| {
+            spectrum_description
+                .as_ref()
+                .and_then(|description| get_ms_level(&description.cv_params))
+        });
 
     let binary_data_array_list =
         parse_binary_data_array_list(owner_rows, children_lookup, spectrum_id);
@@ -137,6 +144,14 @@ fn parse_spectrum<'a, P: MetadataPolicy>(
         product_list: parse_product_list(owner_rows, children_lookup, spectrum_id),
         binary_data_array_list,
     }
+}
+
+fn get_ms_level(cv_params: &[CvParam]) -> Option<u32> {
+    cv_params
+        .iter()
+        .find(|param| param.accession.as_deref() == Some(ACC_MS_LEVEL))
+        .and_then(|param| param.value.as_deref())
+        .and_then(|value| value.parse::<u32>().ok())
 }
 
 #[inline]

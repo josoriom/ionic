@@ -11,7 +11,7 @@ pub(crate) use helpers::*;
 pub(crate) mod parsing_workspace;
 pub(crate) use parsing_workspace::ParsingWorkspace;
 pub(crate) mod parse_bda_list;
-pub(crate) use parse_bda_list::{parse_bda, parse_bda_list};
+pub(crate) use parse_bda_list::{finalize_bda, parse_bda, parse_bda_list};
 pub(crate) mod parse_chromatogram_list;
 pub(crate) use parse_chromatogram_list::parse_chromatogram_list;
 pub(crate) mod parse_precursor_list;

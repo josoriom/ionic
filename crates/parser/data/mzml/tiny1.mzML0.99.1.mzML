@@ -107,13 +107,13 @@
 					<cvParam cvLabel="MS" accession="MS:1000523" name="64-bit float" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000576" name="no compression" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000514" name="m/z array" value=""/>
-					<binary>mpmZmZmZuT8AAAAAAAAkQJqZmZmZmck/AAAAAAAAPkCamZmZmZnZPwAAAAAAAElAMzMzMzMz4z8AAAAAAIBRQHsUrkfherQ/AAAAAACAVkA=</binary>
+					<binary>exSuR+F6tD+amZmZmZm5P5qZmZmZmck/mpmZmZmZ2T8zMzMzMzPjPwAAAAAAACRAAAAAAAAAPkAAAAAAAABJQAAAAAAAgFFAAAAAAACAVkA=</binary>
 				</binaryDataArray>
 				<binaryDataArray arrayLength="1313" encodedLength="5000">
 					<cvParam cvLabel="MS" accession="MS:1000521" name="32-bit float" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000576" name="no compression" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000515" name="intensity array" value=""/>
-					<binary>zczMPQAAIEHNzEw+AADwQc3MzD4AAEhCmpkZPwAAjEIK16M9AAC0Qg==</binary>
+					<binary>CtejPc3MzD3NzEw+zczMPpqZGT8AACBBAADwQQAASEIAAIxCAAC0Qg==</binary>
 				</binaryDataArray>
 			</spectrum>
 			<spectrum id="S20" scanNumber="20" msLevel="2">
@@ -153,13 +153,13 @@
 					<cvParam cvLabel="MS" accession="MS:1000523" name="64-bit float" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000576" name="no compression" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000514" name="m/z array" value=""/>
-					<binary>mpmZmZmZuT8AAAAAAAAkQJqZmZmZmck/AAAAAAAAPkCamZmZmZnZPwAAAAAAAElAMzMzMzMz4z8AAAAAAIBRQHsUrkfherQ/AAAAAACAVkA=</binary>
+					<binary>exSuR+F6tD+amZmZmZm5P5qZmZmZmck/mpmZmZmZ2T8zMzMzMzPjPwAAAAAAACRAAAAAAAAAPkAAAAAAAABJQAAAAAAAgFFAAAAAAACAVkA=</binary>
 				</binaryDataArray>
 				<binaryDataArray arrayLength="43" encodedLength="2500">
 					<cvParam cvLabel="MS" accession="MS:1000521" name="32-bit float" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000576" name="no compression" value=""/>
 					<cvParam cvLabel="MS" accession="MS:1000515" name="intensity array" value=""/>
-					<binary>zczMPQAAIEHNzEw+AADwQc3MzD4AAEhCmpkZPwAAjEIK16M9AAC0Qg==</binary>
+					<binary>CtejPc3MzD3NzEw+zczMPpqZGT8AACBBAADwQQAASEIAAIxCAAC0Qg==</binary>
 				</binaryDataArray>
 			</spectrum>
 		</spectrumList>

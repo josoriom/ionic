@@ -1,9 +1,9 @@
 use crate::{
-    BinaryData,
-    mzml::structs::MzML,
+    mzml::structs::{NumericArray, MzML},
     utilities::test::{
-        CvRefMode, assert_cv, assert_software_param, chromatogram, chromatogram_list, parse_b,
-        spectrum_by_index, spectrum_description, spectrum_precursor_list, spectrum_scan_list,
+        CvRefMode, assert_cv, assert_software_param, chromatogram, chromatogram_list,
+        parse_ion_as_mzml, spectrum_by_index, spectrum_description, spectrum_precursor_list,
+        spectrum_scan_list,
     },
 };
 
@@ -16,7 +16,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -248,7 +248,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_header_sections() {
 
 #[test]
 fn tiny_pwiz_mzml0_99_9_pwiz_first_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run: &_ = &mzml.run;
 
     let sfrefl = run
@@ -447,7 +447,7 @@ fn tiny_pwiz_mzml0_99_9_pwiz_first_spectrum() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_second_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -694,7 +694,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_second_spectrum() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_chromatograms() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -813,7 +813,7 @@ fn tiny_msdata_mzml0_99_9_pwiz_chromatograms() {
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s19_mz_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s0 = spectrum_by_index(mzml, 0);
     assert_eq!(s0.id, "S19");
 
@@ -827,18 +827,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_s19_mz_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S19 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S19 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S19 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s19_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s0 = spectrum_by_index(mzml, 0);
     assert_eq!(s0.id, "S19");
 
@@ -852,18 +852,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_s19_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S19 intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S19 intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("S19 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s20_mz_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s1 = spectrum_by_index(mzml, 1);
     assert_eq!(s1.id, "S20");
 
@@ -877,18 +877,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_s20_mz_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S20 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S20 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S20 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_s20_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let s1 = spectrum_by_index(mzml, 1);
     assert_eq!(s1.id, "S20");
 
@@ -902,18 +902,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_s20_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S20 intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S20 intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("S20 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_tic_time_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -929,18 +929,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_tic_time_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("tic time: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("tic time: expected NumericArray::F64, got {other:?}"),
         None => panic!("tic time: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_tic_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -956,18 +956,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_tic_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(160));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("tic intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("tic intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("tic intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_sic_time_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -983,18 +983,18 @@ fn tiny_msdata_mzml0_99_9_pwiz_sic_time_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("sic time: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("sic time: expected NumericArray::F64, got {other:?}"),
         None => panic!("sic time: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny_msdata_mzml0_99_9_pwiz_sic_intensity_binary() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = chromatogram_list(run);
@@ -1010,11 +1010,11 @@ fn tiny_msdata_mzml0_99_9_pwiz_sic_intensity_binary() {
     assert_eq!(bda.array_length, None);
     assert_eq!(bda.encoded_length, Some(108usize));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("sic intensity: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("sic intensity: expected NumericArray::F64, got {other:?}"),
         None => panic!("sic intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }

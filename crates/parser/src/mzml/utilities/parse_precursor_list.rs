@@ -15,8 +15,10 @@ pub(crate) fn parse_precursor_list<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<PrecursorList, ParseError> {
+    let count = attr_usize(start, b"count");
     let mut list = PrecursorList {
-        count: attr_usize(start, b"count"),
+        count,
+        precursors: Vec::with_capacity(count.unwrap_or(0)),
         ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {

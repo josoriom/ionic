@@ -1,10 +1,18 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::{
+    error::Error,
+    fmt::{Display, Formatter},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IonError {
     Msg(String),
     BadDtype { dtype: u8, kind: &'static str },
+    UnsupportedPacking(u8),
+    UnsupportedFormatVersion(u16),
+    UnsupportedCodec(u8),
+    MissingSpectrumBounds,
+    BadSpectrumBoundsChecksum,
+    MalformedSpectrumBounds(String),
 }
 
 pub type IonResult<T> = Result<T, IonError>;
@@ -21,6 +29,16 @@ impl Display for IonError {
             Self::Msg(text) => f.write_str(text),
             Self::BadDtype { dtype, kind } => {
                 write!(f, "unsupported dtype {dtype} for {kind}")
+            }
+            Self::UnsupportedPacking(b) => write!(f, "unsupported packing id: {b}"),
+            Self::UnsupportedFormatVersion(v) => write!(f, "unsupported format version: {v}"),
+            Self::UnsupportedCodec(c) => write!(f, "unsupported compression codec: {c}"),
+            Self::MissingSpectrumBounds => f.write_str(
+                "spectrum has no window bounds (A0); re-encode the file with the current Ionic",
+            ),
+            Self::BadSpectrumBoundsChecksum => f.write_str("spectrum bounds (A0) checksum failed"),
+            Self::MalformedSpectrumBounds(reason) => {
+                write!(f, "spectrum bounds (A0) malformed: {reason}")
             }
         }
     }

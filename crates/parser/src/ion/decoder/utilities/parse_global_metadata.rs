@@ -4,13 +4,15 @@ use crate::{
         IonError, IonResult,
         utilities::{
             common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
-            parse_metadata::{HDR_CODEC_NONE, HDR_CODEC_ZSTD, parse_metadata},
+            decompression_limit::DecompressionLimit,
+            parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
         },
     },
 };
 
 const GLOBAL_SECTION_HEADER_BYTE_SIZE: usize = 32;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn parse_global_metadata(
     bytes: &[u8],
     item_count: u64,
@@ -19,13 +21,14 @@ pub(crate) fn parse_global_metadata(
     str_count: u64,
     compression_codec: u8,
     expected_uncompressed: u64,
+    decompression_limit: DecompressionLimit,
 ) -> IonResult<Vec<Metadatum>> {
     let expected_byte_count = usize::try_from(expected_uncompressed)
         .map_err(|_| IonError::from("global metadata: expected_uncompressed overflow"))?;
 
     let owned;
     let bytes = match compression_codec {
-        HDR_CODEC_NONE => {
+        CODEC_NONE => {
             if expected_byte_count == 0 {
                 bytes
             } else if bytes.len() < expected_byte_count {
@@ -40,8 +43,12 @@ pub(crate) fn parse_global_metadata(
                 bytes
             }
         }
-        HDR_CODEC_ZSTD => {
-            owned = decompress_zstd_allow_aligned_padding(bytes, expected_byte_count)?;
+        CODEC_ZSTD => {
+            owned = decompress_zstd_allow_aligned_padding(
+                bytes,
+                expected_byte_count,
+                decompression_limit,
+            )?;
             owned.as_slice()
         }
         other => return Err(format!("unsupported compression_codec={other}").into()),
@@ -64,6 +71,9 @@ pub(crate) fn parse_global_metadata(
     let n_cvs = read_u16_le_at(bytes, &mut read_pos, "n_cvs")? as u64;
     let n_run = read_u16_le_at(bytes, &mut read_pos, "n_run")? as u64;
 
+    if bytes[read_pos..read_pos + 14].iter().any(|&b| b != 0) {
+        return Err("global metadata: reserved header bytes must be zero".into());
+    }
     read_pos += 14;
 
     let derived_item_count = [
@@ -102,8 +112,9 @@ pub(crate) fn parse_global_metadata(
         meta_count,
         num_count,
         str_count,
-        HDR_CODEC_NONE,
+        CODEC_NONE,
         0,
+        decompression_limit,
     )
 }
 
@@ -131,7 +142,16 @@ mod tests {
     #[test]
     fn parse_global_metadata_rejects_section_that_is_too_small() {
         let tiny = vec![0u8; 4];
-        let result = parse_global_metadata(&tiny, 0, 0, 0, 0, HDR_CODEC_NONE, 0);
+        let result = parse_global_metadata(
+            &tiny,
+            0,
+            0,
+            0,
+            0,
+            CODEC_NONE,
+            0,
+            DecompressionLimit::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("too small"));
     }
@@ -142,7 +162,16 @@ mod tests {
         write_u32_le(&mut bytes, 0);
         bytes.resize(GLOBAL_SECTION_HEADER_BYTE_SIZE + 4, 0);
 
-        let result = parse_global_metadata(&bytes, 0, 0, 0, 0, HDR_CODEC_NONE, 0);
+        let result = parse_global_metadata(
+            &bytes,
+            0,
+            0,
+            0,
+            0,
+            CODEC_NONE,
+            0,
+            DecompressionLimit::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("counts are zero"));
     }
@@ -153,7 +182,16 @@ mod tests {
         write_u32_le(&mut bytes, 0);
         bytes.resize(GLOBAL_SECTION_HEADER_BYTE_SIZE + 4, 0);
 
-        let result = parse_global_metadata(&bytes, 99, 0, 0, 0, HDR_CODEC_NONE, 0);
+        let result = parse_global_metadata(
+            &bytes,
+            99,
+            0,
+            0,
+            0,
+            CODEC_NONE,
+            0,
+            DecompressionLimit::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("mismatch"));
     }
@@ -161,7 +199,8 @@ mod tests {
     #[test]
     fn parse_global_metadata_rejects_unsupported_codec() {
         let bytes = vec![0u8; GLOBAL_SECTION_HEADER_BYTE_SIZE + 4];
-        let result = parse_global_metadata(&bytes, 0, 0, 0, 0, 99, 0);
+        let result =
+            parse_global_metadata(&bytes, 0, 0, 0, 0, 99, 0, DecompressionLimit::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unsupported"));
     }
@@ -172,7 +211,16 @@ mod tests {
         let mut bytes = vec![0u8; expected];
         bytes.extend_from_slice(&[0u8, 0, 1]);
 
-        let result = parse_global_metadata(&bytes, 0, 0, 0, 0, HDR_CODEC_NONE, expected as u64);
+        let result = parse_global_metadata(
+            &bytes,
+            0,
+            0,
+            0,
+            0,
+            CODEC_NONE,
+            expected as u64,
+            DecompressionLimit::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("trailing bytes"));
     }
@@ -183,7 +231,16 @@ mod tests {
         let mut bytes = vec![1u8; expected];
         bytes.extend_from_slice(&[0u8; 4]);
 
-        let result = parse_global_metadata(&bytes, 0, 0, 0, 0, HDR_CODEC_NONE, expected as u64);
+        let result = parse_global_metadata(
+            &bytes,
+            0,
+            0,
+            0,
+            0,
+            CODEC_NONE,
+            expected as u64,
+            DecompressionLimit::default(),
+        );
         assert!(result.is_err());
         assert!(!result.unwrap_err().contains("trailing bytes"));
     }

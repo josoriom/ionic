@@ -1,5 +1,4 @@
 use crate::{
-    CvParam, UserParam,
     decoder::decode::{Metadatum, MetadatumValue},
     ion::{
         attr_meta::CV_REF_ATTR,
@@ -9,6 +8,7 @@ use crate::{
         },
     },
     mzml::schema::TagId,
+    mzml::structs::{CvParam, UserParam},
 };
 
 #[inline]
