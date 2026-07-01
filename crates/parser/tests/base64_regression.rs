@@ -7,7 +7,7 @@ use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
 #[test]
 fn known_f64_values_via_xml_roundtrip() {
     let values = vec![1.0_f64, 2.0, 3.0, 100.5, -42.0];
-    let binary = BinaryData::F64(values.clone());
+    let binary = NumericArray::F64(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Float64, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     let got = result.to_f64_vec();
@@ -17,12 +17,12 @@ fn known_f64_values_via_xml_roundtrip() {
 #[test]
 fn known_f32_values_via_xml_roundtrip() {
     let values = vec![1.0_f32, 2.0, 3.0, 100.5, -42.0];
-    let binary = BinaryData::F32(values.clone());
+    let binary = NumericArray::F32(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Float32, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     match result {
-        BinaryData::F32(got) => assert_eq!(got, values),
-        BinaryData::F64(got) => {
+        NumericArray::F32(got) => assert_eq!(got, values),
+        NumericArray::F64(got) => {
             let expected: Vec<f64> = values.iter().map(|v| *v as f64).collect();
             assert_eq!(got, expected);
         }
@@ -33,11 +33,11 @@ fn known_f32_values_via_xml_roundtrip() {
 #[test]
 fn known_i32_values_via_xml_roundtrip() {
     let values = vec![0_i32, 1, -1, i32::MAX, i32::MIN];
-    let binary = BinaryData::I32(values.clone());
+    let binary = NumericArray::I32(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Int32, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     match result {
-        BinaryData::I32(got) => assert_eq!(got, values),
+        NumericArray::I32(got) => assert_eq!(got, values),
         other => panic!("unexpected variant: {}", other.variant_name()),
     }
 }
@@ -45,11 +45,11 @@ fn known_i32_values_via_xml_roundtrip() {
 #[test]
 fn known_i64_values_via_xml_roundtrip() {
     let values = vec![0_i64, 1, -1, i64::MAX, i64::MIN];
-    let binary = BinaryData::I64(values.clone());
+    let binary = NumericArray::I64(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Int64, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     match result {
-        BinaryData::I64(got) => assert_eq!(got, values),
+        NumericArray::I64(got) => assert_eq!(got, values),
         other => panic!("unexpected variant: {}", other.variant_name()),
     }
 }
@@ -57,7 +57,7 @@ fn known_i64_values_via_xml_roundtrip() {
 #[test]
 fn single_element_f64_roundtrip() {
     let values = vec![std::f64::consts::PI];
-    let binary = BinaryData::F64(values.clone());
+    let binary = NumericArray::F64(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Float64, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     let got = result.to_f64_vec();
@@ -67,7 +67,7 @@ fn single_element_f64_roundtrip() {
 #[test]
 fn empty_base64_produces_empty_array() {
     let values: Vec<f64> = vec![];
-    let binary = BinaryData::F64(values);
+    let binary = NumericArray::F64(values);
     let xml = single_array_xml("MS:1000514", NumericType::Float64, &binary, Some(0));
     let result = parse_single_array_xml(&xml);
     match result {
@@ -79,7 +79,7 @@ fn empty_base64_produces_empty_array() {
 #[test]
 fn large_array_base64_roundtrip() {
     let values: Vec<f64> = (0..1000).map(|i| i as f64 * 0.001).collect();
-    let binary = BinaryData::F64(values.clone());
+    let binary = NumericArray::F64(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Float64, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     let got = result.to_f64_vec();
@@ -130,7 +130,7 @@ fn base64_with_embedded_whitespace() {
 #[test]
 fn all_zeros_base64_roundtrip() {
     let values = vec![0.0_f64; 10];
-    let binary = BinaryData::F64(values.clone());
+    let binary = NumericArray::F64(values.clone());
     let xml = single_array_xml("MS:1000514", NumericType::Float64, &binary, None);
     let result = parse_single_array_xml(&xml).expect("should have binary data");
     let got = result.to_f64_vec();

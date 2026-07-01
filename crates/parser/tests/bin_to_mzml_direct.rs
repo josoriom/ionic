@@ -5,14 +5,10 @@ use common::helpers::{
     build_mzml, default_cv_list_like_writer, make_chromatogram_f64, make_spectrum_f64,
     minimal_file_description, synthetic_binary_data_array,
 };
-use ionic::mzml::{
-    bin_to_mzml::{bin_to_mzml, convert_bin_to_mzml_bytes},
-    parse_mzml::parse_mzml,
-    structs::*,
-};
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*};
 
 #[test]
-fn convert_bin_to_mzml_bytes_produces_valid_xml() {
+fn bin_to_mzml_produces_valid_xml() {
     let mz = vec![100.0, 200.0, 300.0];
     let intensity = vec![1000.0, 2000.0, 3000.0];
     let mzml = build_mzml(
@@ -20,8 +16,8 @@ fn convert_bin_to_mzml_bytes_produces_valid_xml() {
         vec![],
     );
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("should succeed");
-    let xml_str = String::from_utf8(bytes.clone()).expect("should be valid UTF-8");
+    let bytes = bin_to_mzml(&mzml).expect("should succeed");
+    let xml_str = std::str::from_utf8(&bytes).expect("should be valid UTF-8");
     assert!(xml_str.contains("<?xml"), "should have XML declaration");
     assert!(xml_str.contains("<mzML"), "should have <mzML> tag");
     assert!(
@@ -38,22 +34,6 @@ fn convert_bin_to_mzml_bytes_produces_valid_xml() {
 }
 
 #[test]
-fn bin_to_mzml_string_version() {
-    let mzml = build_mzml(
-        vec![make_spectrum_f64(
-            "scan=1",
-            vec![1.0, 2.0],
-            vec![10.0, 20.0],
-        )],
-        vec![],
-    );
-
-    let xml_str = bin_to_mzml(&mzml).expect("should succeed");
-    assert!(xml_str.contains("<mzML"));
-    assert!(xml_str.contains("scan=1"));
-}
-
-#[test]
 fn roundtrip_preserves_mz_values() {
     let mz = vec![100.123, 200.456, 300.789, 400.012, 500.345];
     let intensity = vec![1e3, 2e3, 3e3, 4e3, 5e3];
@@ -62,7 +42,7 @@ fn roundtrip_preserves_mz_values() {
         vec![],
     );
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("encode should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("encode should succeed");
     let reparsed = parse_mzml(&bytes).expect("re-parse should succeed");
     let spectra = reparsed.run.spectrum_list.as_ref().unwrap();
     let arrays = spectra.spectra[0].binary_data_array_list.as_ref().unwrap();
@@ -108,7 +88,7 @@ fn roundtrip_with_chromatogram() {
         )],
     );
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("encode should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("encode should succeed");
     let reparsed = parse_mzml(&bytes).expect("re-parse should succeed");
 
     let chroms = reparsed.run.chromatogram_list.as_ref().unwrap();
@@ -134,7 +114,7 @@ fn roundtrip_multiple_spectra() {
 
     let mzml = build_mzml(spectra, vec![]);
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("encode should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("encode should succeed");
     let reparsed = parse_mzml(&bytes).expect("re-parse should succeed");
 
     let sl = reparsed.run.spectrum_list.as_ref().unwrap();
@@ -155,16 +135,16 @@ fn missing_file_description_returns_error() {
         ..Default::default()
     };
 
-    let result = convert_bin_to_mzml_bytes(&mzml);
+    let result = bin_to_mzml(&mzml);
     assert!(
         result.is_err(),
         "missing file_description should return error"
     );
-    let err = result.unwrap_err();
+    let err = result.unwrap_err().to_string().to_lowercase();
     assert!(
-        err.to_lowercase().contains("filedescription")
-            || err.to_lowercase().contains("file_description")
-            || err.to_lowercase().contains("file description"),
+        err.contains("filedescription")
+            || err.contains("file_description")
+            || err.contains("file description"),
         "error should mention file description, got: {err}"
     );
 }
@@ -173,8 +153,8 @@ fn missing_file_description_returns_error() {
 fn empty_spectrum_list_produces_valid_xml() {
     let mzml = build_mzml(vec![], vec![]);
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("should succeed");
-    let xml_str = String::from_utf8(bytes.clone()).expect("valid UTF-8");
+    let bytes = bin_to_mzml(&mzml).expect("should succeed");
+    let xml_str = std::str::from_utf8(&bytes).expect("valid UTF-8");
     assert!(xml_str.contains("<mzML"));
     let _ = parse_mzml(&bytes).expect("re-parse should succeed");
 }
@@ -202,13 +182,13 @@ fn f32_arrays_via_mzml_xml_roundtrip() {
                             synthetic_binary_data_array(
                                 "MS:1000514",
                                 NumericType::Float32,
-                                BinaryData::F32(mz.clone()),
+                                NumericArray::F32(mz.clone()),
                                 Some(len),
                             ),
                             synthetic_binary_data_array(
                                 "MS:1000515",
                                 NumericType::Float32,
-                                BinaryData::F32(intensity.clone()),
+                                NumericArray::F32(intensity.clone()),
                                 Some(len),
                             ),
                         ],
@@ -222,7 +202,7 @@ fn f32_arrays_via_mzml_xml_roundtrip() {
         ..Default::default()
     };
 
-    let bytes = convert_bin_to_mzml_bytes(&mzml).expect("encode should succeed");
+    let bytes = bin_to_mzml(&mzml).expect("encode should succeed");
     let reparsed = parse_mzml(&bytes).expect("re-parse should succeed");
 
     let sl = reparsed.run.spectrum_list.as_ref().unwrap();

@@ -1,18 +1,69 @@
-use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::{Reader, events::Event};
 use std::io::Cursor;
 
 use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParseError, attr_u32, attr_usize, drain_until_close, parse_cv_list,
+        ParseError, attr_u32, attr_usize, drain_until_close, finalize_bda, parse_cv_list,
         parse_data_processing_list, parse_file_description, parse_index_list,
         parse_instrument_list, parse_ref_param_group_list, parse_run, parse_sample_list,
         parse_scan_settings_list, parse_software_list, parsing_workspace::ParsingWorkspace,
         tag_id_from_bytes,
     },
 };
+
+fn finalize_spectrum(spectrum: &mut Spectrum) -> Result<(), ParseError> {
+    if let Some(bdal) = spectrum.binary_data_array_list.as_mut() {
+        for bda in &mut bdal.binary_data_arrays {
+            finalize_bda(bda)?;
+        }
+    }
+    Ok(())
+}
+
+fn finalize_chromatogram(chrom: &mut Chromatogram) -> Result<(), ParseError> {
+    if let Some(bdal) = chrom.binary_data_array_list.as_mut() {
+        for bda in &mut bdal.binary_data_arrays {
+            finalize_bda(bda)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn finalize_binary_data(mzml: &mut MzML) -> Result<(), ParseError> {
+    use rayon::prelude::*;
+
+    if let Some(sl) = mzml.run.spectrum_list.as_mut() {
+        sl.spectra.par_iter_mut().try_for_each(finalize_spectrum)?;
+    }
+
+    if let Some(cl) = mzml.run.chromatogram_list.as_mut() {
+        cl.chromatograms
+            .par_iter_mut()
+            .try_for_each(finalize_chromatogram)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn finalize_binary_data(mzml: &mut MzML) -> Result<(), ParseError> {
+    if let Some(sl) = mzml.run.spectrum_list.as_mut() {
+        for spectrum in &mut sl.spectra {
+            finalize_spectrum(spectrum)?;
+        }
+    }
+
+    if let Some(cl) = mzml.run.chromatogram_list.as_mut() {
+        for chrom in &mut cl.chromatograms {
+            finalize_chromatogram(chrom)?;
+        }
+    }
+
+    Ok(())
+}
 
 pub fn parse_mzml(bytes: &[u8]) -> Result<MzML, ParseError> {
     let mut ws = ParsingWorkspace::new(Reader::from_reader(Cursor::new(bytes)));
@@ -100,7 +151,10 @@ pub fn parse_mzml(bytes: &[u8]) -> Result<MzML, ParseError> {
                     _ => {}
                 }
             }
-            Event::End(e) if tag_id_from_bytes(e.name().as_ref()) == TagId::MzML => break Ok(mzml),
+            Event::End(e) if tag_id_from_bytes(e.name().as_ref()) == TagId::MzML => {
+                finalize_binary_data(&mut mzml)?;
+                break Ok(mzml);
+            }
             Event::Eof => {
                 if inside_mzml {
                     break Err(ParseError::UnexpectedEof {

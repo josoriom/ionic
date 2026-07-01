@@ -1,72 +1,17 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-    path::PathBuf,
-};
+use std::collections::{HashMap, HashSet};
 
+use crate::mzml::structs::CvParam;
 use crate::{
-    CvParam,
-    ion::{
-        decoder::decode::Metadatum,
-        utilities::{
-            children_lookup::{ChildrenLookup, OwnerRows},
-            parse_binary_data_array_list, parse_header, parse_metadata,
-        },
+    ion::utilities::{
+        children_lookup::{ChildrenLookup, OwnerRows},
+        parse_binary_data_array_list,
     },
     mzml::schema::TagId,
 };
 
 const PATH: &str = "data/ion/test.ion";
 
-fn read_bytes(path: &str) -> Vec<u8> {
-    let full = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-    fs::read(&full).unwrap_or_else(|e| panic!("cannot read {:?}: {}", full, e))
-}
-
-fn parse_metadata_section_from_test_file(
-    start_off: u64,
-    end_off: u64,
-    item_count: u64,
-    expected_item_count: u64,
-    meta_count: u64,
-    num_count: u64,
-    str_count: u64,
-    codec_id: u8,
-    expected_uncompressed: u64,
-    section_name: &str,
-) -> Vec<Metadatum> {
-    let bytes = read_bytes(PATH);
-
-    let c0 = usize::try_from(start_off)
-        .unwrap_or_else(|_| panic!("invalid metadata offsets for {section_name}: start overflow"));
-    let c1 = usize::try_from(end_off)
-        .unwrap_or_else(|_| panic!("invalid metadata offsets for {section_name}: end overflow"));
-
-    assert!(
-        c0 < c1,
-        "invalid metadata offsets for {section_name}: start >= end"
-    );
-    assert!(
-        c1 <= bytes.len(),
-        "invalid metadata offsets for {section_name}: end out of bounds"
-    );
-
-    assert_eq!(
-        item_count, expected_item_count,
-        "test.ion should contain {expected_item_count} {section_name} items"
-    );
-
-    let slice = &bytes[c0..c1];
-
-    let expected = usize::try_from(expected_uncompressed)
-        .unwrap_or_else(|_| panic!("{section_name}: expected_uncompressed overflow"));
-
-    parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
-    )
-    .unwrap_or_else(|e| panic!("{section_name}: parse_metadata failed: {e}"))
-}
-
+#[allow(clippy::too_many_arguments)]
 fn assert_cv_param(
     p: &CvParam,
     cv_ref: Option<&str>,
@@ -88,21 +33,7 @@ fn assert_cv_param(
 
 #[test]
 fn first_chrom_cv_params_item_by_item() {
-    let bytes = read_bytes(PATH);
-    let header = parse_header(&bytes).expect("parse_header failed");
-
-    let metadata_section = parse_metadata_section_from_test_file(
-        header.off_chrom_meta,
-        header.off_global_meta,
-        header.chrom_count,
-        2,
-        header.chrom_meta_count,
-        header.chrom_meta_num_count,
-        header.chrom_meta_str_count,
-        header.compression_codec,
-        header.chrom_meta_uncompressed_bytes,
-        "chromatograms",
-    );
+    let metadata_section = super::meta::chromatograms_metadata(PATH);
 
     let mut rows_by_id = OwnerRows::with_capacity(metadata_section.len());
     for metadatum in &metadata_section {
@@ -313,21 +244,7 @@ fn first_chrom_cv_params_item_by_item() {
 
 #[test]
 fn second_chrom_cv_params_item_by_item() {
-    let bytes = read_bytes(PATH);
-    let header = parse_header(&bytes).expect("parse_header failed");
-
-    let metadata_section = parse_metadata_section_from_test_file(
-        header.off_chrom_meta,
-        header.off_global_meta,
-        header.chrom_count,
-        2,
-        header.chrom_meta_count,
-        header.chrom_meta_num_count,
-        header.chrom_meta_str_count,
-        header.compression_codec,
-        header.chrom_meta_uncompressed_bytes,
-        "chromatograms",
-    );
+    let metadata_section = super::meta::chromatograms_metadata(PATH);
 
     let mut rows_by_id = OwnerRows::with_capacity(metadata_section.len());
     for metadatum in &metadata_section {
@@ -533,21 +450,7 @@ fn second_chrom_cv_params_item_by_item() {
 
 #[test]
 fn first_spectrum_cv_params_item_by_item() {
-    let bytes = read_bytes(PATH);
-    let header = parse_header(&bytes).expect("parse_header failed");
-
-    let metadata_section = parse_metadata_section_from_test_file(
-        header.off_spec_meta,
-        header.off_chrom_meta,
-        header.spectrum_count,
-        2,
-        header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
-        header.compression_codec,
-        header.spec_meta_uncompressed_bytes,
-        "spectra",
-    );
+    let metadata_section = super::meta::spectra_metadata(PATH);
 
     let mut rows_by_id = OwnerRows::with_capacity(metadata_section.len());
     for metadatum in &metadata_section {
@@ -701,21 +604,7 @@ fn first_spectrum_cv_params_item_by_item() {
 
 #[test]
 fn second_spectrum_cv_params_item_by_item() {
-    let bytes = read_bytes(PATH);
-    let header = parse_header(&bytes).expect("parse_header failed");
-
-    let metadata_section = parse_metadata_section_from_test_file(
-        header.off_spec_meta,
-        header.off_chrom_meta,
-        header.spectrum_count,
-        2,
-        header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
-        header.compression_codec,
-        header.spec_meta_uncompressed_bytes,
-        "spectra",
-    );
+    let metadata_section = super::meta::spectra_metadata(PATH);
 
     let mut rows_by_id = OwnerRows::with_capacity(metadata_section.len());
     for metadatum in &metadata_section {

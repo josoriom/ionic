@@ -1,15 +1,21 @@
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+use std::io::Read;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::mem::MaybeUninit;
-
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::zstd_safe;
 
 use crate::{
-    BinaryData, BinaryDataArray, BinaryDataArrayList,
-    decoder::decode::{Metadatum, MetadatumValue},
+    decoder::{
+        decode::{Metadatum, MetadatumValue},
+        utilities::decompression_limit::DecompressionLimit,
+    },
     ion::{
         IonError, IonResult,
         attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
     },
     mzml::schema::{SchemaNode, SchemaTree as Schema, TagId},
+    mzml::structs::{NumericArray, BinaryDataArray, BinaryDataArrayList},
 };
 
 #[allow(dead_code)]
@@ -63,7 +69,10 @@ pub(crate) fn read_u64_le_at(bytes: &[u8], pos: &mut usize, field: &'static str)
 
 #[inline]
 pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult<Vec<u32>> {
-    let raw = take(bytes, pos, n * 4, "u32 vector")?;
+    let byte_len = n
+        .checked_mul(4)
+        .ok_or_else(|| IonError::from("u32 vector length overflows usize"))?;
+    let raw = take(bytes, pos, byte_len, "u32 vector")?;
     let mut out = Vec::with_capacity(n);
     for chunk in raw.chunks_exact(4) {
         out.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
@@ -73,7 +82,10 @@ pub(crate) fn read_u32_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult
 
 #[inline]
 pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult<Vec<f64>> {
-    let raw = take(bytes, pos, n * 8, "f64 vector")?;
+    let byte_len = n
+        .checked_mul(8)
+        .ok_or_else(|| IonError::from("f64 vector length overflows usize"))?;
+    let raw = take(bytes, pos, byte_len, "f64 vector")?;
     let mut out = Vec::with_capacity(n);
     for chunk in raw.chunks_exact(8) {
         out.push(f64::from_le_bytes(chunk.try_into().unwrap()));
@@ -82,10 +94,17 @@ pub(crate) fn read_f64_vec(bytes: &[u8], pos: &mut usize, n: usize) -> IonResult
 }
 
 #[inline]
-pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> IonResult<Vec<u8>> {
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub(crate) fn decompress_zstd(
+    comp: &[u8],
+    expected: usize,
+    budget: DecompressionLimit,
+) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
     }
+
+    budget.validate(comp.len(), expected)?;
 
     let mut out: Vec<u8> = Vec::with_capacity(expected);
 
@@ -110,23 +129,56 @@ pub(crate) fn decompress_zstd(comp: &[u8], expected: usize) -> IonResult<Vec<u8>
 }
 
 #[inline]
-pub(crate) fn decompress_zstd_allow_aligned_padding(
-    input: &[u8],
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+pub(crate) fn decompress_zstd(
+    comp: &[u8],
     expected: usize,
+    budget: DecompressionLimit,
 ) -> IonResult<Vec<u8>> {
     if expected == 0 {
         return Ok(Vec::new());
     }
 
-    if let Ok(n) = zstd::zstd_safe::find_frame_compressed_size(input)
+    budget.validate(comp.len(), expected)?;
+
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(comp)
+        .map_err(|err| IonError::from(format!("zstd decode failed: {err:?}")))?;
+    let mut out = Vec::with_capacity(expected);
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|err| IonError::from(format!("zstd decode failed: {err}")))?;
+
+    if out.len() != expected {
+        return Err(format!(
+            "zstd: bad decoded size (got={}, expected={expected})",
+            out.len()
+        )
+        .into());
+    }
+
+    Ok(out)
+}
+
+#[inline]
+pub(crate) fn decompress_zstd_allow_aligned_padding(
+    input: &[u8],
+    expected: usize,
+    budget: DecompressionLimit,
+) -> IonResult<Vec<u8>> {
+    if expected == 0 {
+        return Ok(Vec::new());
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    if let Ok(n) = zstd_safe::find_frame_compressed_size(input)
         && n > 0
         && n <= input.len()
-        && let Ok(v) = decompress_zstd(&input[..n], expected)
+        && let Ok(v) = decompress_zstd(&input[..n], expected, budget)
     {
         return Ok(v);
     }
 
-    match decompress_zstd(input, expected) {
+    match decompress_zstd(input, expected, budget) {
         Ok(v) => Ok(v),
         Err(first_err) => {
             let mut trimmed = input;
@@ -136,7 +188,7 @@ pub(crate) fn decompress_zstd_allow_aligned_padding(
                     break;
                 }
                 trimmed = &trimmed[..trimmed.len() - 1];
-                if let Ok(v) = decompress_zstd(trimmed, expected) {
+                if let Ok(v) = decompress_zstd(trimmed, expected, budget) {
                     return Ok(v);
                 }
             }
@@ -255,12 +307,12 @@ pub(crate) fn decoded_len(bda: &BinaryDataArray) -> usize {
     match bda.binary.as_ref() {
         None => 0,
         Some(bin) => match bin {
-            BinaryData::F16(v) => v.len(),
-            BinaryData::F32(v) => v.len(),
-            BinaryData::F64(v) => v.len(),
-            BinaryData::I16(v) => v.len(),
-            BinaryData::I32(v) => v.len(),
-            BinaryData::I64(v) => v.len(),
+            NumericArray::F16(v) => v.len(),
+            NumericArray::F32(v) => v.len(),
+            NumericArray::F64(v) => v.len(),
+            NumericArray::I16(v) => v.len(),
+            NumericArray::I32(v) => v.len(),
+            NumericArray::I64(v) => v.len(),
         },
     }
 }

@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use crate::ion::{
+    DecompressionLimit,
     attr_meta::*,
     decoder::decode::{Metadatum, MetadatumValue},
     utilities::{parse_header, parse_metadata},
@@ -47,7 +48,7 @@ fn parse_metadata_section_from_test_file(
 
     let slice = &bytes[c0..c1];
 
-    let expected = if codec_id == parse_metadata::HDR_CODEC_ZSTD {
+    let expected = if codec_id == parse_metadata::CODEC_ZSTD {
         usize::try_from(expected_uncompressed)
             .unwrap_or_else(|_| panic!("{section_name}: expected_uncompressed overflow"))
     } else {
@@ -55,7 +56,14 @@ fn parse_metadata_section_from_test_file(
     };
 
     let meta = parse_metadata(
-        slice, item_count, meta_count, num_count, str_count, codec_id, expected,
+        slice,
+        item_count,
+        meta_count,
+        num_count,
+        str_count,
+        codec_id,
+        expected,
+        DecompressionLimit::default(),
     )
     .expect("parse_metadata failed");
 
@@ -72,8 +80,8 @@ fn check_first_spectrum() {
         header.spectrum_count,
         2,
         header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
+        header.spec_meta_numeric_count,
+        header.spec_meta_string_count,
         header.compression_codec,
         header.spec_meta_uncompressed_bytes,
         "spectra",
@@ -277,8 +285,8 @@ fn check_second_spectrum() {
         header.spectrum_count,
         2,
         header.spec_meta_count,
-        header.spec_meta_num_count,
-        header.spec_meta_str_count,
+        header.spec_meta_numeric_count,
+        header.spec_meta_string_count,
         header.compression_codec,
         header.spec_meta_uncompressed_bytes,
         "spectra",
@@ -613,8 +621,8 @@ fn check_first_chromatogram() {
         header.chrom_count,
         2,
         header.chrom_meta_count,
-        header.chrom_meta_num_count,
-        header.chrom_meta_str_count,
+        header.chrom_meta_numeric_count,
+        header.chrom_meta_string_count,
         header.compression_codec,
         header.chrom_meta_uncompressed_bytes,
         "chromatograms",
@@ -675,8 +683,8 @@ fn check_second_chromatogram() {
         header.chrom_count,
         2,
         header.chrom_meta_count,
-        header.chrom_meta_num_count,
-        header.chrom_meta_str_count,
+        header.chrom_meta_numeric_count,
+        header.chrom_meta_string_count,
         header.compression_codec,
         header.chrom_meta_uncompressed_bytes,
         "chromatograms",

@@ -1,12 +1,10 @@
-pub(crate) mod container_builder;
-pub(crate) use container_builder::{
-    CompressionMode, ContainerBuilder, DefaultCompressor, FilterType,
-};
-pub(crate) mod encoder_output;
-pub use encoder_output::FileEncoderOutput;
-pub(crate) mod file_header_writer;
-pub(crate) use file_header_writer::FileHeader;
-pub(crate) mod byte_shuffle;
-pub(crate) mod delta_filter;
+pub(crate) mod block_writer;
+pub(crate) use block_writer::{CompressionMode, BlockWriter, DefaultCompressor};
+pub(crate) mod output;
+pub use output::{WriteBytes, SectionStorage};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub use output::{FileWriter, TempFile};
+pub(crate) use output::{SectionChunk, make_chunk};
 pub(crate) mod le_writers;
 pub(crate) mod meta_collector;
+pub(crate) mod tables;

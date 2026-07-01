@@ -13,17 +13,6 @@ pub struct MzML {
     pub run: Run,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Copy)]
-pub struct FilterRecord {
-    pub rt_seconds: f64,
-    pub base_peak_mz: f64,
-    pub selected_ion_mz: f64,
-    pub base_peak_int: f64,
-    pub total_ion_current: f64,
-    pub ms_level: u8,
-    pub polarity: u8,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CvList {
     pub count: Option<usize>,
@@ -452,13 +441,30 @@ pub enum NumericType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum BinaryData {
+pub enum NumericArray {
     F64(Vec<f64>),
     F32(Vec<f32>),
     F16(Vec<u16>),
     I64(Vec<i64>),
     I32(Vec<i32>),
     I16(Vec<i16>),
+}
+
+impl NumericArray {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F64(v) => v.len(),
+            Self::F32(v) => v.len(),
+            Self::F16(v) => v.len(),
+            Self::I64(v) => v.len(),
+            Self::I32(v) => v.len(),
+            Self::I16(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -472,7 +478,12 @@ pub struct BinaryDataArray {
     pub user_params: Vec<UserParam>,
 
     pub numeric_type: Option<NumericType>,
-    pub binary: Option<BinaryData>,
+    pub binary: Option<NumericArray>,
+
+    #[serde(skip)]
+    pub pending_base64: Option<Vec<u8>>,
+    #[serde(skip)]
+    pub pending_zlib: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

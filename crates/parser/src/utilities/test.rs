@@ -2,7 +2,7 @@ use core::str::FromStr;
 use std::{fs, path::PathBuf, sync::OnceLock};
 
 use crate::{
-    ion::{DecoderConfig, decoder::decode::Decoder},
+    ion::{ReadOptions, decoder::decode::IonReader},
     mzml::{
         parse_mzml::parse_mzml,
         structs::{
@@ -29,12 +29,12 @@ pub(crate) fn mzml(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML 
 }
 
 #[allow(dead_code)]
-pub(crate) fn parse_b(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML {
+pub(crate) fn parse_ion_as_mzml(cache: &'static OnceLock<MzML>, path: &str) -> &'static MzML {
     cache.get_or_init(|| {
         let bytes: &'static [u8] = Box::leak(load_mzml_bytes(path).into_boxed_slice());
 
-        let mut decoder = Decoder::open(bytes, DecoderConfig::default())
-            .unwrap_or_else(|e| panic!("Decoder::open failed: {e}"));
+        let mut decoder = IonReader::open(bytes, ReadOptions::default())
+            .unwrap_or_else(|e| panic!("IonReader::open failed: {e}"));
 
         decoder
             .to_mzml()
@@ -49,54 +49,57 @@ pub(crate) fn load_mzml_bytes(path: &str) -> Vec<u8> {
 
 #[allow(dead_code)]
 pub(crate) fn spectrum_by_id<'a>(mzml: &'a MzML, id: &str) -> &'a Spectrum {
-    let sl = mzml
+    let spectrum_list = mzml
         .run
         .spectrum_list
         .as_ref()
         .expect("spectrumList parsed");
-    sl.spectra
+    spectrum_list
+        .spectra
         .iter()
-        .find(|s| s.id == id)
+        .find(|spectrum| spectrum.id == id)
         .unwrap_or_else(|| panic!("spectrum {id} not found"))
 }
 
 #[allow(dead_code)]
-pub(crate) fn spectrum_by_index(mzml: &MzML, idx: usize) -> &Spectrum {
-    let sl = mzml
+pub(crate) fn spectrum_by_index(mzml: &MzML, index: usize) -> &Spectrum {
+    let spectrum_list = mzml
         .run
         .spectrum_list
         .as_ref()
         .expect("spectrumList parsed");
-    sl.spectra
-        .get(idx)
-        .unwrap_or_else(|| panic!("spectrum index {idx} not found"))
+    spectrum_list
+        .spectra
+        .get(index)
+        .unwrap_or_else(|| panic!("spectrum index {index} not found"))
 }
 
 #[allow(dead_code)]
-pub(crate) fn spectrum_description(s: &Spectrum) -> &SpectrumDescription {
-    s.spectrum_description
+pub(crate) fn spectrum_description(spectrum: &Spectrum) -> &SpectrumDescription {
+    spectrum
+        .spectrum_description
         .as_ref()
         .expect("spectrumDescription parsed")
 }
 
 #[allow(dead_code)]
-pub(crate) fn spectrum_scan_list(s: &Spectrum) -> &ScanList {
-    if let Some(sd) = s.spectrum_description.as_ref()
-        && let Some(sl) = sd.scan_list.as_ref()
+pub(crate) fn spectrum_scan_list(spectrum: &Spectrum) -> &ScanList {
+    if let Some(spectrum_description) = spectrum.spectrum_description.as_ref()
+        && let Some(spectrum_list) = spectrum_description.scan_list.as_ref()
     {
-        return sl;
+        return spectrum_list;
     }
-    s.scan_list.as_ref().expect("scanList parsed")
+    spectrum.scan_list.as_ref().expect("scanList parsed")
 }
 
 #[allow(dead_code)]
-pub(crate) fn spectrum_precursor_list(s: &Spectrum) -> Option<&PrecursorList> {
-    if let Some(sd) = s.spectrum_description.as_ref()
-        && sd.precursor_list.is_some()
+pub(crate) fn spectrum_precursor_list(spectrum: &Spectrum) -> Option<&PrecursorList> {
+    if let Some(spectrum_description) = spectrum.spectrum_description.as_ref()
+        && spectrum_description.precursor_list.is_some()
     {
-        return sd.precursor_list.as_ref();
+        return spectrum_description.precursor_list.as_ref();
     }
-    s.precursor_list.as_ref()
+    spectrum.precursor_list.as_ref()
 }
 
 #[allow(dead_code)]
@@ -107,8 +110,12 @@ pub(crate) fn chromatogram_list(run: &Run) -> &ChromatogramList {
 }
 
 #[allow(dead_code)]
-pub(crate) fn chromatogram<'a>(cl: &'a ChromatogramList, id: &str) -> &'a Chromatogram {
-    cl.chromatograms
+pub(crate) fn chromatogram<'a>(
+    chromatogram_list: &'a ChromatogramList,
+    id: &str,
+) -> &'a Chromatogram {
+    chromatogram_list
+        .chromatograms
         .iter()
         .find(|c| c.id == id)
         .unwrap_or_else(|| panic!("chromatogram {id} not found"))

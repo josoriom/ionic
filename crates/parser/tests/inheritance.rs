@@ -9,7 +9,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 #[test]
 fn default_data_processing_refs_roundtrip_semantic() {
-    let encoded = BASE64_STANDARD.encode(BinaryData::F64(vec![1.0, 2.0, 3.0]).to_le_bytes());
+    let encoded = BASE64_STANDARD.encode(NumericArray::F64(vec![1.0, 2.0, 3.0]).to_le_bytes());
     let xml = format!(
         concat!(
             "<mzML>",

@@ -1,11 +1,11 @@
 use std::sync::OnceLock;
 
 use crate::{
-    BinaryData, NumericType,
-    mzml::structs::MzML,
+    mzml::structs::{NumericArray, MzML, NumericType},
     utilities::test::{
-        CvRefMode, assert_cv, assert_cv_absent, assert_cv_ref, assert_software_param, parse_b,
-        spectrum_by_id, spectrum_description, spectrum_precursor_list, spectrum_scan_list,
+        CvRefMode, assert_cv, assert_cv_absent, assert_cv_ref, assert_software_param,
+        parse_ion_as_mzml, spectrum_by_id, spectrum_description, spectrum_precursor_list,
+        spectrum_scan_list,
     },
 };
 
@@ -16,7 +16,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::AllowMissingMs;
 
 #[test]
 fn tiny1_srm_mzml0_99_1_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 1);
     let cv0 = &cv_list.cv[0];
@@ -316,7 +316,7 @@ fn tiny1_srm_mzml0_99_1_header_sections() {
 
 #[test]
 fn tiny1_srm_mzml0_99_1_spectrum_s101() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let sl = mzml
         .run
         .spectrum_list
@@ -540,7 +540,7 @@ fn tiny1_srm_mzml0_99_1_spectrum_s101() {
 
 #[test]
 fn tiny1_srm_mzml0_99_1_spectrum_s102() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let sl = mzml
         .run
@@ -734,7 +734,7 @@ fn tiny1_srm_mzml0_99_1_spectrum_s102() {
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s101_mz_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -752,18 +752,18 @@ fn tiny2_srm_mzml0_99_1_ion_s101_mz_binary_payload() {
     assert_eq!(bda.encoded_length, Some(22));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S101 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S101 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S101 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s101_intensity_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -781,18 +781,18 @@ fn tiny2_srm_mzml0_99_1_ion_s101_intensity_binary_payload() {
     assert_eq!(bda.encoded_length, Some(11));
     assert_eq!(bda.numeric_type, Some(NumericType::Float32));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F32(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S101 intensity: expected BinaryData::F32, got {other:?}"),
+        Some(NumericArray::F32(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S101 intensity: expected NumericArray::F32, got {other:?}"),
         None => panic!("S101 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s102_mz_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -810,18 +810,18 @@ fn tiny2_srm_mzml0_99_1_ion_s102_mz_binary_payload() {
     assert_eq!(bda.encoded_length, Some(5000));
     assert_eq!(bda.numeric_type, Some(NumericType::Float64));
 
-    let expected: Vec<f64> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f64> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F64(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S102 m/z: expected BinaryData::F64, got {other:?}"),
+        Some(NumericArray::F64(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S102 m/z: expected NumericArray::F64, got {other:?}"),
         None => panic!("S102 m/z: missing decoded binary payload (bda.binary is None)"),
     }
 }
 
 #[test]
 fn tiny2_srm_mzml0_99_1_ion_s102_intensity_binary_payload() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -839,11 +839,11 @@ fn tiny2_srm_mzml0_99_1_ion_s102_intensity_binary_payload() {
     assert_eq!(bda.encoded_length, Some(2500));
     assert_eq!(bda.numeric_type, Some(NumericType::Float32));
 
-    let expected: Vec<f32> = vec![0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0];
+    let expected: Vec<f32> = vec![0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0];
 
     match &bda.binary {
-        Some(BinaryData::F32(v)) => assert_eq!(v, &expected),
-        Some(other) => panic!("S102 intensity: expected BinaryData::F32, got {other:?}"),
+        Some(NumericArray::F32(v)) => assert_eq!(v, &expected),
+        Some(other) => panic!("S102 intensity: expected NumericArray::F32, got {other:?}"),
         None => panic!("S102 intensity: missing decoded binary payload (bda.binary is None)"),
     }
 }

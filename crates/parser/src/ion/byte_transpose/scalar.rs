@@ -1,3 +1,12 @@
+#![cfg_attr(
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "wasm32"
+    ),
+    allow(dead_code)
+)]
+
 pub(super) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
     match stride {
         2 => shuffle2(input, output),
@@ -34,7 +43,7 @@ pub(super) fn unshuffle_any(input: &[u8], output: &mut [u8], stride: usize) {
     }
 }
 
-fn shuffle2(input: &[u8], output: &mut [u8]) {
+pub(super) fn shuffle2(input: &[u8], output: &mut [u8]) {
     let half = input.len() / 2;
     for i in 0..half {
         output[i] = input[i * 2];
@@ -42,7 +51,7 @@ fn shuffle2(input: &[u8], output: &mut [u8]) {
     }
 }
 
-fn unshuffle2(input: &[u8], output: &mut [u8]) {
+pub(super) fn unshuffle2(input: &[u8], output: &mut [u8]) {
     let half = input.len() / 2;
     for i in 0..half {
         output[i * 2] = input[i];
@@ -50,7 +59,7 @@ fn unshuffle2(input: &[u8], output: &mut [u8]) {
     }
 }
 
-fn shuffle4(input: &[u8], output: &mut [u8]) {
+pub(super) fn shuffle4(input: &[u8], output: &mut [u8]) {
     let quarter = input.len() / 4;
     for i in 0..quarter {
         output[i] = input[i * 4];
@@ -60,7 +69,7 @@ fn shuffle4(input: &[u8], output: &mut [u8]) {
     }
 }
 
-fn unshuffle4(input: &[u8], output: &mut [u8]) {
+pub(super) fn unshuffle4(input: &[u8], output: &mut [u8]) {
     let quarter = input.len() / 4;
     for i in 0..quarter {
         output[i * 4] = input[i];
@@ -70,7 +79,7 @@ fn unshuffle4(input: &[u8], output: &mut [u8]) {
     }
 }
 
-fn shuffle8(input: &[u8], output: &mut [u8]) {
+pub(super) fn shuffle8(input: &[u8], output: &mut [u8]) {
     let eighth = input.len() / 8;
     for i in 0..eighth {
         for b in 0..8usize {
@@ -79,7 +88,7 @@ fn shuffle8(input: &[u8], output: &mut [u8]) {
     }
 }
 
-fn unshuffle8(input: &[u8], output: &mut [u8]) {
+pub(super) fn unshuffle8(input: &[u8], output: &mut [u8]) {
     let eighth = input.len() / 8;
     for i in 0..eighth {
         for b in 0..8usize {

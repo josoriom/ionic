@@ -1,22 +1,6 @@
-pub(super) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
-    match stride {
-        2 => shuffle2(input, output),
-        4 => shuffle4(input, output),
-        8 => shuffle8(input, output),
-        _ => super::scalar::shuffle_any(input, output, stride),
-    }
-}
+use std::arch::aarch64::*;
 
-pub(super) fn unshuffle(input: &[u8], output: &mut [u8], stride: usize) {
-    match stride {
-        2 => unshuffle2(input, output),
-        4 => unshuffle4(input, output),
-        8 => unshuffle8(input, output),
-        _ => super::scalar::unshuffle_any(input, output, stride),
-    }
-}
-
-fn shuffle2(input: &[u8], output: &mut [u8]) {
+pub(super) fn shuffle2(input: &[u8], output: &mut [u8]) {
     let half = input.len() / 2;
     let simd_len = half & !15;
     if simd_len > 0 {
@@ -30,7 +14,6 @@ fn shuffle2(input: &[u8], output: &mut [u8]) {
 
 #[target_feature(enable = "neon")]
 unsafe fn shuffle2_neon(input: &[u8], output: &mut [u8], half: usize, simd_len: usize) {
-    use std::arch::aarch64::*;
     let mut i = 0usize;
     while i < simd_len {
         let pair = unsafe { vld2q_u8(input.as_ptr().add(i * 2)) };
@@ -42,7 +25,7 @@ unsafe fn shuffle2_neon(input: &[u8], output: &mut [u8], half: usize, simd_len: 
     }
 }
 
-fn unshuffle2(input: &[u8], output: &mut [u8]) {
+pub(super) fn unshuffle2(input: &[u8], output: &mut [u8]) {
     let half = input.len() / 2;
     let simd_len = half & !15;
     if simd_len > 0 {
@@ -56,7 +39,6 @@ fn unshuffle2(input: &[u8], output: &mut [u8]) {
 
 #[target_feature(enable = "neon")]
 unsafe fn unshuffle2_neon(input: &[u8], output: &mut [u8], half: usize, simd_len: usize) {
-    use std::arch::aarch64::*;
     let mut i = 0usize;
     while i < simd_len {
         let pair = unsafe {
@@ -70,7 +52,7 @@ unsafe fn unshuffle2_neon(input: &[u8], output: &mut [u8], half: usize, simd_len
     }
 }
 
-fn shuffle4(input: &[u8], output: &mut [u8]) {
+pub(super) fn shuffle4(input: &[u8], output: &mut [u8]) {
     let quarter = input.len() / 4;
     let simd_len = quarter & !15;
     if simd_len > 0 {
@@ -86,7 +68,6 @@ fn shuffle4(input: &[u8], output: &mut [u8]) {
 
 #[target_feature(enable = "neon")]
 unsafe fn shuffle4_neon(input: &[u8], output: &mut [u8], quarter: usize, simd_len: usize) {
-    use std::arch::aarch64::*;
     let mut i = 0usize;
     while i < simd_len {
         let quad = unsafe { vld4q_u8(input.as_ptr().add(i * 4)) };
@@ -100,7 +81,7 @@ unsafe fn shuffle4_neon(input: &[u8], output: &mut [u8], quarter: usize, simd_le
     }
 }
 
-fn unshuffle4(input: &[u8], output: &mut [u8]) {
+pub(super) fn unshuffle4(input: &[u8], output: &mut [u8]) {
     let quarter = input.len() / 4;
     let simd_len = quarter & !15;
     if simd_len > 0 {
@@ -116,7 +97,6 @@ fn unshuffle4(input: &[u8], output: &mut [u8]) {
 
 #[target_feature(enable = "neon")]
 unsafe fn unshuffle4_neon(input: &[u8], output: &mut [u8], quarter: usize, simd_len: usize) {
-    use std::arch::aarch64::*;
     let mut i = 0usize;
     while i < simd_len {
         let quad = unsafe {
@@ -132,7 +112,7 @@ unsafe fn unshuffle4_neon(input: &[u8], output: &mut [u8], quarter: usize, simd_
     }
 }
 
-fn shuffle8(input: &[u8], output: &mut [u8]) {
+pub(super) fn shuffle8(input: &[u8], output: &mut [u8]) {
     let eighth = input.len() / 8;
     let simd_len = eighth & !15;
     if simd_len > 0 {
@@ -147,7 +127,6 @@ fn shuffle8(input: &[u8], output: &mut [u8]) {
 
 #[target_feature(enable = "neon")]
 unsafe fn shuffle8_neon(input: &[u8], output: &mut [u8], eighth: usize, simd_len: usize) {
-    use std::arch::aarch64::*;
     let mut i = 0usize;
     while i < simd_len {
         let a = unsafe { vld2q_u8(input.as_ptr().add(i * 8)) };
@@ -195,7 +174,7 @@ unsafe fn shuffle8_neon(input: &[u8], output: &mut [u8], eighth: usize, simd_len
         i += 16;
     }
 }
-fn unshuffle8(input: &[u8], output: &mut [u8]) {
+pub(super) fn unshuffle8(input: &[u8], output: &mut [u8]) {
     let eighth = input.len() / 8;
     let simd_len = eighth & !15;
     if simd_len > 0 {
@@ -210,7 +189,6 @@ fn unshuffle8(input: &[u8], output: &mut [u8]) {
 
 #[target_feature(enable = "neon")]
 unsafe fn unshuffle8_neon(input: &[u8], output: &mut [u8], eighth: usize, simd_len: usize) {
-    use std::arch::aarch64::*;
     let mut i = 0usize;
     while i < simd_len {
         let p0 = unsafe { vld1q_u8(input.as_ptr().add(i)) };

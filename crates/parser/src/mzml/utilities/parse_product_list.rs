@@ -14,8 +14,10 @@ pub(crate) fn parse_product_list<R: BufRead>(
     ws: &mut ParsingWorkspace<R>,
     start: &BytesStart<'_>,
 ) -> Result<ProductList, ParseError> {
+    let count = attr_usize(start, b"count");
     let mut list = ProductList {
-        count: attr_usize(start, b"count"),
+        count,
+        products: Vec::with_capacity(count.unwrap_or(0)),
         ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {

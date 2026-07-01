@@ -3,8 +3,7 @@ mod common;
 use common::assertions::*;
 use common::test_files;
 use common::{
-    BinaryDataExt, chromatogram_arrays, chromatograms, decode_ion, encode_to_ion, spectra,
-    spectrum_arrays,
+    chromatogram_arrays, chromatograms, decode_ion, encode_to_ion, spectra, spectrum_arrays,
 };
 
 #[test]

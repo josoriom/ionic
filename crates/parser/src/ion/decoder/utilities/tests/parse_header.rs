@@ -1,4 +1,4 @@
-use crate::{encoder::encode::FILTER_INDEX_RECORD_SIZE, ion::utilities::parse_header};
+use crate::ion::{format::FILE_SIGNATURE, utilities::parse_header};
 use std::{fs, path::PathBuf};
 
 const PATH: &str = "data/ion/test.ion";
@@ -13,46 +13,43 @@ fn check_header() {
     let bytes = read_bytes(PATH);
     let header = parse_header(&bytes).expect("parse_header failed");
 
-    assert_eq!(header.file_signature, *b"START\0\0\0");
+    assert_eq!(header.file_signature, FILE_SIGNATURE);
     assert_eq!(header.endianness_flag, 0);
     assert_eq!(header.spectrum_count, 2);
     assert_eq!(header.chrom_count, 2);
     assert_eq!(header.spec_meta_count, 71);
-    assert_eq!(header.spec_meta_num_count, 15);
-    assert_eq!(header.spec_meta_str_count, 22);
+    assert_eq!(header.spec_meta_numeric_count, 15);
+    assert_eq!(header.spec_meta_string_count, 22);
     assert_eq!(header.chrom_meta_count, 45);
-    assert_eq!(header.chrom_meta_num_count, 0);
-    assert_eq!(header.chrom_meta_str_count, 20);
-    assert_eq!(header.global_meta_count, 75);
-    assert_eq!(header.global_meta_num_count, 1);
-    assert_eq!(header.global_meta_str_count, 37);
-    assert_eq!(header.block_count_spect, 2);
-    assert_eq!(header.block_count_chrom, 2);
+    assert_eq!(header.chrom_meta_numeric_count, 0);
+    assert_eq!(header.chrom_meta_string_count, 20);
+    assert_eq!(header.spec_block_count, 4);
+    assert_eq!(header.chrom_block_count, 3);
     assert_eq!(header.compression_codec, 1);
     assert_eq!(header.compression_level, 22);
-    assert_eq!(header.array_filter, 1);
-    assert!(header.spect_array_count > 0);
-    assert!(header.chrom_array_count > 0);
-    assert_eq!(header.target_block_uncompressed_bytes, 32 * 1024 * 1024);
+    assert_eq!(header.default_array_filter, 1);
+    assert!(header.spec_array_type_count > 0);
+    assert!(header.chrom_array_type_count > 0);
+    assert_eq!(header.target_block_uncompressed_bytes, 16 * 1024 * 1024);
     assert!(header.spec_meta_uncompressed_bytes > 0);
     assert!(header.chrom_meta_uncompressed_bytes > 0);
     assert!(header.global_meta_uncompressed_bytes > 0);
-    assert_eq!(
-        header.len_filter_index,
-        header.spectrum_count * FILTER_INDEX_RECORD_SIZE as u64
-    );
+    assert_eq!(header.meta_group_size, 8192);
+    assert_eq!(header.spec_meta_group_count, 1);
+    assert_eq!(header.chrom_meta_group_count, 1);
 
     for &off in &[
+        header.off_spec_summary,
         header.off_spec_entries,
-        header.off_spec_arrayrefs,
+        header.off_spec_array_addresses,
+        header.off_chrom_summary,
         header.off_chrom_entries,
-        header.off_chrom_arrayrefs,
+        header.off_chrom_array_addresses,
         header.off_spec_meta,
         header.off_chrom_meta,
         header.off_global_meta,
-        header.off_container_spect,
-        header.off_container_chrom,
-        header.off_filter_index,
+        header.off_spec_container,
+        header.off_chrom_container,
     ] {
         assert!(off >= 1024, "offset {off} must be >= 1024");
         assert_eq!(off % 8, 0, "offset {off} must be 8-aligned");
@@ -60,67 +57,80 @@ fn check_header() {
 
     assert!(
         header
-            .off_spec_entries
-            .saturating_add(header.len_spec_entries)
-            <= header.off_spec_arrayrefs
+            .off_spec_summary
+            .saturating_add(header.len_spec_summary)
+            <= header.off_spec_entries
     );
     assert!(
         header
-            .off_spec_arrayrefs
-            .saturating_add(header.len_spec_arrayrefs)
+            .off_spec_entries
+            .saturating_add(header.len_spec_entries)
+            <= header.off_spec_array_addresses
+    );
+    assert!(
+        header
+            .off_spec_array_addresses
+            .saturating_add(header.len_spec_array_addresses)
+            <= header.off_chrom_summary
+    );
+    assert!(
+        header
+            .off_chrom_summary
+            .saturating_add(header.len_chrom_summary)
             <= header.off_chrom_entries
     );
     assert!(
         header
             .off_chrom_entries
             .saturating_add(header.len_chrom_entries)
-            <= header.off_chrom_arrayrefs
+            <= header.off_chrom_array_addresses
     );
     assert!(
         header
-            .off_chrom_arrayrefs
-            .saturating_add(header.len_chrom_arrayrefs)
+            .off_chrom_array_addresses
+            .saturating_add(header.len_chrom_array_addresses)
             <= header.off_spec_meta
     );
     assert!(header.off_spec_meta.saturating_add(header.len_spec_meta) <= header.off_chrom_meta);
     assert!(header.off_chrom_meta.saturating_add(header.len_chrom_meta) <= header.off_global_meta);
     assert!(
         header
-            .off_container_chrom
-            .saturating_add(header.len_container_chrom)
-            <= header.off_spec_entries
+            .off_chrom_container
+            .saturating_add(header.len_chrom_container)
+            <= header.off_spec_summary
     );
     assert!(
         header
-            .off_container_spect
-            .saturating_add(header.len_container_spect)
-            <= header.off_container_chrom
+            .off_spec_container
+            .saturating_add(header.len_spec_container)
+            <= header.off_chrom_container
     );
-    assert!(header.len_container_spect >= header.block_count_spect * 32);
-    assert!(header.len_container_chrom >= header.block_count_chrom * 32);
+    assert!(header.len_spec_container >= header.spec_block_count * 32);
+    assert!(header.len_chrom_container >= header.chrom_block_count * 32);
 
     assert_eq!(&bytes[5..8], &[0u8; 3]);
-    assert_eq!(&bytes[336..1008], &[0u8; 672]);
+    assert_eq!(&bytes[432..968], &[0u8; 536]);
 
     let len = bytes.len() as u64;
     for &off in &[
+        header.off_spec_summary,
         header.off_spec_entries,
-        header.off_spec_arrayrefs,
+        header.off_spec_array_addresses,
+        header.off_chrom_summary,
         header.off_chrom_entries,
-        header.off_chrom_arrayrefs,
+        header.off_chrom_array_addresses,
         header.off_spec_meta,
         header.off_chrom_meta,
         header.off_global_meta,
-        header.off_container_spect,
-        header.off_container_chrom,
-        header.off_filter_index,
+        header.off_spec_container,
+        header.off_chrom_container,
     ] {
         assert!(off < len, "offset {off} out of bounds (len={len})");
     }
 
     let end = header
-        .off_container_chrom
-        .saturating_add(header.len_container_chrom);
+        .off_chrom_container
+        .saturating_add(header.len_chrom_container);
     assert!(
         end <= len,
         "container_chrom end out of bounds (end={end}, len={len})"

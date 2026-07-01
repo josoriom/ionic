@@ -1,6 +1,7 @@
 mod common;
 
 use common::test_files::{ALL_TEST_FILES, INTERNAL_MZML_TEST_FILES, PWIZ_TEST_FILES};
+use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml};
 
 #[test]
 fn all_test_files_ion_roundtrip_uncompressed() {
@@ -118,9 +119,6 @@ fn all_test_files_ion_roundtrip_force_f32() {
 
 #[test]
 fn all_test_files_full_roundtrip() {
-    use ionic::mzml::bin_to_mzml::bin_to_mzml;
-    use ionic::mzml::parse_mzml::parse_mzml;
-
     let mut failures = Vec::new();
     for test_file_path in ALL_TEST_FILES {
         let original = common::parse_test_file(test_file_path);
@@ -142,7 +140,7 @@ fn all_test_files_full_roundtrip() {
             }
         };
 
-        let reparsed = match parse_mzml(xml_str.as_bytes()) {
+        let reparsed = match parse_mzml(&xml_str) {
             Ok(m) => m,
             Err(e) => {
                 failures.push(format!("{test_file_path}: reparse error: {e}"));

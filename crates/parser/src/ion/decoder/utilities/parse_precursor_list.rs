@@ -1,5 +1,4 @@
 use crate::{
-    Activation, IsolationWindow, Precursor, PrecursorList, SelectedIon, SelectedIonList,
     decoder::decode::Metadatum,
     ion::{
         attr_meta::{
@@ -12,7 +11,13 @@ use crate::{
             parse_cv_and_user_params,
         },
     },
-    mzml::{schema::TagId, structs::ReferenceableParamGroupRef},
+    mzml::{
+        schema::TagId,
+        structs::{
+            Activation, IsolationWindow, Precursor, PrecursorList, ReferenceableParamGroupRef,
+            SelectedIon, SelectedIonList,
+        },
+    },
 };
 
 #[inline]

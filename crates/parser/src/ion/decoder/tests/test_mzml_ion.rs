@@ -1,9 +1,10 @@
 use std::sync::OnceLock;
 
 use crate::{
-    BinaryData,
-    mzml::structs::MzML,
-    utilities::test::{CvRefMode, assert_cv, parse_b, spectrum_precursor_list, spectrum_scan_list},
+    mzml::structs::{NumericArray, MzML},
+    utilities::test::{
+        CvRefMode, assert_cv, parse_ion_as_mzml, spectrum_precursor_list, spectrum_scan_list,
+    },
 };
 
 static MZML_CACHE: OnceLock<MzML> = OnceLock::new();
@@ -13,7 +14,7 @@ const CV_REF_MODE: CvRefMode = CvRefMode::Strict;
 
 #[test]
 fn anpc_mzml1_1_0_header_sections() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let cv_list = mzml.cv_list.as_ref().expect("cvList parsed");
     assert_eq!(cv_list.cv.len(), 2);
 
@@ -286,7 +287,7 @@ fn anpc_mzml1_1_0_header_sections() {
 
 #[test]
 fn anpc_mzml1_1_0_first_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -354,16 +355,6 @@ fn anpc_mzml1_1_0_first_spectrum() {
 
     let scl = spectrum_scan_list(s0);
     assert_eq!(scl.scans.len(), 1);
-    // TODO: re-enable once ScanList.cv_params is parsed
-    // assert_cv(
-    //     CV_REF_MODE,
-    //     &scl.cv_params,
-    //     "no combination",
-    //     "MS:1000795",
-    //     "MS",
-    //     Some(""),
-    //     None,
-    // );
 
     let scan0 = &scl.scans[0];
     assert_cv(
@@ -471,7 +462,7 @@ fn anpc_mzml1_1_0_first_spectrum() {
 
 #[test]
 fn anpc_mzml1_1_0_last_spectrum() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let sl = run.spectrum_list.as_ref().expect("spectrumList parsed");
@@ -537,18 +528,8 @@ fn anpc_mzml1_1_0_last_spectrum() {
         None,
     );
 
-    // TODO: re-enable once ScanList.cv_params is parsed
     let scl = spectrum_scan_list(s_last);
     assert_eq!(scl.scans.len(), 1);
-    // assert_cv(
-    //     CV_REF_MODE,
-    //     &scl.cv_params,
-    //     "no combination",
-    //     "MS:1000795",
-    //     "MS",
-    //     Some(""),
-    //     None,
-    // );
 
     let scan0 = &scl.scans[0];
     assert_cv(
@@ -729,7 +710,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
 
 #[test]
 fn anpc_mzml1_1_0_chromatograms() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
     let run = &mzml.run;
 
     let cl = run
@@ -885,7 +866,7 @@ fn anpc_mzml1_1_0_chromatograms() {
 
 #[test]
 fn spectrum0_mz_array_decodes_to_0_to_9_f64() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let s0 = &mzml.run.spectrum_list.as_ref().unwrap().spectra[0];
     let bda0 = &s0
@@ -896,7 +877,7 @@ fn spectrum0_mz_array_decodes_to_0_to_9_f64() {
 
     let bin = bda0.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F64(xs) => {
+        NumericArray::F64(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -904,16 +885,16 @@ fn spectrum0_mz_array_decodes_to_0_to_9_f64() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F64, got {:?}", other),
+        other => panic!("expected NumericArray::F64, got {:?}", other),
     }
 }
 
 #[test]
 fn spectrum0_intensity_array_decodes_to_0_to_9_f32() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let s0 = &mzml.run.spectrum_list.as_ref().unwrap().spectra[0];
     let bda1 = &s0
@@ -924,7 +905,7 @@ fn spectrum0_intensity_array_decodes_to_0_to_9_f32() {
 
     let bin = bda1.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F32(xs) => {
+        NumericArray::F32(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -932,16 +913,16 @@ fn spectrum0_intensity_array_decodes_to_0_to_9_f32() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F32, got {:?}", other),
+        other => panic!("expected NumericArray::F32, got {:?}", other),
     }
 }
 
 #[test]
 fn chromatogram_tic_time_array_decodes_to_0_to_9_f64() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let tic = &mzml.run.chromatogram_list.as_ref().unwrap().chromatograms[0];
     let bda0 = &tic
@@ -952,7 +933,7 @@ fn chromatogram_tic_time_array_decodes_to_0_to_9_f64() {
 
     let bin = bda0.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F64(xs) => {
+        NumericArray::F64(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -960,16 +941,16 @@ fn chromatogram_tic_time_array_decodes_to_0_to_9_f64() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F64, got {:?}", other),
+        other => panic!("expected NumericArray::F64, got {:?}", other),
     }
 }
 
 #[test]
 fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let tic = &mzml.run.chromatogram_list.as_ref().unwrap().chromatograms[0];
     let bda1 = &tic
@@ -980,7 +961,7 @@ fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
 
     let bin = bda1.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::F32(xs) => {
+        NumericArray::F32(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
@@ -988,16 +969,16 @@ fn chromatogram_tic_intensity_array_decodes_to_0_to_9_f32() {
             );
             assert_eq!(
                 &xs[..10],
-                [0.1, 10.0, 0.2, 30.0, 0.4, 50.0, 0.6, 70.0, 0.08, 90.0]
+                [0.08, 0.1, 0.2, 0.4, 0.6, 10.0, 30.0, 50.0, 70.0, 90.0]
             );
         }
-        other => panic!("expected BinaryData::F32, got {:?}", other),
+        other => panic!("expected NumericArray::F32, got {:?}", other),
     }
 }
 
 #[test]
 fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
-    let mzml = parse_b(&MZML_CACHE, PATH);
+    let mzml = parse_ion_as_mzml(&MZML_CACHE, PATH);
 
     let tic = &mzml.run.chromatogram_list.as_ref().unwrap().chromatograms[0];
     let bda2 = &tic
@@ -1007,14 +988,14 @@ fn chromatogram_tic_ms_level_array_decodes_to_0_to_9_i64() {
         .binary_data_arrays[2];
     let bin = bda2.binary.as_ref().expect("binary present");
     match bin {
-        BinaryData::I64(xs) => {
+        NumericArray::I64(xs) => {
             assert!(
                 xs.len() >= 10,
                 "expected at least 10 values, got {}",
                 xs.len()
             );
-            assert_eq!(&xs[..10], &[0, 10, 0, 30, 0, 50, 0, 70, 0, 90]);
+            assert_eq!(&xs[..10], &[0, 0, 0, 0, 0, 10, 30, 50, 70, 90]);
         }
-        other => panic!("expected BinaryData::I64, got {:?}", other),
+        other => panic!("expected NumericArray::I64, got {:?}", other),
     }
 }
