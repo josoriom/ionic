@@ -499,3 +499,91 @@ fn group_local_node_ids_across_group_boundaries() {
         "second group BinaryDataArrayList should parent to spectrum id=2"
     );
 }
+
+#[test]
+fn product_own_cv_params_parent_to_product_list_not_to_the_product_itself() {
+    use crate::ion::encoder::encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES};
+    use crate::ion::encoder::ion_writer::write_mzml_to_ion;
+    use crate::ion::encoder::utilities::SectionStorage;
+    use crate::mzml::structs::{CvParam, MzML, Product, ProductList, Run, Spectrum, SpectrumList};
+
+    let product = Product {
+        cv_params: vec![CvParam {
+            cv_ref: Some("MS".to_string()),
+            accession: Some("MS:1000827".to_string()),
+            name: "selected reaction monitoring transition".to_string(),
+            value: Some("1.0".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let spectrum = Spectrum {
+        id: "spectrum=0".to_string(),
+        index: Some(0),
+        product_list: Some(ProductList {
+            count: Some(1),
+            products: vec![product],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let run = Run {
+        id: "run1".to_string(),
+        spectrum_list: Some(SpectrumList {
+            count: Some(1),
+            spectra: vec![spectrum],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let mzml = MzML {
+        run,
+        ..Default::default()
+    };
+
+    let mut output = Vec::new();
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: false,
+            section_storage: SectionStorage::Memory,
+            mz_window: 0.0,
+        },
+        &mut output,
+    )
+    .unwrap();
+
+    use crate::ion::decoder::decode::{IonReader, ReadOptions};
+    use crate::mzml::schema::TagId;
+
+    let mut decoder =
+        IonReader::open(&output, ReadOptions::default()).expect("failed to open decoder");
+    let rows = decoder
+        .spectrum_metadata_at(0)
+        .expect("failed to read spectrum metadata");
+
+    let product_row = rows
+        .iter()
+        .find(|row| row.tag_id == TagId::Product)
+        .expect("product touch row not found");
+
+    let product_own_param = rows
+        .iter()
+        .find(|row| row.tag_id == TagId::CvParam && row.id == product_row.id)
+        .expect("product cv_param row not found");
+
+    assert_ne!(
+        product_own_param.parent_id, product_row.id,
+        "product's own cv_param must not be parented to the product's own node id"
+    );
+    assert_eq!(
+        product_own_param.parent_id, product_row.parent_id,
+        "product's own cv_param must share the product's parent node id"
+    );
+}

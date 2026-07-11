@@ -233,16 +233,16 @@ struct CatArgs {
     #[arg(long = "check", action = ArgAction::SetTrue, default_value_t = false, help = "Validate the file and report integrity")]
     check: bool,
 
-    #[arg(long = "scan", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Spectrum N metadata as JSON (1-based)")]
+    #[arg(long = "scan", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata of the Nth spectrum (1-based)")]
     scan: Option<u32>,
 
-    #[arg(long = "scan-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Spectrum N metadata + arrays as JSON")]
+    #[arg(long = "scan-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata + arrays of the Nth spectrum (1-based)")]
     scan_full: Option<u32>,
 
-    #[arg(long = "chrom", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Chromatogram N metadata as JSON (1-based)")]
+    #[arg(long = "chrom", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata of the Nth chromatogram (1-based)")]
     chrom: Option<u32>,
 
-    #[arg(long = "chrom-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Chromatogram N metadata + arrays as JSON")]
+    #[arg(long = "chrom-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata + arrays of the Nth chromatogram (1-based)")]
     chrom_full: Option<u32>,
 }
 

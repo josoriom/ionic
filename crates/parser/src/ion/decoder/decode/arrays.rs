@@ -243,27 +243,18 @@ pub(crate) fn unfilter_array_bytes(
     let pk_id = PackingId::from_byte(array_filter)?;
     match pk_id {
         PackingId::Raw | PackingId::ByteShuffle => Ok(std::borrow::Cow::Borrowed(raw)),
-        PackingId::DeltaShuffle => {
-            if dtype == FILE_DTYPE_F64 {
-                let mut out = Vec::with_capacity(raw.len());
-                let mut prev: u64 = 0;
-                for chunk in raw.chunks_exact(8) {
-                    prev = prev.wrapping_add(u64::from_le_bytes(chunk.try_into().unwrap()));
-                    out.extend_from_slice(&prev.to_le_bytes());
-                }
+        PackingId::DeltaShuffle => match crate::ion::packing::Dtype::from_byte(dtype) {
+            Ok(dtype_enum @ (crate::ion::packing::Dtype::F64 | crate::ion::packing::Dtype::F32)) => {
+                let mut out = Vec::new();
+                crate::ion::packing::packing_by_id(PackingId::DeltaShuffle).decode(
+                    raw,
+                    dtype_enum,
+                    &mut out,
+                )?;
                 Ok(std::borrow::Cow::Owned(out))
-            } else if dtype == FILE_DTYPE_F32 {
-                let mut out = Vec::with_capacity(raw.len());
-                let mut prev: u32 = 0;
-                for chunk in raw.chunks_exact(4) {
-                    prev = prev.wrapping_add(u32::from_le_bytes(chunk.try_into().unwrap()));
-                    out.extend_from_slice(&prev.to_le_bytes());
-                }
-                Ok(std::borrow::Cow::Owned(out))
-            } else {
-                Ok(std::borrow::Cow::Borrowed(raw))
             }
-        }
+            _ => Ok(std::borrow::Cow::Borrowed(raw)),
+        },
     }
 }
 
@@ -497,5 +488,44 @@ impl IonReader {
         }
 
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unfilter_array_bytes_delta_shuffle_f64_matches_cumulative_sum() {
+        let deltas: [u64; 4] = [100u64, 5, 3, 10];
+        let raw: Vec<u8> = deltas.iter().flat_map(|w| w.to_le_bytes()).collect();
+
+        let unfiltered =
+            unfilter_array_bytes(&raw, FILE_DTYPE_F64, PackingId::DeltaShuffle as u8).unwrap();
+
+        let mut expected_prev: u64 = 0;
+        let mut expected = Vec::new();
+        for delta in deltas {
+            expected_prev = expected_prev.wrapping_add(delta);
+            expected.extend_from_slice(&expected_prev.to_le_bytes());
+        }
+
+        assert_eq!(unfiltered.as_ref(), expected.as_slice());
+    }
+
+    #[test]
+    fn unfilter_array_bytes_delta_shuffle_rejects_misaligned_f64_input() {
+        let raw = [0u8; 7];
+        let err = unfilter_array_bytes(&raw, FILE_DTYPE_F64, PackingId::DeltaShuffle as u8)
+            .expect_err("7 bytes is not a multiple of the f64 word size");
+        assert!(err.contains("not a multiple of the word size"));
+    }
+
+    #[test]
+    fn unfilter_array_bytes_delta_shuffle_passes_through_unsupported_dtype() {
+        let raw = [1u8, 2, 3, 4];
+        let unfiltered =
+            unfilter_array_bytes(&raw, FILE_DTYPE_I16, PackingId::DeltaShuffle as u8).unwrap();
+        assert_eq!(unfiltered.as_ref(), raw.as_slice());
     }
 }

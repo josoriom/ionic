@@ -134,8 +134,9 @@ impl<P: BlockProcessor> BlockReader<P> {
 
     pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<ByteRange> {
         let entry = self.entries.get(block_id as usize)?;
+        let offset = self.container_offset.checked_add(entry.payload_offset)?;
         Some(ByteRange {
-            offset: self.container_offset + entry.payload_offset,
+            offset,
             length: entry.payload_size,
         })
     }
@@ -156,14 +157,22 @@ impl<P: BlockProcessor> BlockReader<P> {
             .container_len
             .saturating_sub((self.entries.len() as u64) * (BLOCK_DIRECTORY_ENTRY_SIZE as u64));
 
-        if entry.payload_offset + entry.payload_size > payload_region_len {
+        let payload_end = entry.payload_offset.checked_add(entry.payload_size);
+        if payload_end.is_none_or(|end| end > payload_region_len) {
             return Err(
                 format!("{ctx}: block {block_index} payload exceeds container bounds").into(),
             );
         }
 
+        let read_offset = self
+            .container_offset
+            .checked_add(entry.payload_offset)
+            .ok_or_else(|| {
+                IonError::from(format!("{ctx}: block {block_index} payload offset overflows"))
+            })?;
+
         let payload = self.source.read(ByteRange {
-            offset: self.container_offset + entry.payload_offset,
+            offset: read_offset,
             length: entry.payload_size,
         })?;
 

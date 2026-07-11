@@ -24,7 +24,7 @@ use crate::{
             FILE_DTYPE_I64,
         },
         filter_summary::{ChromatogramSummary, SpectrumSummary},
-        format::{CODEC_NONE, CODEC_ZSTD},
+        format::{CODEC_NONE, CODEC_ZSTD, FILE_TRAILER},
         meta_groups::MetaTotals,
         packing::PackingId,
         utilities::{
@@ -38,7 +38,7 @@ use crate::{
             parse_chromatogram, parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
-            Header, parse_header,
+            Header, check_section_layout, parse_header,
             parse_instrument_list, parse_referenceable_param_group_list, parse_sample_list,
             parse_scan_settings_list, parse_software_list, parse_spectrum, parse_spectrum_list,
             window_directory::WindowDirectory,
@@ -76,8 +76,10 @@ fn max_address_index(entries_buf: &[u8]) -> u64 {
 }
 
 fn check_address_table(entries_buf: &[u8], table: &[u8], name: &str) -> IonResult<()> {
-    let expected = max_address_index(entries_buf) as usize * ARRAY_ADDRESS_BYTES;
-    if table.len() != expected {
+    let expected = max_address_index(entries_buf)
+        .checked_mul(ARRAY_ADDRESS_BYTES as u64)
+        .ok_or_else(|| IonError::from(format!("{name}: address count overflows the table size")))?;
+    if table.len() as u64 != expected {
         return Err(IonError::from(format!(
             "{name}: record size is not {ARRAY_ADDRESS_BYTES} bytes (old format); re-encode with `ionic convert --update`"
         )));
@@ -189,18 +191,38 @@ impl IonReader {
         let chrom_array_addresses =
             source.read(ByteRange { offset: header.off_chrom_array_addresses, length: header.len_chrom_array_addresses })?;
         let global_meta_buf = source.read(ByteRange { offset: header.off_global_meta, length: header.len_global_meta })?;
-
-        check_address_table(&spec_entries_buf, &spec_array_addresses, "spec_array_addresses")?;
-        check_address_table(&chrom_entries_buf, &chrom_array_addresses, "chrom_array_addresses")?;
+        let spec_meta_buf = source.read(ByteRange { offset: header.off_spec_meta, length: header.len_spec_meta })?;
+        let chrom_meta_buf = source.read(ByteRange { offset: header.off_chrom_meta, length: header.len_chrom_meta })?;
 
         if config.verify_checksums {
+            let layout_failures = check_section_layout(&header);
+            if !layout_failures.is_empty() {
+                return Err(IonError::from(format!(
+                    "header: file integrity validation failed ({} check(s)):\n{}",
+                    layout_failures.len(),
+                    layout_failures.join("\n")
+                )));
+            }
+            let trailer = source.read(ByteRange {
+                offset: header.total_file_size.saturating_sub(8),
+                length: 8,
+            })?;
+            if trailer[..] != FILE_TRAILER {
+                return Err(IonError::from("header: missing or invalid file trailer"));
+            }
             check_crc(&spec_summary_buf, header.spec_summary_crc32, "spec_summary")?;
             check_crc(&spec_entries_buf, header.spec_entries_crc32, "spec_entries")?;
             check_crc(&spec_array_addresses, header.spec_array_addresses_crc32, "spec_array_addresses")?;
             check_crc(&chrom_summary_buf, header.chrom_summary_crc32, "chrom_summary")?;
             check_crc(&chrom_entries_buf, header.chrom_entries_crc32, "chrom_entries")?;
             check_crc(&chrom_array_addresses, header.chrom_array_addresses_crc32, "chrom_array_addresses")?;
+            check_crc(&spec_meta_buf, header.spec_meta_crc32, "spec_meta")?;
+            check_crc(&chrom_meta_buf, header.chrom_meta_crc32, "chrom_meta")?;
+            check_crc(&global_meta_buf, header.global_meta_crc32, "global_meta")?;
         }
+
+        check_address_table(&spec_entries_buf, &spec_array_addresses, "spec_array_addresses")?;
+        check_address_table(&chrom_entries_buf, &chrom_array_addresses, "chrom_array_addresses")?;
 
         let spec_container = BlockReader::new(
             source.clone(),
@@ -237,7 +259,7 @@ impl IonReader {
         };
 
         let spec_meta_reader = MetaGroupReader::new(
-            Arc::from(source.read(ByteRange { offset: header.off_spec_meta, length: header.len_spec_meta })?),
+            Arc::from(spec_meta_buf),
             header.spec_meta_group_count,
             header.meta_group_size,
             header.spectrum_count,
@@ -254,7 +276,7 @@ impl IonReader {
         )?;
 
         let chrom_meta_reader = MetaGroupReader::new(
-            Arc::from(source.read(ByteRange { offset: header.off_chrom_meta, length: header.len_chrom_meta })?),
+            Arc::from(chrom_meta_buf),
             header.chrom_meta_group_count,
             header.meta_group_size,
             header.chrom_count,

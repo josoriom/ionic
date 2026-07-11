@@ -569,7 +569,7 @@ impl<'out> IonWriter<'out> {
 
     fn finish_inner(&mut self, mzml: &MzML) -> IonResult<()> {
         let (global_meta, global_counts) = self.collector.collect_global_meta(mzml);
-        let raw_global = serialize_global_meta_with_counts(&global_counts, &global_meta);
+        let raw_global = serialize_global_meta_with_counts(&global_counts, &global_meta)?;
         let global_uncompressed = raw_global.len() as u64;
         let global_bytes = compress_bytes_if_enabled(raw_global, self.config.compression_level);
 

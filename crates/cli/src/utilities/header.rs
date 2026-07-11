@@ -432,7 +432,7 @@ fn print_sections(view: &HeaderView<'_>) {
         ),
         (
             "A3 — spectrum array address table",
-            view.open_fixed(80, 88, 40, None),
+            view.open_fixed(80, 88, 32, None),
         ),
         (
             "B0 — chromatogram m/z-window directory",
@@ -448,7 +448,7 @@ fn print_sections(view: &HeaderView<'_>) {
         ),
         (
             "B3 — chromatogram array address table",
-            view.open_fixed(144, 152, 40, None),
+            view.open_fixed(144, 152, 32, None),
         ),
     ];
 

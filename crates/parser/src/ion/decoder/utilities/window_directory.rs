@@ -46,17 +46,35 @@ impl WindowDirectory {
         if bytes.len() < 8 {
             return Err("window directory: header too short".into());
         }
-        let window_count = read_u32(bytes, 0) as usize;
-        let entry_count = read_u32(bytes, 4) as usize;
-        if window_count == 0 {
+        let window_count_u64 = read_u32(bytes, 0) as u64;
+        let entry_count_u64 = read_u32(bytes, 4) as u64;
+        if window_count_u64 == 0 {
             return Err("window directory: window_count is zero".into());
         }
 
-        let starts_len = window_count + 1;
-        let expected_len = 8 + starts_len * 4 + entry_count * 4 * 3;
-        if bytes.len() != expected_len {
+        let starts_len_u64 = window_count_u64
+            .checked_add(1)
+            .ok_or("window directory: size overflow")?;
+        let expected_len_u64 = starts_len_u64
+            .checked_mul(4)
+            .and_then(|starts_bytes| starts_bytes.checked_add(8))
+            .and_then(|header_and_starts| {
+                entry_count_u64
+                    .checked_mul(4)
+                    .and_then(|column_bytes| column_bytes.checked_mul(3))
+                    .and_then(|entry_bytes| header_and_starts.checked_add(entry_bytes))
+            })
+            .ok_or("window directory: size overflow")?;
+        if bytes.len() as u64 != expected_len_u64 {
             return Err("window directory: length does not match window_count and entry_count".into());
         }
+
+        let window_count = usize::try_from(window_count_u64)
+            .map_err(|_| "window directory: window_count too large for this platform")?;
+        let entry_count = usize::try_from(entry_count_u64)
+            .map_err(|_| "window directory: entry_count too large for this platform")?;
+        let starts_len = usize::try_from(starts_len_u64)
+            .map_err(|_| "window directory: starts_len too large for this platform")?;
 
         let mut starts = Vec::with_capacity(starts_len);
         for slot in 0..starts_len {
@@ -184,5 +202,17 @@ mod tests {
     fn rejects_unsorted_spectrum_within_window() {
         let bytes = build(&[&[(1, 0, 4), (0, 8, 12)]]);
         assert!(WindowDirectory::from_bytes(&bytes, 16, 2).is_err());
+    }
+
+    #[test]
+    fn rejects_huge_declared_counts_with_a_short_buffer_instead_of_panicking() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+
+        let result = WindowDirectory::from_bytes(&bytes, 16, 2);
+
+        assert!(result.is_err());
     }
 }

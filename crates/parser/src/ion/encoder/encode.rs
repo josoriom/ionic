@@ -374,7 +374,10 @@ fn float_data_should_be_written_as_f64(
     if force_f32 {
         return false;
     }
-    declared_float_precision_is_64bit(bda).unwrap_or(matches!(data, ArrayData::F64(_)))
+    if matches!(data, ArrayData::F64(_)) {
+        return true;
+    }
+    declared_float_precision_is_64bit(bda).unwrap_or(false)
 }
 
 fn declared_float_precision_is_64bit(bda: &BinaryDataArray) -> Option<bool> {
@@ -899,6 +902,22 @@ mod tests {
     #[test]
     fn resolve_array_dtype_force_f32_overrides_f64_data() {
         let bda = BinaryDataArray::default();
+        assert_eq!(
+            resolve_array_dtype(&bda, ArrayData::F64(&[1.0f64]), true),
+            FILE_DTYPE_F32
+        );
+    }
+
+    #[test]
+    fn resolve_array_dtype_keeps_f64_data_lossless_even_when_declared_32bit() {
+        let bda = BinaryDataArray {
+            numeric_type: Some(NumericType::Float32),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_array_dtype(&bda, ArrayData::F64(&[1.0f64]), false),
+            FILE_DTYPE_F64
+        );
         assert_eq!(
             resolve_array_dtype(&bda, ArrayData::F64(&[1.0f64]), true),
             FILE_DTYPE_F32

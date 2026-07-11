@@ -302,7 +302,7 @@ fn flatten_product(
     let prod_id = context.alloc();
     writer.touch(TagId::Product, prod_id, parent_id);
     writer.push_schema_attrs(TagId::Product, prod_id, parent_id, product);
-    writer.push_cv_and_user_params(prod_id, prod_id, &product.cv_params, &product.user_params);
+    writer.push_cv_and_user_params(prod_id, parent_id, &product.cv_params, &product.user_params);
     if let Some(iw) = &product.isolation_window {
         let iw_id = context.alloc();
         writer.touch(TagId::IsolationWindow, iw_id, prod_id);

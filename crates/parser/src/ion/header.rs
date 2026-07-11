@@ -1,6 +1,6 @@
 use crate::ion::{
     IonResult,
-    format::{FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, allow_compression, allow_version},
+    format::{FILE_SIGNATURE, HEADER_SIZE, allow_compression, allow_version},
 };
 
 const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
@@ -122,6 +122,7 @@ const _: () = assert!(HEADER_CRC32 == 1020);
 
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
+    #[allow(dead_code)]
     pub(crate) file_signature: [u8; 8],
     #[allow(dead_code)]
     pub(crate) endianness_flag: u8,
@@ -473,16 +474,13 @@ impl Header {
             header_crc32,
         };
 
-        if bytes.len() > HEADER_SIZE {
-            let (passed, failures) = validate_file_integrity(bytes, &header);
-            if !passed {
-                return Err(format!(
-                    "header: file integrity validation failed ({} check(s)):\n{}",
-                    failures.len(),
-                    failures.join("\n")
-                )
-                .into());
-            }
+        let computed_header_crc = crc32fast::hash(&h[0..HEADER_CRC32]);
+        if computed_header_crc != header.header_crc32 {
+            return Err(format!(
+                "header: header_crc32 mismatch (stored={:#010x}, computed={:#010x})",
+                header.header_crc32, computed_header_crc
+            )
+            .into());
         }
 
         Ok(header)
@@ -592,36 +590,9 @@ pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes(buf))
 }
 
-pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<String>) {
+pub(crate) fn check_section_layout(h: &Header) -> Vec<String> {
     let mut failures = Vec::new();
-    let file_len = bytes.len() as u64;
-
-    if h.file_signature != FILE_SIGNATURE {
-        failures.push(format!(
-            "condition 1: invalid file_signature (stored={:?}, expected=\"START\\0\\0\\0\")",
-            String::from_utf8_lossy(&h.file_signature)
-        ));
-    }
-
-    let computed_header_crc = crc32fast::hash(&bytes[0..1020]);
-    if computed_header_crc != h.header_crc32 {
-        failures.push(format!(
-            "condition 2: header_crc32 mismatch (stored={:#010x}, computed={:#010x})",
-            h.header_crc32, computed_header_crc
-        ));
-    }
-
-    if bytes.len() < FILE_TRAILER.len() || bytes[bytes.len() - FILE_TRAILER.len()..] != FILE_TRAILER
-    {
-        failures.push("condition 3: missing or invalid file trailer".to_string());
-    }
-
-    if file_len != h.total_file_size {
-        failures.push(format!(
-            "condition 4: file size mismatch (actual={file_len}, expected={})",
-            h.total_file_size
-        ));
-    }
+    let size_limit = h.total_file_size;
 
     match h.spec_block_count.checked_mul(BLOCK_DIRECTORY_ENTRY_SIZE_U64) {
         None => failures.push(format!(
@@ -660,6 +631,8 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         ("container_chrom", h.off_chrom_container, h.len_chrom_container),
         ("spec_summary", h.off_spec_summary, h.len_spec_summary),
         ("chrom_summary", h.off_chrom_summary, h.len_chrom_summary),
+        ("spec_window_directory", h.off_spec_window_directory, h.len_spec_window_directory),
+        ("chrom_window_directory", h.off_chrom_window_directory, h.len_chrom_window_directory),
     ];
 
     for &(name, off, len) in sections {
@@ -706,39 +679,12 @@ pub(crate) fn validate_file_integrity(bytes: &[u8], h: &Header) -> (bool, Vec<St
         }
     }
 
-    for (cond, name, off, len, stored) in [
-        (10, "spec_meta", h.off_spec_meta, h.len_spec_meta, h.spec_meta_crc32),
-        (11, "chrom_meta", h.off_chrom_meta, h.len_chrom_meta, h.chrom_meta_crc32),
-        (12, "global_meta", h.off_global_meta, h.len_global_meta, h.global_meta_crc32),
-    ] {
-        match resolve_section(bytes, off, len) {
-            None => failures.push(format!("condition {cond}: {name} section out of bounds")),
-            Some(section) => {
-                let computed = crc32fast::hash(section);
-                if computed != stored {
-                    failures.push(format!(
-                        "condition {cond}: {name}_crc32 mismatch (stored={:#010x}, computed={:#010x})",
-                        stored, computed
-                    ));
-                }
-            }
-        }
-    }
+    enforce_count_bounds(&mut failures, h, size_limit);
 
-    enforce_count_bounds(&mut failures, h, file_len);
-
-    let passed = failures.is_empty();
-    (passed, failures)
+    failures
 }
 
-#[inline]
-fn resolve_section(bytes: &[u8], off: u64, len: u64) -> Option<&[u8]> {
-    let start = usize::try_from(off).ok()?;
-    let end = usize::try_from(off.checked_add(len)?).ok()?;
-    bytes.get(start..end)
-}
-
-fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, file_len: u64) {
+fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, size_limit: u64) {
     let checks: &[(&str, u64)] = &[
         ("spec_block_count", h.spec_block_count),
         ("chrom_block_count", h.chrom_block_count),
@@ -754,9 +700,9 @@ fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, file_len: u64) {
         ("chrom_array_type_count", h.chrom_array_type_count),
     ];
     for &(name, count) in checks {
-        if count > file_len {
+        if count > size_limit {
             failures.push(format!(
-                "condition 13: {name} ({count}) exceeds file size ({file_len})"
+                "condition 13: {name} ({count}) exceeds file size ({size_limit})"
             ));
         }
     }
@@ -923,7 +869,7 @@ mod tests {
 
     #[test]
     fn write_then_parse_round_trips_every_field() {
-        let original = Header {
+        let mut original = Header {
             file_signature: FILE_SIGNATURE,
             endianness_flag: 0,
             format_version: CURRENT_VERSION,
@@ -1001,6 +947,9 @@ mod tests {
 
         let mut buf = [0u8; HEADER_SIZE];
         original.write(&mut buf);
+        let crc = crc32fast::hash(&buf[0..HEADER_CRC32]);
+        buf[HEADER_CRC32..HEADER_SIZE].copy_from_slice(&crc.to_le_bytes());
+        original.header_crc32 = crc;
 
         let parsed = Header::parse(&buf).expect("round-trip parse failed");
 
@@ -1077,5 +1026,58 @@ mod tests {
         assert_eq!(parsed.chrom_meta_crc32, original.chrom_meta_crc32);
         assert_eq!(parsed.global_meta_crc32, original.global_meta_crc32);
         assert_eq!(parsed.header_crc32, original.header_crc32);
+    }
+
+    #[test]
+    fn check_section_layout_accepts_empty_window_directories() {
+        let header = Header {
+            total_file_size: 4096,
+            ..Default::default()
+        };
+
+        let failures = check_section_layout(&header);
+
+        assert!(
+            failures
+                .iter()
+                .all(|f| !f.contains("spec_window_directory") && !f.contains("chrom_window_directory")),
+            "empty window directories must not fail layout checks: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn check_section_layout_rejects_spec_window_directory_inside_header() {
+        let header = Header {
+            total_file_size: 4096,
+            off_spec_window_directory: 16,
+            len_spec_window_directory: 32,
+            ..Default::default()
+        };
+
+        let failures = check_section_layout(&header);
+
+        assert!(
+            failures.iter().any(|f| f.contains("spec_window_directory")),
+            "expected a spec_window_directory layout failure, got: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn check_section_layout_rejects_chrom_window_directory_overlap() {
+        let header = Header {
+            total_file_size: 4096,
+            off_global_meta: 1024,
+            len_global_meta: 64,
+            off_chrom_window_directory: 1040,
+            len_chrom_window_directory: 32,
+            ..Default::default()
+        };
+
+        let failures = check_section_layout(&header);
+
+        assert!(
+            failures.iter().any(|f| f.contains("chrom_window_directory")),
+            "expected a chrom_window_directory overlap failure, got: {failures:?}"
+        );
     }
 }

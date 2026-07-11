@@ -22,6 +22,7 @@ fn update_one(file: &Path, output_root: &Path, dry_run: bool) -> Result<(u64, u6
     let mut reader =
         IonReader::open(&new_bytes, ReadOptions::default()).map_err(|e| e.to_string())?;
     reader.to_mzml().map_err(|e| e.to_string())?;
+    reader.require_bounds().map_err(|e| e.to_string())?;
 
     let old_len = old_bytes.len() as u64;
     let new_len = new_bytes.len() as u64;

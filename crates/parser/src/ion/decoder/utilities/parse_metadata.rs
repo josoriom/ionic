@@ -192,10 +192,9 @@ fn parse_value(
                 return Ok(MetadatumValue::Text(String::new()));
             }
             let slice = &string_data[offset..offset + length];
-            let text = match std::str::from_utf8(slice) {
-                Ok(s) => s.to_string(),
-                Err(_) => String::from_utf8_lossy(slice).into_owned(),
-            };
+            let text = std::str::from_utf8(slice)
+                .map_err(|_| "string metadata is not valid UTF-8")?
+                .to_string();
             Ok(MetadatumValue::Text(text))
         }
         2 => Ok(MetadatumValue::Empty),
@@ -211,4 +210,52 @@ fn bound_count(count: u64, byte_budget: usize, ctx: &'static str) -> IonResult<u
         );
     }
     Ok(count as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_utf8_string_value() {
+        let numeric_values: [f64; 0] = [];
+        let string_offsets = [0u32];
+        let string_lengths = [3u32];
+        let string_data: [u8; 3] = [b'A', 0xFF, b'B'];
+
+        let result = parse_value(
+            1,
+            0,
+            &numeric_values,
+            &string_offsets,
+            &string_lengths,
+            &string_data,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_valid_multibyte_utf8_string_value() {
+        let numeric_values: [f64; 0] = [];
+        let text = "café";
+        let string_data = text.as_bytes();
+        let string_offsets = [0u32];
+        let string_lengths = [string_data.len() as u32];
+
+        let value = parse_value(
+            1,
+            0,
+            &numeric_values,
+            &string_offsets,
+            &string_lengths,
+            string_data,
+        )
+        .expect("valid UTF-8 must parse");
+
+        match value {
+            MetadatumValue::Text(t) => assert_eq!(t, text),
+            other => panic!("expected Text value, got {other:?}"),
+        }
+    }
 }

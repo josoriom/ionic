@@ -1,5 +1,5 @@
 pub mod byte_source;
-pub(crate) use crate::ion::header::{Header, parse_header};
+pub(crate) use crate::ion::header::{Header, check_section_layout, parse_header};
 pub(crate) mod common;
 pub(crate) mod meta_group_reader;
 pub(crate) mod parse_metadata;

@@ -12,12 +12,21 @@ fn encode_delta<W: DeltaWord>(bits: impl Iterator<Item = W>, out: &mut Vec<u8>) 
     }
 }
 
-#[allow(dead_code)]
 fn decode_delta<W: DeltaWord>(input: &[u8], mut emit: impl FnMut(W)) {
     let mut prev = W::default();
     for chunk in input.chunks_exact(W::BYTES) {
         prev = DeltaWord::wrapping_add(prev, W::from_le_chunk(chunk));
         emit(prev);
+    }
+}
+
+fn require_aligned_input<W: DeltaWord>(input: &[u8]) -> IonResult<()> {
+    if input.len() % W::BYTES == 0 {
+        Ok(())
+    } else {
+        Err(IonError::from(
+            "delta filter: input length is not a multiple of the word size",
+        ))
     }
 }
 
@@ -49,6 +58,7 @@ impl Packing for DeltaShuffle {
     fn decode(&self, input: &[u8], dtype: Dtype, out: &mut Vec<u8>) -> IonResult<()> {
         match dtype {
             Dtype::F64 => {
+                require_aligned_input::<u64>(input)?;
                 out.reserve(input.len());
                 decode_delta::<u64>(input, |w| {
                     out.extend_from_slice(&f64::from_bits(w).to_le_bytes())
@@ -56,6 +66,7 @@ impl Packing for DeltaShuffle {
                 Ok(())
             }
             Dtype::F32 => {
+                require_aligned_input::<u32>(input)?;
                 out.reserve(input.len());
                 decode_delta::<u32>(input, |w| {
                     out.extend_from_slice(&f32::from_bits(w).to_le_bytes())
@@ -165,6 +176,40 @@ mod tests {
             .encode(PackingInput::F64(&input), &mut enc)
             .unwrap();
         assert_eq!(enc.len(), input.len() * 8);
+    }
+
+    #[test]
+    fn decode_rejects_misaligned_f64_input() {
+        let seven_bytes = [0u8; 7];
+        let mut dec = Vec::new();
+        let err = DELTA_SHUFFLE
+            .decode(&seven_bytes, Dtype::F64, &mut dec)
+            .expect_err("7 bytes is not a multiple of 8");
+        assert!(err.contains("not a multiple of the word size"));
+
+        let nine_bytes = [0u8; 9];
+        let mut dec = Vec::new();
+        let err = DELTA_SHUFFLE
+            .decode(&nine_bytes, Dtype::F64, &mut dec)
+            .expect_err("9 bytes is not a multiple of 8");
+        assert!(err.contains("not a multiple of the word size"));
+    }
+
+    #[test]
+    fn decode_rejects_misaligned_f32_input() {
+        let three_bytes = [0u8; 3];
+        let mut dec = Vec::new();
+        let err = DELTA_SHUFFLE
+            .decode(&three_bytes, Dtype::F32, &mut dec)
+            .expect_err("3 bytes is not a multiple of 4");
+        assert!(err.contains("not a multiple of the word size"));
+
+        let five_bytes = [0u8; 5];
+        let mut dec = Vec::new();
+        let err = DELTA_SHUFFLE
+            .decode(&five_bytes, Dtype::F32, &mut dec)
+            .expect_err("5 bytes is not a multiple of 4");
+        assert!(err.contains("not a multiple of the word size"));
     }
 
     #[test]

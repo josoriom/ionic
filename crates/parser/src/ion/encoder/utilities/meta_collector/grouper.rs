@@ -177,24 +177,26 @@ pub(super) fn serialize_group(meta: &PackedMeta, item_start: usize, item_end: us
     out
 }
 
-pub(crate) fn serialize_global_meta_with_counts(counts: &super::GlobalCounts, m: &PackedMeta) -> Vec<u8> {
+pub(crate) fn serialize_global_meta_with_counts(counts: &super::GlobalCounts, m: &PackedMeta) -> IonResult<Vec<u8>> {
     let mut buf = Vec::with_capacity(32 + packed_meta_byte_size(m));
-    for n in [
-        counts.n_file_description as u16,
-        counts.n_ref_param_groups as u16,
-        counts.n_samples as u16,
-        counts.n_instrument_configs as u16,
-        counts.n_software as u16,
-        counts.n_data_processing as u16,
-        counts.n_acquisition_settings as u16,
-        counts.n_cvs as u16,
-        counts.n_run as u16,
+    for (name, count) in [
+        ("file_description", counts.n_file_description),
+        ("ref_param_groups", counts.n_ref_param_groups),
+        ("samples", counts.n_samples),
+        ("instrument_configs", counts.n_instrument_configs),
+        ("software", counts.n_software),
+        ("data_processing", counts.n_data_processing),
+        ("acquisition_settings", counts.n_acquisition_settings),
+        ("cvs", counts.n_cvs),
+        ("run", counts.n_run),
     ] {
-        buf.extend_from_slice(&n.to_le_bytes());
+        let stored = u16::try_from(count)
+            .map_err(|_| format!("global {name} count {count} exceeds format limit {}", u16::MAX))?;
+        buf.extend_from_slice(&stored.to_le_bytes());
     }
     buf.extend_from_slice(&[0u8; 14]);
     write_packed_meta(&mut buf, m);
-    buf
+    Ok(buf)
 }
 
 fn packed_meta_byte_size(m: &PackedMeta) -> usize {
@@ -229,4 +231,76 @@ fn write_packed_meta(buf: &mut Vec<u8>, m: &PackedMeta) {
     write_u32_slice_le(buf, &m.string_offsets);
     write_u32_slice_le(buf, &m.string_lengths);
     buf.extend_from_slice(&m.string_bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::GlobalCounts;
+
+    fn counts_of(values: [u32; 9]) -> GlobalCounts {
+        GlobalCounts {
+            n_file_description: values[0],
+            n_ref_param_groups: values[1],
+            n_samples: values[2],
+            n_instrument_configs: values[3],
+            n_software: values[4],
+            n_data_processing: values[5],
+            n_acquisition_settings: values[6],
+            n_cvs: values[7],
+            n_run: values[8],
+        }
+    }
+
+    fn empty_meta() -> PackedMeta {
+        PackedMetaBuilder::new().build()
+    }
+
+    #[test]
+    fn global_count_over_u16_max_is_rejected_7() {
+        let fields = [
+            (0, "file_description"),
+            (1, "ref_param_groups"),
+            (2, "samples"),
+            (3, "instrument_configs"),
+            (4, "software"),
+            (5, "data_processing"),
+            (6, "acquisition_settings"),
+            (7, "cvs"),
+            (8, "run"),
+        ];
+        for (position, name) in fields {
+            let mut values = [1u32; 9];
+            values[position] = u16::MAX as u32 + 1;
+            let counts = counts_of(values);
+            let err = serialize_global_meta_with_counts(&counts, &empty_meta())
+                .expect_err("must reject count over u16::MAX");
+            let message = err.to_string();
+            assert!(message.contains(name), "error `{message}` must name `{name}`");
+            assert!(message.contains("65536"), "error `{message}` must report the real value");
+        }
+    }
+
+    #[test]
+    fn global_count_at_u16_max_is_accepted_7() {
+        let values = [u16::MAX as u32; 9];
+        let counts = counts_of(values);
+        let buf = serialize_global_meta_with_counts(&counts, &empty_meta())
+            .expect("u16::MAX must be accepted");
+        assert!(buf[0..18].iter().all(|byte| *byte == 0xFF));
+        assert_eq!(&buf[18..32], &[0u8; 14]);
+    }
+
+    #[test]
+    fn global_counts_keep_on_disk_order_7() {
+        let values = [1u32, 2, 3, 4, 5, 6, 7, 8, 9];
+        let counts = counts_of(values);
+        let buf = serialize_global_meta_with_counts(&counts, &empty_meta())
+            .expect("in-range counts must serialize");
+        let mut expected = Vec::new();
+        for n in 1u16..=9u16 {
+            expected.extend_from_slice(&n.to_le_bytes());
+        }
+        assert_eq!(&buf[0..18], expected.as_slice());
+    }
 }
