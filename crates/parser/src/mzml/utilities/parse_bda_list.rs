@@ -1,7 +1,8 @@
+use std::io::BufRead;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use miniz_oxide::inflate::decompress_to_vec_zlib;
 use quick_xml::events::BytesStart;
-use std::io::BufRead;
 
 use crate::{
     accessions::{
@@ -10,7 +11,7 @@ use crate::{
     },
     mzml::{
         schema::TagId,
-        structs::{NumericArray, BinaryDataArray, BinaryDataArrayList, NumericType},
+        structs::{BinaryDataArray, BinaryDataArrayList, NumericArray, NumericType},
         utilities::{
             ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize, read_base64_binary,
             read_cv_param, read_ref_group_ref, read_user_param,

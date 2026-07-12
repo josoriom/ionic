@@ -1,5 +1,6 @@
-use quick_xml::events::BytesStart;
 use std::io::BufRead;
+
+use quick_xml::events::BytesStart;
 
 use crate::{
     accessions::ACC_MS_LEVEL,

@@ -1,7 +1,8 @@
 mod common;
 
-use common::test_files;
-use common::{decode_ion, encode_to_ion, top_level_software_ids, top_level_source_file_ids};
+use common::{
+    decode_ion, encode_to_ion, test_files, top_level_software_ids, top_level_source_file_ids,
+};
 use ionic::ion::format::{FILE_SIGNATURE, HEADER_SIZE};
 
 #[test]

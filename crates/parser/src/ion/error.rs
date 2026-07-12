@@ -63,3 +63,15 @@ impl From<std::io::Error> for IonError {
         Self::Msg(err.to_string())
     }
 }
+
+impl From<crate::mzml::ParseError> for IonError {
+    fn from(source: crate::mzml::ParseError) -> Self {
+        Self::Msg(source.to_string())
+    }
+}
+
+impl From<crate::mzml::BinToMzmlError> for IonError {
+    fn from(source: crate::mzml::BinToMzmlError) -> Self {
+        Self::Msg(source.to_string())
+    }
+}

@@ -371,8 +371,10 @@ impl Header {
         let spec_window_directory_crc32 = read_u32_at(h, HEADER_SPEC_WINDOW_DIRECTORY_CRC32);
         let chrom_window_directory_crc32 = read_u32_at(h, HEADER_CHROM_WINDOW_DIRECTORY_CRC32);
 
-        let plain_len_spec_window_directory = read_u64_at(h, HEADER_PLAIN_LEN_SPEC_WINDOW_DIRECTORY);
-        let plain_len_chrom_window_directory = read_u64_at(h, HEADER_PLAIN_LEN_CHROM_WINDOW_DIRECTORY);
+        let plain_len_spec_window_directory =
+            read_u64_at(h, HEADER_PLAIN_LEN_SPEC_WINDOW_DIRECTORY);
+        let plain_len_chrom_window_directory =
+            read_u64_at(h, HEADER_PLAIN_LEN_CHROM_WINDOW_DIRECTORY);
 
         let spec_summary_crc32 = read_u32_at(h, HEADER_SPEC_SUMMARY_CRC32);
         let spec_entries_crc32 = read_u32_at(h, HEADER_SPEC_ENTRIES_CRC32);
@@ -489,22 +491,46 @@ impl Header {
     pub(crate) fn write(&self, buf: &mut [u8]) {
         buf[0..FILE_SIGNATURE.len()].copy_from_slice(&FILE_SIGNATURE);
         buf[8] = 0u8;
-        write_u16_at(buf, HEADER_FORMAT_VERSION_OFFSET, crate::ion::format::CURRENT_VERSION);
+        write_u16_at(
+            buf,
+            HEADER_FORMAT_VERSION_OFFSET,
+            crate::ion::format::CURRENT_VERSION,
+        );
 
         write_u8_at(buf, HEADER_CODEC_ID, self.compression_codec);
         write_u8_at(buf, HEADER_COMPRESSION_LEVEL, self.compression_level);
         write_u8_at(buf, HEADER_ARRAY_FILTER_ID, self.default_array_filter);
 
-        write_u64_at(buf, HEADER_TARGET_BLOCK_SIZE, self.target_block_uncompressed_bytes);
+        write_u64_at(
+            buf,
+            HEADER_TARGET_BLOCK_SIZE,
+            self.target_block_uncompressed_bytes,
+        );
 
         write_u64_at(buf, HEADER_OFFSET_SPEC_ENTRIES, self.off_spec_entries);
         write_u64_at(buf, HEADER_LEN_SPEC_ENTRIES, self.len_spec_entries);
-        write_u64_at(buf, HEADER_OFFSET_SPEC_ARRAY_ADDRESSES, self.off_spec_array_addresses);
-        write_u64_at(buf, HEADER_LEN_SPEC_ARRAY_ADDRESSES, self.len_spec_array_addresses);
+        write_u64_at(
+            buf,
+            HEADER_OFFSET_SPEC_ARRAY_ADDRESSES,
+            self.off_spec_array_addresses,
+        );
+        write_u64_at(
+            buf,
+            HEADER_LEN_SPEC_ARRAY_ADDRESSES,
+            self.len_spec_array_addresses,
+        );
         write_u64_at(buf, HEADER_OFFSET_CHROM_ENTRIES, self.off_chrom_entries);
         write_u64_at(buf, HEADER_LEN_CHROM_ENTRIES, self.len_chrom_entries);
-        write_u64_at(buf, HEADER_OFFSET_CHROM_ARRAY_ADDRESSES, self.off_chrom_array_addresses);
-        write_u64_at(buf, HEADER_LEN_CHROM_ARRAY_ADDRESSES, self.len_chrom_array_addresses);
+        write_u64_at(
+            buf,
+            HEADER_OFFSET_CHROM_ARRAY_ADDRESSES,
+            self.off_chrom_array_addresses,
+        );
+        write_u64_at(
+            buf,
+            HEADER_LEN_CHROM_ARRAY_ADDRESSES,
+            self.len_chrom_array_addresses,
+        );
         write_u64_at(buf, HEADER_OFFSET_SPEC_META, self.off_spec_meta);
         write_u64_at(buf, HEADER_LEN_SPEC_META, self.len_spec_meta);
         write_u64_at(buf, HEADER_OFFSET_CHROM_META, self.off_chrom_meta);
@@ -521,20 +547,64 @@ impl Header {
         write_u64_at(buf, HEADER_SPECTRUM_COUNT, self.spectrum_count);
         write_u64_at(buf, HEADER_CHROM_COUNT, self.chrom_count);
         write_u64_at(buf, HEADER_SPEC_META_ROW_COUNT, self.spec_meta_count);
-        write_u64_at(buf, HEADER_SPEC_META_NUMERIC_COUNT, self.spec_meta_numeric_count);
-        write_u64_at(buf, HEADER_SPEC_META_STRING_COUNT, self.spec_meta_string_count);
+        write_u64_at(
+            buf,
+            HEADER_SPEC_META_NUMERIC_COUNT,
+            self.spec_meta_numeric_count,
+        );
+        write_u64_at(
+            buf,
+            HEADER_SPEC_META_STRING_COUNT,
+            self.spec_meta_string_count,
+        );
         write_u64_at(buf, HEADER_CHROM_META_ROW_COUNT, self.chrom_meta_count);
-        write_u64_at(buf, HEADER_CHROM_META_NUMERIC_COUNT, self.chrom_meta_numeric_count);
-        write_u64_at(buf, HEADER_CHROM_META_STRING_COUNT, self.chrom_meta_string_count);
+        write_u64_at(
+            buf,
+            HEADER_CHROM_META_NUMERIC_COUNT,
+            self.chrom_meta_numeric_count,
+        );
+        write_u64_at(
+            buf,
+            HEADER_CHROM_META_STRING_COUNT,
+            self.chrom_meta_string_count,
+        );
         write_u64_at(buf, HEADER_GLOBAL_META_ROW_COUNT, self.global_meta_count);
-        write_u64_at(buf, HEADER_GLOBAL_META_NUMERIC_COUNT, self.global_meta_numeric_count);
-        write_u64_at(buf, HEADER_GLOBAL_META_STRING_COUNT, self.global_meta_string_count);
-        write_u64_at(buf, HEADER_SPEC_ARRAY_TYPE_COUNT, self.spec_array_type_count);
-        write_u64_at(buf, HEADER_CHROM_ARRAY_TYPE_COUNT, self.chrom_array_type_count);
+        write_u64_at(
+            buf,
+            HEADER_GLOBAL_META_NUMERIC_COUNT,
+            self.global_meta_numeric_count,
+        );
+        write_u64_at(
+            buf,
+            HEADER_GLOBAL_META_STRING_COUNT,
+            self.global_meta_string_count,
+        );
+        write_u64_at(
+            buf,
+            HEADER_SPEC_ARRAY_TYPE_COUNT,
+            self.spec_array_type_count,
+        );
+        write_u64_at(
+            buf,
+            HEADER_CHROM_ARRAY_TYPE_COUNT,
+            self.chrom_array_type_count,
+        );
 
-        write_u64_at(buf, HEADER_SPEC_META_UNCOMPRESSED_SIZE, self.spec_meta_uncompressed_bytes);
-        write_u64_at(buf, HEADER_CHROM_META_UNCOMPRESSED_SIZE, self.chrom_meta_uncompressed_bytes);
-        write_u64_at(buf, HEADER_GLOBAL_META_UNCOMPRESSED_SIZE, self.global_meta_uncompressed_bytes);
+        write_u64_at(
+            buf,
+            HEADER_SPEC_META_UNCOMPRESSED_SIZE,
+            self.spec_meta_uncompressed_bytes,
+        );
+        write_u64_at(
+            buf,
+            HEADER_CHROM_META_UNCOMPRESSED_SIZE,
+            self.chrom_meta_uncompressed_bytes,
+        );
+        write_u64_at(
+            buf,
+            HEADER_GLOBAL_META_UNCOMPRESSED_SIZE,
+            self.global_meta_uncompressed_bytes,
+        );
 
         write_u64_at(buf, HEADER_OFFSET_SPEC_SUMMARY, self.off_spec_summary);
         write_u64_at(buf, HEADER_LEN_SPEC_SUMMARY, self.len_spec_summary);
@@ -544,29 +614,81 @@ impl Header {
         write_u64_at(buf, HEADER_TOTAL_FILE_SIZE, self.total_file_size);
 
         write_u64_at(buf, HEADER_META_GROUP_SIZE, self.meta_group_size as u64);
-        write_u64_at(buf, HEADER_SPEC_META_GROUP_COUNT, self.spec_meta_group_count);
-        write_u64_at(buf, HEADER_CHROM_META_GROUP_COUNT, self.chrom_meta_group_count);
+        write_u64_at(
+            buf,
+            HEADER_SPEC_META_GROUP_COUNT,
+            self.spec_meta_group_count,
+        );
+        write_u64_at(
+            buf,
+            HEADER_CHROM_META_GROUP_COUNT,
+            self.chrom_meta_group_count,
+        );
 
         write_u32_at(buf, HEADER_SPEC_SUMMARY_CRC32, self.spec_summary_crc32);
         write_u32_at(buf, HEADER_SPEC_ENTRIES_CRC32, self.spec_entries_crc32);
-        write_u32_at(buf, HEADER_SPEC_ARRAY_ADDRESSES_CRC32, self.spec_array_addresses_crc32);
+        write_u32_at(
+            buf,
+            HEADER_SPEC_ARRAY_ADDRESSES_CRC32,
+            self.spec_array_addresses_crc32,
+        );
         write_u32_at(buf, HEADER_CHROM_SUMMARY_CRC32, self.chrom_summary_crc32);
         write_u32_at(buf, HEADER_CHROM_ENTRIES_CRC32, self.chrom_entries_crc32);
-        write_u32_at(buf, HEADER_CHROM_ARRAY_ADDRESSES_CRC32, self.chrom_array_addresses_crc32);
+        write_u32_at(
+            buf,
+            HEADER_CHROM_ARRAY_ADDRESSES_CRC32,
+            self.chrom_array_addresses_crc32,
+        );
 
         write_u32_at(buf, HEADER_TARGET_MZ_WINDOW, self.target_mz_window);
 
         write_u32_at(buf, HEADER_SPEC_DIRECTORY_CRC32, self.spec_directory_crc32);
-        write_u32_at(buf, HEADER_CHROM_DIRECTORY_CRC32, self.chrom_directory_crc32);
+        write_u32_at(
+            buf,
+            HEADER_CHROM_DIRECTORY_CRC32,
+            self.chrom_directory_crc32,
+        );
 
-        write_u64_at(buf, HEADER_OFFSET_SPEC_WINDOW_DIRECTORY, self.off_spec_window_directory);
-        write_u64_at(buf, HEADER_LEN_SPEC_WINDOW_DIRECTORY, self.len_spec_window_directory);
-        write_u64_at(buf, HEADER_OFFSET_CHROM_WINDOW_DIRECTORY, self.off_chrom_window_directory);
-        write_u64_at(buf, HEADER_LEN_CHROM_WINDOW_DIRECTORY, self.len_chrom_window_directory);
-        write_u64_at(buf, HEADER_PLAIN_LEN_SPEC_WINDOW_DIRECTORY, self.plain_len_spec_window_directory);
-        write_u64_at(buf, HEADER_PLAIN_LEN_CHROM_WINDOW_DIRECTORY, self.plain_len_chrom_window_directory);
-        write_u32_at(buf, HEADER_SPEC_WINDOW_DIRECTORY_CRC32, self.spec_window_directory_crc32);
-        write_u32_at(buf, HEADER_CHROM_WINDOW_DIRECTORY_CRC32, self.chrom_window_directory_crc32);
+        write_u64_at(
+            buf,
+            HEADER_OFFSET_SPEC_WINDOW_DIRECTORY,
+            self.off_spec_window_directory,
+        );
+        write_u64_at(
+            buf,
+            HEADER_LEN_SPEC_WINDOW_DIRECTORY,
+            self.len_spec_window_directory,
+        );
+        write_u64_at(
+            buf,
+            HEADER_OFFSET_CHROM_WINDOW_DIRECTORY,
+            self.off_chrom_window_directory,
+        );
+        write_u64_at(
+            buf,
+            HEADER_LEN_CHROM_WINDOW_DIRECTORY,
+            self.len_chrom_window_directory,
+        );
+        write_u64_at(
+            buf,
+            HEADER_PLAIN_LEN_SPEC_WINDOW_DIRECTORY,
+            self.plain_len_spec_window_directory,
+        );
+        write_u64_at(
+            buf,
+            HEADER_PLAIN_LEN_CHROM_WINDOW_DIRECTORY,
+            self.plain_len_chrom_window_directory,
+        );
+        write_u32_at(
+            buf,
+            HEADER_SPEC_WINDOW_DIRECTORY_CRC32,
+            self.spec_window_directory_crc32,
+        );
+        write_u32_at(
+            buf,
+            HEADER_CHROM_WINDOW_DIRECTORY_CRC32,
+            self.chrom_window_directory_crc32,
+        );
 
         write_u32_at(buf, HEADER_SPEC_META_CRC32, self.spec_meta_crc32);
         write_u32_at(buf, HEADER_CHROM_META_CRC32, self.chrom_meta_crc32);
@@ -621,18 +743,42 @@ pub(crate) fn check_section_layout(h: &Header) -> Vec<String> {
     let trailer_start = h.total_file_size.saturating_sub(8);
     let sections: &[(&str, u64, u64)] = &[
         ("spec_entries", h.off_spec_entries, h.len_spec_entries),
-        ("spec_array_addresses", h.off_spec_array_addresses, h.len_spec_array_addresses),
+        (
+            "spec_array_addresses",
+            h.off_spec_array_addresses,
+            h.len_spec_array_addresses,
+        ),
         ("chrom_entries", h.off_chrom_entries, h.len_chrom_entries),
-        ("chrom_array_addresses", h.off_chrom_array_addresses, h.len_chrom_array_addresses),
+        (
+            "chrom_array_addresses",
+            h.off_chrom_array_addresses,
+            h.len_chrom_array_addresses,
+        ),
         ("spec_meta", h.off_spec_meta, h.len_spec_meta),
         ("chrom_meta", h.off_chrom_meta, h.len_chrom_meta),
         ("global_meta", h.off_global_meta, h.len_global_meta),
-        ("container_spect", h.off_spec_container, h.len_spec_container),
-        ("container_chrom", h.off_chrom_container, h.len_chrom_container),
+        (
+            "container_spect",
+            h.off_spec_container,
+            h.len_spec_container,
+        ),
+        (
+            "container_chrom",
+            h.off_chrom_container,
+            h.len_chrom_container,
+        ),
         ("spec_summary", h.off_spec_summary, h.len_spec_summary),
         ("chrom_summary", h.off_chrom_summary, h.len_chrom_summary),
-        ("spec_window_directory", h.off_spec_window_directory, h.len_spec_window_directory),
-        ("chrom_window_directory", h.off_chrom_window_directory, h.len_chrom_window_directory),
+        (
+            "spec_window_directory",
+            h.off_spec_window_directory,
+            h.len_spec_window_directory,
+        ),
+        (
+            "chrom_window_directory",
+            h.off_chrom_window_directory,
+            h.len_chrom_window_directory,
+        ),
     ];
 
     for &(name, off, len) in sections {
@@ -959,19 +1105,34 @@ mod tests {
         assert_eq!(parsed.compression_codec, original.compression_codec);
         assert_eq!(parsed.compression_level, original.compression_level);
         assert_eq!(parsed.default_array_filter, original.default_array_filter);
-        assert_eq!(parsed.target_block_uncompressed_bytes, original.target_block_uncompressed_bytes);
+        assert_eq!(
+            parsed.target_block_uncompressed_bytes,
+            original.target_block_uncompressed_bytes
+        );
         assert_eq!(parsed.off_spec_summary, original.off_spec_summary);
         assert_eq!(parsed.len_spec_summary, original.len_spec_summary);
         assert_eq!(parsed.off_chrom_summary, original.off_chrom_summary);
         assert_eq!(parsed.len_chrom_summary, original.len_chrom_summary);
         assert_eq!(parsed.off_spec_entries, original.off_spec_entries);
         assert_eq!(parsed.len_spec_entries, original.len_spec_entries);
-        assert_eq!(parsed.off_spec_array_addresses, original.off_spec_array_addresses);
-        assert_eq!(parsed.len_spec_array_addresses, original.len_spec_array_addresses);
+        assert_eq!(
+            parsed.off_spec_array_addresses,
+            original.off_spec_array_addresses
+        );
+        assert_eq!(
+            parsed.len_spec_array_addresses,
+            original.len_spec_array_addresses
+        );
         assert_eq!(parsed.off_chrom_entries, original.off_chrom_entries);
         assert_eq!(parsed.len_chrom_entries, original.len_chrom_entries);
-        assert_eq!(parsed.off_chrom_array_addresses, original.off_chrom_array_addresses);
-        assert_eq!(parsed.len_chrom_array_addresses, original.len_chrom_array_addresses);
+        assert_eq!(
+            parsed.off_chrom_array_addresses,
+            original.off_chrom_array_addresses
+        );
+        assert_eq!(
+            parsed.len_chrom_array_addresses,
+            original.len_chrom_array_addresses
+        );
         assert_eq!(parsed.off_spec_meta, original.off_spec_meta);
         assert_eq!(parsed.len_spec_meta, original.len_spec_meta);
         assert_eq!(parsed.off_chrom_meta, original.off_chrom_meta);
@@ -987,41 +1148,104 @@ mod tests {
         assert_eq!(parsed.spectrum_count, original.spectrum_count);
         assert_eq!(parsed.chrom_count, original.chrom_count);
         assert_eq!(parsed.spec_meta_count, original.spec_meta_count);
-        assert_eq!(parsed.spec_meta_numeric_count, original.spec_meta_numeric_count);
-        assert_eq!(parsed.spec_meta_string_count, original.spec_meta_string_count);
+        assert_eq!(
+            parsed.spec_meta_numeric_count,
+            original.spec_meta_numeric_count
+        );
+        assert_eq!(
+            parsed.spec_meta_string_count,
+            original.spec_meta_string_count
+        );
         assert_eq!(parsed.chrom_meta_count, original.chrom_meta_count);
-        assert_eq!(parsed.chrom_meta_numeric_count, original.chrom_meta_numeric_count);
-        assert_eq!(parsed.chrom_meta_string_count, original.chrom_meta_string_count);
+        assert_eq!(
+            parsed.chrom_meta_numeric_count,
+            original.chrom_meta_numeric_count
+        );
+        assert_eq!(
+            parsed.chrom_meta_string_count,
+            original.chrom_meta_string_count
+        );
         assert_eq!(parsed.global_meta_count, original.global_meta_count);
-        assert_eq!(parsed.global_meta_numeric_count, original.global_meta_numeric_count);
-        assert_eq!(parsed.global_meta_string_count, original.global_meta_string_count);
+        assert_eq!(
+            parsed.global_meta_numeric_count,
+            original.global_meta_numeric_count
+        );
+        assert_eq!(
+            parsed.global_meta_string_count,
+            original.global_meta_string_count
+        );
         assert_eq!(parsed.spec_array_type_count, original.spec_array_type_count);
-        assert_eq!(parsed.chrom_array_type_count, original.chrom_array_type_count);
-        assert_eq!(parsed.spec_meta_uncompressed_bytes, original.spec_meta_uncompressed_bytes);
-        assert_eq!(parsed.chrom_meta_uncompressed_bytes, original.chrom_meta_uncompressed_bytes);
-        assert_eq!(parsed.global_meta_uncompressed_bytes, original.global_meta_uncompressed_bytes);
+        assert_eq!(
+            parsed.chrom_array_type_count,
+            original.chrom_array_type_count
+        );
+        assert_eq!(
+            parsed.spec_meta_uncompressed_bytes,
+            original.spec_meta_uncompressed_bytes
+        );
+        assert_eq!(
+            parsed.chrom_meta_uncompressed_bytes,
+            original.chrom_meta_uncompressed_bytes
+        );
+        assert_eq!(
+            parsed.global_meta_uncompressed_bytes,
+            original.global_meta_uncompressed_bytes
+        );
         assert_eq!(parsed.total_file_size, original.total_file_size);
         assert_eq!(parsed.meta_group_size, original.meta_group_size);
         assert_eq!(parsed.spec_meta_group_count, original.spec_meta_group_count);
-        assert_eq!(parsed.chrom_meta_group_count, original.chrom_meta_group_count);
+        assert_eq!(
+            parsed.chrom_meta_group_count,
+            original.chrom_meta_group_count
+        );
         assert_eq!(parsed.spec_summary_crc32, original.spec_summary_crc32);
         assert_eq!(parsed.spec_entries_crc32, original.spec_entries_crc32);
-        assert_eq!(parsed.spec_array_addresses_crc32, original.spec_array_addresses_crc32);
+        assert_eq!(
+            parsed.spec_array_addresses_crc32,
+            original.spec_array_addresses_crc32
+        );
         assert_eq!(parsed.chrom_summary_crc32, original.chrom_summary_crc32);
         assert_eq!(parsed.chrom_entries_crc32, original.chrom_entries_crc32);
-        assert_eq!(parsed.chrom_array_addresses_crc32, original.chrom_array_addresses_crc32);
+        assert_eq!(
+            parsed.chrom_array_addresses_crc32,
+            original.chrom_array_addresses_crc32
+        );
         assert_eq!(parsed.target_mz_window, original.target_mz_window);
         assert_eq!(parsed.reserved, original.reserved);
         assert_eq!(parsed.spec_directory_crc32, original.spec_directory_crc32);
         assert_eq!(parsed.chrom_directory_crc32, original.chrom_directory_crc32);
-        assert_eq!(parsed.off_spec_window_directory, original.off_spec_window_directory);
-        assert_eq!(parsed.len_spec_window_directory, original.len_spec_window_directory);
-        assert_eq!(parsed.off_chrom_window_directory, original.off_chrom_window_directory);
-        assert_eq!(parsed.len_chrom_window_directory, original.len_chrom_window_directory);
-        assert_eq!(parsed.plain_len_spec_window_directory, original.plain_len_spec_window_directory);
-        assert_eq!(parsed.plain_len_chrom_window_directory, original.plain_len_chrom_window_directory);
-        assert_eq!(parsed.spec_window_directory_crc32, original.spec_window_directory_crc32);
-        assert_eq!(parsed.chrom_window_directory_crc32, original.chrom_window_directory_crc32);
+        assert_eq!(
+            parsed.off_spec_window_directory,
+            original.off_spec_window_directory
+        );
+        assert_eq!(
+            parsed.len_spec_window_directory,
+            original.len_spec_window_directory
+        );
+        assert_eq!(
+            parsed.off_chrom_window_directory,
+            original.off_chrom_window_directory
+        );
+        assert_eq!(
+            parsed.len_chrom_window_directory,
+            original.len_chrom_window_directory
+        );
+        assert_eq!(
+            parsed.plain_len_spec_window_directory,
+            original.plain_len_spec_window_directory
+        );
+        assert_eq!(
+            parsed.plain_len_chrom_window_directory,
+            original.plain_len_chrom_window_directory
+        );
+        assert_eq!(
+            parsed.spec_window_directory_crc32,
+            original.spec_window_directory_crc32
+        );
+        assert_eq!(
+            parsed.chrom_window_directory_crc32,
+            original.chrom_window_directory_crc32
+        );
         assert_eq!(parsed.spec_meta_crc32, original.spec_meta_crc32);
         assert_eq!(parsed.chrom_meta_crc32, original.chrom_meta_crc32);
         assert_eq!(parsed.global_meta_crc32, original.global_meta_crc32);
@@ -1040,7 +1264,8 @@ mod tests {
         assert!(
             failures
                 .iter()
-                .all(|f| !f.contains("spec_window_directory") && !f.contains("chrom_window_directory")),
+                .all(|f| !f.contains("spec_window_directory")
+                    && !f.contains("chrom_window_directory")),
             "empty window directories must not fail layout checks: {failures:?}"
         );
     }
@@ -1076,7 +1301,9 @@ mod tests {
         let failures = check_section_layout(&header);
 
         assert!(
-            failures.iter().any(|f| f.contains("chrom_window_directory")),
+            failures
+                .iter()
+                .any(|f| f.contains("chrom_window_directory")),
             "expected a chrom_window_directory overlap failure, got: {failures:?}"
         );
     }

@@ -1,7 +1,14 @@
-use crate::decoder::decode::{Metadatum, MetadatumValue};
-use crate::ion::{attr_meta::*, utilities::assign_attributes};
-use crate::mzml::schema::TagId;
-use crate::mzml::structs::{Chromatogram, Spectrum};
+use crate::{
+    ion::{
+        attr_meta::*,
+        decoder::decode::{Metadatum, MetadatumValue},
+        utilities::assign_attributes,
+    },
+    mzml::{
+        schema::TagId,
+        structs::{Chromatogram, Spectrum},
+    },
+};
 
 fn parse_accession(tail: AccessionTail) -> String {
     format!("{CV_REF_ATTR}:{:07}", tail.raw())

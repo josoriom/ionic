@@ -1,14 +1,14 @@
+use std::collections::HashMap;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
-use std::collections::HashMap;
-
-use crate::encoder::utilities::output::WriteBytes;
-use crate::ion::byte_transpose::shuffle_with_tail;
-use crate::ion::packing::PackingId;
-use crate::ion::{IonError, IonResult};
+use crate::ion::{
+    IonError, IonResult, byte_transpose::shuffle_with_tail, encoder::utilities::output::WriteBytes,
+    packing::PackingId,
+};
 
 pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
 const DEFAULT_MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
@@ -407,7 +407,7 @@ pub(crate) struct BlockWriter<'output, C: BlockCompressor> {
     par_min_blocks: usize,
 }
 
-impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
+impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
     pub(crate) fn new(
         output: &'output mut dyn WriteBytes,
         max_block_uncompressed_size: usize,
@@ -601,18 +601,16 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
                 })
                 .collect(),
             CompressionMode::Compressed(compressor) => {
-                let mut forks = Vec::with_capacity(blocks.len());
-                for _ in 0..blocks.len() {
-                    forks.push(compressor.fork()?);
-                }
                 let block_packing_id = self.block_packing_id;
                 blocks
                     .into_par_iter()
-                    .zip(forks.into_par_iter())
-                    .map(|(block, compressor)| {
-                        let mut mode = CompressionMode::Compressed(compressor);
-                        Self::make_block(block_packing_id, block, &mut mode)
-                    })
+                    .map_init(
+                        || compressor.fork().map(CompressionMode::Compressed),
+                        |worker, block| {
+                            let mode = worker.as_mut().map_err(|error| error.clone())?;
+                            Self::make_block(block_packing_id, block, mode)
+                        },
+                    )
                     .collect()
             }
         }
@@ -1049,8 +1047,16 @@ mod tests {
             let at = directory_start + block_id as usize * BLOCK_DIRECTORY_ENTRY_SIZE + 28;
             u32::from_le_bytes(output.0[at..at + 4].try_into().unwrap())
         };
-        assert_eq!(reserved_tail(window_0_block), 0, "block directory tail must be reserved zero");
-        assert_eq!(reserved_tail(window_1_block), 0, "block directory tail must be reserved zero");
+        assert_eq!(
+            reserved_tail(window_0_block),
+            0,
+            "block directory tail must be reserved zero"
+        );
+        assert_eq!(
+            reserved_tail(window_1_block),
+            0,
+            "block directory tail must be reserved zero"
+        );
     }
 
     #[test]

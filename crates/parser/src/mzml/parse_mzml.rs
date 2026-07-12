@@ -1,5 +1,6 @@
-use quick_xml::{Reader, events::Event};
 use std::io::Cursor;
+
+use quick_xml::{Reader, events::Event};
 
 use crate::mzml::{
     schema::TagId,

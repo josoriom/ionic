@@ -1,8 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
-use common::{chromatograms, decode_ion, encode_to_ion, spectra};
+use common::{assertions::*, chromatograms, decode_ion, encode_to_ion, spectra, test_files};
 use ionic::ion::format::FILE_SIGNATURE;
 
 #[test]

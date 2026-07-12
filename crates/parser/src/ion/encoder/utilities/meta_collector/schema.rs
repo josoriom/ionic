@@ -1,11 +1,16 @@
+use super::{
+    ArrayPolicy, GlobalCounts, MetaParamBuffer, MetaParamWriter, PackedMeta, PackedMetaBuilder,
+    TraversalContext, append_meta_buffer, array_type_accession_from_binary_data_array,
+    parse_accession_tail_raw,
+};
 use crate::{
     accessions::{FLOAT_32BIT, FLOAT_64BIT, format_accession},
     ion::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_CV_FULL_NAME, ACC_ATTR_CV_URI, ACC_ATTR_CV_VERSION,
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
-            ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_LABEL,
-            ACC_ATTR_LOCATION, ACC_ATTR_NAME, ACC_ATTR_ORDER, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
+            ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_LABEL, ACC_ATTR_LOCATION,
+            ACC_ATTR_NAME, ACC_ATTR_ORDER, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_SCAN_SETTINGS_REF, ACC_ATTR_SOFTWARE_REF, ACC_ATTR_START_TIME_STAMP,
             ACC_ATTR_VERSION,
         },
@@ -19,12 +24,6 @@ use crate::{
             SpectrumDescription, UserParam,
         },
     },
-};
-
-use super::{
-    ArrayPolicy, GlobalCounts, MetaParamBuffer, MetaParamWriter, PackedMeta, PackedMetaBuilder,
-    TraversalContext, append_meta_buffer, array_type_accession_from_binary_data_array,
-    parse_accession_tail_raw,
 };
 
 pub(crate) trait MzmlListItem: EmitAttributes {

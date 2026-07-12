@@ -1,7 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::{parse_test_file, spectra};
+use common::{assertions::*, parse_test_file, spectra};
 
 #[test]
 #[ignore = "manual semantic audit on medium test_file; parser still loads whole file into RAM"]

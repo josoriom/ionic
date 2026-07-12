@@ -2,20 +2,23 @@
 use std::io::Read;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::mem::MaybeUninit;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::zstd_safe;
 
 use crate::{
-    decoder::{
-        decode::{Metadatum, MetadatumValue},
-        utilities::decompression_limit::DecompressionLimit,
-    },
     ion::{
         IonError, IonResult,
         attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
+        decoder::{
+            decode::{Metadatum, MetadatumValue},
+            utilities::decompression_limit::DecompressionLimit,
+        },
     },
-    mzml::schema::{SchemaNode, SchemaTree as Schema, TagId},
-    mzml::structs::{NumericArray, BinaryDataArray, BinaryDataArrayList},
+    mzml::{
+        schema::{SchemaNode, SchemaTree as Schema, TagId},
+        structs::{BinaryDataArray, BinaryDataArrayList, NumericArray},
+    },
 };
 
 #[allow(dead_code)]

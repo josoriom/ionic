@@ -1,5 +1,7 @@
-use crate::ion::{IonReader, IonResult, ReadOptions};
-use crate::mzml::structs::MzML;
+use crate::{
+    ion::{IonReader, IonResult, ReadOptions},
+    mzml::structs::MzML,
+};
 
 const HEADER_SIZE: usize = 1024;
 const OLD_ARRAY_ADDRESS_BYTES: usize = 40;
@@ -33,8 +35,19 @@ const B3_CRC32: usize = 996;
 const HEADER_CRC32: usize = 1020;
 
 const SECTION_OFFSET_FIELDS: [usize; 13] = [
-    OFF_A0, OFF_A1, OFF_A2, OFF_A3, OFF_B0, OFF_B1, OFF_B2, OFF_B3, OFF_C, OFF_D, OFF_E,
-    OFF_SPEC_CONTAINER, OFF_CHROM_CONTAINER,
+    OFF_A0,
+    OFF_A1,
+    OFF_A2,
+    OFF_A3,
+    OFF_B0,
+    OFF_B1,
+    OFF_B2,
+    OFF_B3,
+    OFF_C,
+    OFF_D,
+    OFF_E,
+    OFF_SPEC_CONTAINER,
+    OFF_CHROM_CONTAINER,
 ];
 
 const SWAP_U64_FIELDS: [(usize, usize); 4] = [(32, 48), (40, 56), (96, 112), (104, 120)];
@@ -63,7 +76,10 @@ pub fn upgrade_old_ion(old: &[u8]) -> IonResult<Vec<u8>> {
         NEW_ARRAY_ADDRESS_BYTES => return sanitize_pre_release_fields(old),
         OLD_ARRAY_ADDRESS_BYTES => {}
         other => {
-            return Err(format!("legacy file has an unexpected array address record size ({other})").into());
+            return Err(format!(
+                "legacy file has an unexpected array address record size ({other})"
+            )
+            .into());
         }
     }
     if len_b3 > 0 && record_size(len_b3, chrom_count)? != OLD_ARRAY_ADDRESS_BYTES {
@@ -99,8 +115,16 @@ pub fn upgrade_old_ion(old: &[u8]) -> IonResult<Vec<u8>> {
         write_u64(&mut out, field, shifted as u64);
     }
 
-    write_u64(&mut out, LEN_A3, (len_a3 / OLD_ARRAY_ADDRESS_BYTES * NEW_ARRAY_ADDRESS_BYTES) as u64);
-    write_u64(&mut out, LEN_B3, (len_b3 / OLD_ARRAY_ADDRESS_BYTES * NEW_ARRAY_ADDRESS_BYTES) as u64);
+    write_u64(
+        &mut out,
+        LEN_A3,
+        (len_a3 / OLD_ARRAY_ADDRESS_BYTES * NEW_ARRAY_ADDRESS_BYTES) as u64,
+    );
+    write_u64(
+        &mut out,
+        LEN_B3,
+        (len_b3 / OLD_ARRAY_ADDRESS_BYTES * NEW_ARRAY_ADDRESS_BYTES) as u64,
+    );
 
     for (left, right) in SWAP_U64_FIELDS {
         let (a, b) = (read_u64(&out, left), read_u64(&out, right));
@@ -141,7 +165,9 @@ fn record_size(len: usize, count: usize) -> IonResult<usize> {
         return Ok(NEW_ARRAY_ADDRESS_BYTES);
     }
     if !len.is_multiple_of(count) {
-        return Err("legacy file: array address length is not a multiple of the record count".into());
+        return Err(
+            "legacy file: array address length is not a multiple of the record count".into(),
+        );
     }
     Ok(len / count)
 }

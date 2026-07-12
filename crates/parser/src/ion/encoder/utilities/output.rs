@@ -340,13 +340,13 @@ impl SectionChunk {
             }
         }
     }
-
 }
 
 #[cfg(all(test, not(all(target_arch = "wasm32", not(target_os = "wasi")))))]
 mod tests {
-    use super::*;
     use std::process::{Child, Command};
+
+    use super::*;
 
     fn make_test_folder() -> PathBuf {
         let process_id = std::process::id();
@@ -437,11 +437,7 @@ impl WriteBytes for Vec<u8> {
         let start = at as usize;
         let end = start + bytes.len();
         self.get_mut(start..end)
-            .ok_or_else(|| {
-                IonError::from(format!(
-                    "patch: range {start}..{end} out of bounds"
-                ))
-            })?
+            .ok_or_else(|| IonError::from(format!("patch: range {start}..{end} out of bounds")))?
             .copy_from_slice(bytes);
         Ok(())
     }

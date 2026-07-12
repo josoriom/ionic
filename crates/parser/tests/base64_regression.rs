@@ -1,7 +1,9 @@
 mod common;
 
-use common::binary_ext::BinaryDataExt;
-use common::helpers::{parse_single_array_xml, single_array_xml};
+use common::{
+    binary_ext::BinaryDataExt,
+    helpers::{parse_single_array_xml, single_array_xml},
+};
 use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
 
 #[test]

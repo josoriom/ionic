@@ -73,7 +73,11 @@ impl ArrayAddressList {
 #[inline]
 pub(crate) fn address_read_params(array_address: &ArrayAddress) -> (u64, u64, usize) {
     if array_address.encoded_len > 0 {
-        (array_address.element_offset, array_address.encoded_len as u64, 1)
+        (
+            array_address.element_offset,
+            array_address.encoded_len as u64,
+            1,
+        )
     } else {
         (
             array_address.element_offset,
@@ -108,7 +112,8 @@ pub(crate) fn read_array_addresses_from_buffers(
     let entry_end = entry_offset.checked_add(INDEX_ENTRY_BYTES)?;
     let entry = entries_buf.get(entry_offset..entry_end)?;
     let ref_start = usize::try_from(u64::from_le_bytes(entry[0..8].try_into().unwrap())).ok()?;
-    let address_count = usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
+    let address_count =
+        usize::try_from(u64::from_le_bytes(entry[8..16].try_into().unwrap())).ok()?;
     let max_refs = array_addresses_buf.len() / ARRAY_ADDRESS_BYTES;
     if address_count > max_refs {
         return None;
@@ -207,7 +212,27 @@ pub(crate) fn read_group_decoded_bytes(
     group: &ArrayGroup,
     container: &mut BlockReader<DefaultBlockProcessor>,
 ) -> IonResult<Vec<u8>> {
+    if let [array_address] = group.refs.as_slice() {
+        let (element_offset, count, stride) = address_read_params(array_address);
+        let raw = container.get_array_bytes_from_block(
+            array_address.block_id,
+            element_offset,
+            count,
+            stride,
+            "read_group_decoded_bytes",
+        )?;
+        let unfiltered = unfilter_array_bytes(raw, group.dtype, group.array_filter)?;
+        return Ok(unfiltered.into_owned());
+    }
+
+    let mut total = 0usize;
+    for array_address in &group.refs {
+        let (_, count, stride) = address_read_params(array_address);
+        total = total.saturating_add((count as usize).saturating_mul(stride));
+    }
+
     let mut decoded = Vec::new();
+    decoded.reserve(total);
 
     for array_address in &group.refs {
         let (element_offset, count, stride) = address_read_params(array_address);
@@ -244,13 +269,12 @@ pub(crate) fn unfilter_array_bytes(
     match pk_id {
         PackingId::Raw | PackingId::ByteShuffle => Ok(std::borrow::Cow::Borrowed(raw)),
         PackingId::DeltaShuffle => match crate::ion::packing::Dtype::from_byte(dtype) {
-            Ok(dtype_enum @ (crate::ion::packing::Dtype::F64 | crate::ion::packing::Dtype::F32)) => {
+            Ok(
+                dtype_enum @ (crate::ion::packing::Dtype::F64 | crate::ion::packing::Dtype::F32),
+            ) => {
                 let mut out = Vec::new();
-                crate::ion::packing::packing_by_id(PackingId::DeltaShuffle).decode(
-                    raw,
-                    dtype_enum,
-                    &mut out,
-                )?;
+                crate::ion::packing::packing_by_id(PackingId::DeltaShuffle)
+                    .decode(raw, dtype_enum, &mut out)?;
                 Ok(std::borrow::Cow::Owned(out))
             }
             _ => Ok(std::borrow::Cow::Borrowed(raw)),
@@ -258,7 +282,12 @@ pub(crate) fn unfilter_array_bytes(
     }
 }
 
-pub(crate) fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filter: u8) -> IonResult<()> {
+pub(crate) fn decode_into(
+    buf: &mut Vec<f64>,
+    raw: &[u8],
+    dtype: u8,
+    array_filter: u8,
+) -> IonResult<()> {
     buf.clear();
     let bytes = unfilter_array_bytes(raw, dtype, array_filter)?;
     match dtype {
@@ -320,7 +349,10 @@ pub(crate) fn decode_into(buf: &mut Vec<f64>, raw: &[u8], dtype: u8, array_filte
     Ok(())
 }
 
-fn collect_entry_array_addresses(entry_bytes: &[u8], address_bytes: &[u8]) -> Option<Vec<ArrayAddress>> {
+fn collect_entry_array_addresses(
+    entry_bytes: &[u8],
+    address_bytes: &[u8],
+) -> Option<Vec<ArrayAddress>> {
     let ref_start =
         usize::try_from(u64::from_le_bytes(entry_bytes[0..8].try_into().unwrap())).ok()?;
     let address_count =
@@ -329,7 +361,10 @@ fn collect_entry_array_addresses(entry_bytes: &[u8], address_bytes: &[u8]) -> Op
     let span = address_count.checked_mul(ARRAY_ADDRESS_BYTES)?;
     let end = start.checked_add(span)?;
     let mut refs = Vec::with_capacity(address_count);
-    for bytes in address_bytes.get(start..end)?.chunks_exact(ARRAY_ADDRESS_BYTES) {
+    for bytes in address_bytes
+        .get(start..end)?
+        .chunks_exact(ARRAY_ADDRESS_BYTES)
+    {
         refs.push(parse_array_address(bytes));
     }
     Some(refs)
@@ -369,7 +404,14 @@ pub(crate) fn read_scan_arrays(
                 Ok(raw) => raw,
                 Err(_) => return false,
             };
-            if decode_into(&mut segment, raw, array_address.dtype, array_address.array_filter).is_err() {
+            if decode_into(
+                &mut segment,
+                raw,
+                array_address.dtype,
+                array_address.array_filter,
+            )
+            .is_err()
+            {
                 return false;
             }
             target.extend_from_slice(&segment);
@@ -379,7 +421,7 @@ pub(crate) fn read_scan_arrays(
 }
 
 impl IonReader {
-    pub fn spectrum_arrays(&self, index: usize) -> Option<Vec<ArrayAddress>> {
+    pub fn spectrum_array_addresses(&self, index: usize) -> Option<Vec<ArrayAddress>> {
         if index >= self.header.spectrum_count as usize {
             return None;
         }
@@ -391,11 +433,15 @@ impl IonReader {
         if index >= self.header.chrom_count as usize {
             return None;
         }
-        read_array_addresses_from_buffers(&self.chrom_entries_buf, &self.chrom_array_addresses, index)
-            .map(ArrayAddressList::into_vec)
+        read_array_addresses_from_buffers(
+            &self.chrom_entries_buf,
+            &self.chrom_array_addresses,
+            index,
+        )
+        .map(ArrayAddressList::into_vec)
     }
 
-    pub fn read_array(
+    pub fn read_spectrum_values(
         &mut self,
         array_address: &ArrayAddress,
         out: &mut Vec<f64>,
@@ -411,7 +457,7 @@ impl IonReader {
         decode_into(out, raw, array_address.dtype, array_address.array_filter)
     }
 
-    pub fn read_array_typed(&mut self, array_address: &ArrayAddress) -> IonResult<NumericArray> {
+    pub fn read_spectrum_array(&mut self, array_address: &ArrayAddress) -> IonResult<NumericArray> {
         let (element_offset, count, stride) = address_read_params(array_address);
         let raw = self.spec_container.get_array_bytes_from_block(
             array_address.block_id,
@@ -424,7 +470,7 @@ impl IonReader {
         super::to_mzml::decoded_bytes_to_binary_data(&values, array_address.dtype)
     }
 
-    pub fn read_chromatogram_array(
+    pub fn read_chromatogram_values(
         &mut self,
         array_address: &ArrayAddress,
         out: &mut Vec<f64>,
@@ -444,21 +490,25 @@ impl IonReader {
         decode_into(out, raw, array_address.dtype, array_address.array_filter)
     }
 
-    pub(crate) fn read_group_values(&mut self, group: &ArrayGroup, out: &mut Vec<f64>) -> IonResult<()> {
+    pub(crate) fn read_group_values(
+        &mut self,
+        group: &ArrayGroup,
+        out: &mut Vec<f64>,
+    ) -> IonResult<()> {
         let Some((first, rest)) = group.refs.split_first() else {
             out.clear();
             return Ok(());
         };
-        self.read_array(first, out)?;
+        self.read_spectrum_values(first, out)?;
         let mut window = Vec::new();
         for array_address in rest {
-            self.read_array(array_address, &mut window)?;
+            self.read_spectrum_values(array_address, &mut window)?;
             out.extend_from_slice(&window);
         }
         Ok(())
     }
 
-    pub fn read_spectrum_logical_array(
+    pub fn read_spectrum_logical_values(
         &mut self,
         spectrum_index: usize,
         array_type: u32,

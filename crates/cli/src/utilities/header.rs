@@ -190,7 +190,10 @@ impl<'a> HeaderView<'a> {
         if let Some(expected_count) = count {
             let expected = expected_count.checked_mul(record).ok_or("count overflow")?;
             if len != expected {
-                return Err(format!("{} records, expected {expected_count}", len / record));
+                return Err(format!(
+                    "{} records, expected {expected_count}",
+                    len / record
+                ));
             }
         }
         Ok(())
@@ -303,14 +306,30 @@ fn open_window_directory(
 
 fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
     let mut sections = vec![
-        Section::new("spec_window_directory", u64_at(header, 32), u64_at(header, 40)),
+        Section::new(
+            "spec_window_directory",
+            u64_at(header, 32),
+            u64_at(header, 40),
+        ),
         Section::new("spec_summary", u64_at(header, 48), u64_at(header, 56)),
         Section::new("spec_entries", u64_at(header, 64), u64_at(header, 72)),
-        Section::new("spec_array_addresses", u64_at(header, 80), u64_at(header, 88)),
-        Section::new("chrom_window_directory", u64_at(header, 96), u64_at(header, 104)),
+        Section::new(
+            "spec_array_addresses",
+            u64_at(header, 80),
+            u64_at(header, 88),
+        ),
+        Section::new(
+            "chrom_window_directory",
+            u64_at(header, 96),
+            u64_at(header, 104),
+        ),
         Section::new("chrom_summary", u64_at(header, 112), u64_at(header, 120)),
         Section::new("chrom_entries", u64_at(header, 128), u64_at(header, 136)),
-        Section::new("chrom_array_addresses", u64_at(header, 144), u64_at(header, 152)),
+        Section::new(
+            "chrom_array_addresses",
+            u64_at(header, 144),
+            u64_at(header, 152),
+        ),
         Section::new("spec_meta", u64_at(header, 160), u64_at(header, 168)),
         Section::new("chrom_meta", u64_at(header, 176), u64_at(header, 184)),
         Section::new("global_meta", u64_at(header, 192), u64_at(header, 200)),
@@ -382,11 +401,7 @@ fn print_summary(view: &HeaderView<'_>) {
         None,
     );
     let target_mz_window = view.read_header_u32(24);
-    field(
-        "mz_window",
-        &format!("{target_mz_window}"),
-        None,
-    );
+    field("mz_window", &format!("{target_mz_window}"), None);
     field(
         "spectrum_count",
         &view.read_header_u64(256).to_string(),
@@ -476,14 +491,26 @@ fn print_integrity(view: &HeaderView<'_>) {
         ("7   all sections within bounds", view.sections_in_bounds()),
         ("8   no section overlaps", view.no_overlaps()),
         ("9   all offsets 8-byte aligned", view.all_aligned()),
-        ("10  A0 spec_window_directory CRC-32", view.crc_ok(32, 40, 968)),
+        (
+            "10  A0 spec_window_directory CRC-32",
+            view.crc_ok(32, 40, 968),
+        ),
         ("11  A1 spec_summary CRC-32", view.crc_ok(48, 56, 972)),
         ("12  A2 spec_entries CRC-32", view.crc_ok(64, 72, 976)),
-        ("13  A3 spec_array_addresses CRC-32", view.crc_ok(80, 88, 980)),
-        ("14  B0 chrom_window_directory CRC-32", view.crc_ok(96, 104, 984)),
+        (
+            "13  A3 spec_array_addresses CRC-32",
+            view.crc_ok(80, 88, 980),
+        ),
+        (
+            "14  B0 chrom_window_directory CRC-32",
+            view.crc_ok(96, 104, 984),
+        ),
         ("15  B1 chrom_summary CRC-32", view.crc_ok(112, 120, 988)),
         ("16  B2 chrom_entries CRC-32", view.crc_ok(128, 136, 992)),
-        ("17  B3 chrom_array_addresses CRC-32", view.crc_ok(144, 152, 996)),
+        (
+            "17  B3 chrom_array_addresses CRC-32",
+            view.crc_ok(144, 152, 996),
+        ),
         (
             "18  spec block directory CRC-32",
             view.block_dir_crc_ok(208, 216, 240, 1000),
@@ -506,7 +533,10 @@ fn print_integrity(view: &HeaderView<'_>) {
     let passed = checks.len() - failed;
     println!();
     let color = if failed == 0 { GREEN } else { RED };
-    println!("{color}{BOLD}{passed}/{} checks passed{RESET}", checks.len());
+    println!(
+        "{color}{BOLD}{passed}/{} checks passed{RESET}",
+        checks.len()
+    );
 }
 
 fn field(name: &str, value: &str, status: Option<bool>) {

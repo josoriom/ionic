@@ -8,9 +8,8 @@ use std::{
     },
 };
 
-use rayon::prelude::*;
-
 use ionic::{IonReader, ReadOptions, upgrade_old_ion};
+use rayon::prelude::*;
 
 use crate::{basename, collect_files_with_exts};
 

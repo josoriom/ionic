@@ -1,10 +1,12 @@
 pub(crate) mod block_writer;
-pub(crate) use block_writer::{CompressionMode, BlockWriter, DefaultCompressor};
+pub(crate) use block_writer::{BlockWriter, CompressionMode, DefaultCompressor};
 pub(crate) mod output;
-pub use output::{WriteBytes, SectionStorage};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-pub use output::{FileWriter, TempFile};
+pub use output::FileWriter;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub(crate) use output::TempFile;
 pub(crate) use output::{SectionChunk, make_chunk};
+pub use output::{SectionStorage, WriteBytes};
 pub(crate) mod le_writers;
 pub(crate) mod meta_collector;
 pub(crate) mod tables;

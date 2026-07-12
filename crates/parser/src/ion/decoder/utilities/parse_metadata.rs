@@ -1,16 +1,19 @@
+pub(crate) use crate::ion::format::{CODEC_NONE, CODEC_ZSTD};
 use crate::{
-    decoder::{
-        decode::{Metadatum, MetadatumValue},
-        utilities::{
-            common::{decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes},
-            decompression_limit::DecompressionLimit,
+    ion::{
+        IonResult,
+        attr_meta::format_accession,
+        decoder::{
+            decode::{Metadatum, MetadatumValue},
+            utilities::{
+                common::{decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes},
+                decompression_limit::DecompressionLimit,
+            },
         },
+        utilities::common::*,
     },
-    ion::{IonResult, attr_meta::format_accession, utilities::common::*},
     mzml::schema::TagId,
 };
-
-pub(crate) use crate::ion::format::{CODEC_NONE, CODEC_ZSTD};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn parse_metadata(

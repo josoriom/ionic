@@ -14,24 +14,23 @@ use clap::{
     ValueEnum,
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
-use mimalloc::MiMalloc;
-use rayon::{ThreadPoolBuilder, prelude::*};
-use regex::Regex;
-use serde::Serialize;
-
 use ionic::{
     ion::{
-        FileWriter, IonReader, ReadOptions, TempFile,
+        FileWriter, IonReader, ReadOptions,
         encoder::{encode::WriteOptions, ion_writer::IonWriter, utilities::SectionStorage},
         format::FILE_TRAILER,
     },
     mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
+use mimalloc::MiMalloc;
+use rayon::{ThreadPoolBuilder, prelude::*};
+use regex::Regex;
+use serde::Serialize;
 
 mod legacy;
 mod utilities;
 
-use utilities::check_ion_file;
+use utilities::{TempOutput, check_ion_file, sweep_orphans};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -104,10 +103,19 @@ enum Cmd {
     )
 )]
 struct ConvertArgs {
-    #[arg(short = 'i', long = "input-path", required = true, help = "File or folder to convert")]
+    #[arg(
+        short = 'i',
+        long = "input-path",
+        required = true,
+        help = "File or folder to convert"
+    )]
     input_path: PathBuf,
 
-    #[arg(short = 'o', long = "output-path", help = "Folder to write results into")]
+    #[arg(
+        short = 'o',
+        long = "output-path",
+        help = "Folder to write results into"
+    )]
     output_path: Option<PathBuf>,
 
     #[arg(
@@ -129,13 +137,25 @@ struct ConvertArgs {
     #[arg(long, default_value_t = false, action = ArgAction::SetTrue, help = "Overwrite output files that exist")]
     overwrite: bool,
 
-    #[arg(long = "pattern", value_name = "TEXT", help = "Only files whose name contains TEXT")]
+    #[arg(
+        long = "pattern",
+        value_name = "TEXT",
+        help = "Only files whose name contains TEXT"
+    )]
     pattern: Option<String>,
 
-    #[arg(long = "pattern-exact", value_name = "NAME", help = "Only files named exactly NAME")]
+    #[arg(
+        long = "pattern-exact",
+        value_name = "NAME",
+        help = "Only files named exactly NAME"
+    )]
     pattern_exact: Option<String>,
 
-    #[arg(long = "regex", value_name = "REGEX", help = "Only files matching REGEX")]
+    #[arg(
+        long = "regex",
+        value_name = "REGEX",
+        help = "Only files matching REGEX"
+    )]
     regex: Option<String>,
 
     #[arg(
@@ -410,8 +430,8 @@ fn write_mzml_as_ion(
     output_path: &Path,
     config: WriteOptions,
 ) -> Result<(), String> {
-    TempFile::sweep_orphans(output_path);
-    let temp_output = TempFile::new(output_path).map_err(|error| error.to_string())?;
+    sweep_orphans(output_path)?;
+    let temp_output = TempOutput::new(output_path)?;
     let mut input_reader = MzmlReader::open(input_path).map_err(|error| error.to_string())?;
     {
         let mut output_file =
@@ -424,9 +444,7 @@ fn write_mzml_as_ion(
         drop(ion_writer);
         output_file.flush().map_err(|error| error.to_string())?;
     }
-    temp_output
-        .move_to(output_path)
-        .map_err(|error| error.to_string())
+    temp_output.move_to(output_path)
 }
 
 #[derive(Debug, Clone)]
@@ -627,8 +645,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     let benchmark_decode = cmd.which.benchmark_decode;
 
-    let default_mzml_to_ion =
-        !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml && !benchmark_decode;
+    let default_mzml_to_ion = !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml && !benchmark_decode;
 
     let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let ion_to_mzml = cmd.which.ion_to_mzml;
@@ -1049,9 +1066,9 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     let count = ion.spectrum_count() as usize;
                     let mut buf = Vec::new();
                     for i in 0..count {
-                        if let Some(addresses) = ion.spectrum_arrays(i) {
+                        if let Some(addresses) = ion.spectrum_array_addresses(i) {
                             for address in addresses {
-                                let _ = ion.read_array(&address, &mut buf);
+                                let _ = ion.read_spectrum_values(&address, &mut buf);
                             }
                         }
                     }

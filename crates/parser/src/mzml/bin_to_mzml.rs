@@ -1,18 +1,22 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
 use std::fmt::{Display, Formatter};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use miniz_oxide::deflate::compress_to_vec_zlib;
-use quick_xml::Writer;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::{
+    Writer,
+    events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event},
+};
 use sha1::{Digest, Sha1};
 
-use crate::accessions::{
-    ACC_ANALYZER_QUAD, ACC_ANALYZER_TOF, ACC_COMPRESSION_NONE, ACC_COMPRESSION_ZLIB,
-    ACC_DETECTOR_EM, ACC_DETECTOR_PHOTOMULT, ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR,
-    ACC_FLOAT_64BIT_STR, ACC_INT_16BIT_STR, ACC_INT_32BIT_STR, ACC_INT_64BIT_STR, ACC_SOURCE_EI,
-    ACC_SOURCE_ESI,
+use crate::{
+    accessions::{
+        ACC_ANALYZER_QUAD, ACC_ANALYZER_TOF, ACC_COMPRESSION_NONE, ACC_COMPRESSION_ZLIB,
+        ACC_DETECTOR_EM, ACC_DETECTOR_PHOTOMULT, ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR,
+        ACC_FLOAT_64BIT_STR, ACC_INT_16BIT_STR, ACC_INT_32BIT_STR, ACC_INT_64BIT_STR,
+        ACC_SOURCE_EI, ACC_SOURCE_ESI,
+    },
+    mzml::structs::*,
 };
-use crate::mzml::structs::*;
 
 #[derive(Debug)]
 pub enum BinToMzmlError {

@@ -9,7 +9,10 @@ fn window_span(width: f64, from: f64, to: f64, window_count: usize) -> Option<(u
     if low >= window_count {
         return None;
     }
-    Some((low, (window_index(width, to) as usize).min(window_count - 1)))
+    Some((
+        low,
+        (window_index(width, to) as usize).min(window_count - 1),
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,9 +109,9 @@ fn scan_summary_from_record(record: &SpectrumSummary) -> ScanSummary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    Spec,
-    Chrom,
+pub enum ItemKind {
+    Spectrum,
+    Chromatogram,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -342,7 +345,7 @@ impl IonReader {
         let mut ok = true;
         for index in 0..self.header.spectrum_count as usize {
             let rt = self
-                .spec_summary(index)
+                .spectrum_summary(index)
                 .map(|summary| summary.rt)
                 .unwrap_or(f64::NAN);
             if !rt.is_finite() || rt < previous {
@@ -374,7 +377,7 @@ impl IonReader {
                 return Ok(Vec::new());
             };
             let rt_of = |spectrum_index: u32| {
-                self.spec_summary(spectrum_index as usize)
+                self.spectrum_summary(spectrum_index as usize)
                     .map(|summary| summary.rt)
                     .unwrap_or(f64::NAN)
             };
@@ -382,7 +385,8 @@ impl IonReader {
             for window in window_low..=window_high {
                 let positions = window_directory.window_range(window);
                 if binary_search {
-                    let start = first_at_or_after_rt(window_directory, positions.clone(), rt.from, &rt_of);
+                    let start =
+                        first_at_or_after_rt(window_directory, positions.clone(), rt.from, &rt_of);
                     let end = first_after_rt(window_directory, start..positions.end, rt.to, &rt_of);
                     for position in start..end {
                         rows.push(window_directory.row(position));
@@ -404,8 +408,8 @@ impl IonReader {
         for row in rows {
             let mz_address = self.array_address_at(row.mz_address)?;
             let intensity_address = self.array_address_at(row.intensity_address)?;
-            let mz_segment = self.read_array_typed(&mz_address)?;
-            let intensity_segment = self.read_array_typed(&intensity_address)?;
+            let mz_segment = self.read_spectrum_array(&mz_address)?;
+            let intensity_segment = self.read_spectrum_array(&intensity_address)?;
             let paired = mz_segment.len().min(intensity_segment.len());
             let (start, end) = range_in_sorted(&mz_segment, mz.from, mz.to, paired);
             let mut sum = 0.0;
@@ -418,7 +422,7 @@ impl IonReader {
         let mut points: Vec<(f64, f64)> = totals
             .into_iter()
             .filter_map(|(spectrum, intensity)| {
-                self.spec_summary(spectrum as usize)
+                self.spectrum_summary(spectrum as usize)
                     .map(|summary| (summary.rt, intensity))
             })
             .collect();
@@ -465,8 +469,8 @@ impl IonReader {
         let mut mz_out = empty_array(mz_dtype);
         let mut intensity_out = empty_array(intensity_dtype);
         for window in windows {
-            let mz_segment = self.read_array_typed(&window.mz_address)?;
-            let intensity_segment = self.read_array_typed(&window.intensity_address)?;
+            let mz_segment = self.read_spectrum_array(&window.mz_address)?;
+            let intensity_segment = self.read_spectrum_array(&window.intensity_address)?;
             keep_pairs_sorted(
                 &mz_segment,
                 &intensity_segment,
@@ -495,7 +499,7 @@ impl IonReader {
         let mut mz_out: Vec<f64> = Vec::new();
         let mut intensity_out: Vec<f64> = Vec::new();
         for index in 0..count {
-            let Some(record) = self.spec_summary(index) else {
+            let Some(record) = self.spectrum_summary(index) else {
                 continue;
             };
             if let Some(level) = ms_level {
@@ -507,7 +511,7 @@ impl IonReader {
             if !scan_is_selected(&select, &summary) {
                 continue;
             }
-            let Some(refs) = self.spectrum_arrays(index) else {
+            let Some(refs) = self.spectrum_array_addresses(index) else {
                 continue;
             };
             let has_mz = refs
@@ -548,12 +552,20 @@ impl IonReader {
             return Ok(DataXY::empty());
         }
         if x_array_accession == ACC_MZ && y_array_accession == ACC_INT {
-            return self.read_window(index, Range { from: low, to: high });
+            return self.read_window(
+                index,
+                Range {
+                    from: low,
+                    to: high,
+                },
+            );
         }
 
-        let Some(array_addresses) =
-            read_array_addresses_from_buffers(&self.spec_entries_buf, &self.spec_array_addresses, index)
-        else {
+        let Some(array_addresses) = read_array_addresses_from_buffers(
+            &self.spec_entries_buf,
+            &self.spec_array_addresses,
+            index,
+        ) else {
             return Ok(DataXY::empty());
         };
         let groups = group_arrays(array_addresses.as_slice())?;
@@ -594,7 +606,7 @@ impl IonReader {
     fn read_group_typed(&mut self, group: &ArrayGroup) -> IonResult<NumericArray> {
         let mut out = empty_array(group_dtype(group));
         for array_address in &group.refs {
-            let window = self.read_array_typed(array_address)?;
+            let window = self.read_spectrum_array(array_address)?;
             append_range(&mut out, &window, 0, window.len());
         }
         Ok(out)
@@ -602,36 +614,38 @@ impl IonReader {
 
     pub fn candidate_items(
         &mut self,
-        target: Target,
+        target: ItemKind,
         axis_accession: u32,
         lo: f64,
         hi: f64,
     ) -> IonResult<Vec<ItemSlice>> {
         let is_axis = match target {
-            Target::Spec => axis_accession == ACC_MZ,
-            Target::Chrom => axis_accession == crate::accessions::TIME_ARRAY,
+            ItemKind::Spectrum => axis_accession == ACC_MZ,
+            ItemKind::Chromatogram => axis_accession == crate::accessions::TIME_ARRAY,
         };
         if !is_axis {
             return Ok(Vec::new());
         }
 
         match target {
-            Target::Spec => {
+            ItemKind::Spectrum => {
                 let _ = self.ensure_spec_window_directory();
             }
-            Target::Chrom => self.ensure_chrom_window_directory(),
+            ItemKind::Chromatogram => self.ensure_chrom_window_directory(),
         }
 
         let width = self.header.target_mz_window as f64;
         let window_directory = match target {
-            Target::Spec => &self.spec_window_directory,
-            Target::Chrom => &self.chrom_window_directory,
+            ItemKind::Spectrum => &self.spec_window_directory,
+            ItemKind::Chromatogram => &self.chrom_window_directory,
         };
         let WindowDirectoryCache::Loaded(window_directory) = window_directory else {
             return Ok(Vec::new());
         };
 
-        let Some((window_low, window_high)) = window_span(width, lo, hi, window_directory.window_count()) else {
+        let Some((window_low, window_high)) =
+            window_span(width, lo, hi, window_directory.window_count())
+        else {
             return Ok(Vec::new());
         };
 

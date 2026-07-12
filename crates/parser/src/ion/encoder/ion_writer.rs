@@ -9,38 +9,35 @@ pub(crate) struct SectionPlacement {
 
 use crate::{
     accessions::{INTENSITY_ARRAY, MZ_ARRAY, TIME_ARRAY},
-    encoder::scan_stream::ScanStream,
-    encoder::utilities::{
-        SectionChunk,
-        output::WriteBytes,
-        make_chunk,
-        meta_collector::{
-            ArrayPolicy, GroupedSection, LOCAL_LIST_NODE_ID, MetaCollector, MetaGrouper,
-            MzmlListItem, array_type_accession_from_binary_data_array, compress_bytes_if_enabled,
-            serialize_global_meta_with_counts,
-        },
-        tables::{
-            ArrayAddressTable, WindowDirectory, WindowEntry, IndexTable, SummaryTable,
-            write_aligned,
-        },
-    },
     ion::{
         IonResult,
         encoder::{
             encode::{
-                CHROM_SUMMARY_SIZE, EncodedArrayAddress, WriteOptions, SPEC_SUMMARY_SIZE,
+                CHROM_SUMMARY_SIZE, EncodedArrayAddress, SPEC_SUMMARY_SIZE, WriteOptions,
                 allow_compression_level, check_spectrum_mz_order, check_spectrum_rt_order,
-                encode_single_array, extract_chrom_summary,
-                spec_summary_from_spectrum, window_ranges_for_item,
-                write_array_windows,
+                encode_single_array, extract_chrom_summary, spec_summary_from_spectrum,
+                window_ranges_for_item, write_array_windows,
             },
-            utilities::{BlockWriter, DefaultCompressor},
+            scan_stream::ScanStream,
+            utilities::{
+                BlockWriter, DefaultCompressor, SectionChunk, make_chunk,
+                meta_collector::{
+                    ArrayPolicy, GroupedSection, LOCAL_LIST_NODE_ID, MetaCollector, MetaGrouper,
+                    MzmlListItem, array_type_accession_from_binary_data_array,
+                    compress_bytes_if_enabled, serialize_global_meta_with_counts,
+                },
+                output::WriteBytes,
+                tables::{
+                    ArrayAddressTable, IndexTable, SummaryTable, WindowDirectory, WindowEntry,
+                    write_aligned,
+                },
+            },
         },
         format::{FILE_TRAILER, HEADER_SIZE},
         header::Header,
-        windowing::WindowRange,
         meta_groups::METADATA_GROUP_SIZE,
         utilities::EmitAttributes,
+        windowing::WindowRange,
     },
     mzml::structs::{BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, Spectrum},
 };
@@ -176,7 +173,8 @@ where
             }
         }
 
-        if let (Some(mz_address_start), Some(intensity_address_start)) = (mz_address_start, intensity_address_start)
+        if let (Some(mz_address_start), Some(intensity_address_start)) =
+            (mz_address_start, intensity_address_start)
         {
             push_window_entries(
                 window_directory,
@@ -599,10 +597,12 @@ impl<'out> IonWriter<'out> {
 
         let (off_spec_summary, _, spec_summary_crc32) = write_chunk(self.output, spec.summary)?;
         let (off_spec_entries, _, spec_entries_crc32) = write_chunk(self.output, spec.index)?;
-        let (off_spec_array_addresses, _, spec_array_addresses_crc32) = write_chunk(self.output, spec.addresses)?;
+        let (off_spec_array_addresses, _, spec_array_addresses_crc32) =
+            write_chunk(self.output, spec.addresses)?;
         let (off_chrom_summary, _, chrom_summary_crc32) = write_chunk(self.output, chrom.summary)?;
         let (off_chrom_entries, _, chrom_entries_crc32) = write_chunk(self.output, chrom.index)?;
-        let (off_chrom_array_addresses, _, chrom_array_addresses_crc32) = write_chunk(self.output, chrom.addresses)?;
+        let (off_chrom_array_addresses, _, chrom_array_addresses_crc32) =
+            write_chunk(self.output, chrom.addresses)?;
         let off_spec_meta = write_chunk(self.output, spec.grouped.section)?.0;
         let off_chrom_meta = write_chunk(self.output, chrom.grouped.section)?.0;
         let off_global_meta = write_aligned(self.output, &global_bytes)?;

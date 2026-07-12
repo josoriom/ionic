@@ -11,14 +11,6 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
-use crate::{
-    ion::{
-        IonResult,
-        encoder::scan_stream::{ScanStream, MemoryReader},
-    },
-    mzml::structs::{Chromatogram, MzML, Spectrum},
-};
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::{
     ion::IonError,
@@ -38,6 +30,13 @@ use crate::{
             read_user_param, tag_id_from_bytes,
         },
     },
+};
+use crate::{
+    ion::{
+        IonResult,
+        encoder::scan_stream::{MemoryReader, ScanStream},
+    },
+    mzml::structs::{Chromatogram, MzML, Spectrum},
 };
 
 pub struct MzmlReader {

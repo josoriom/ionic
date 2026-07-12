@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::ion::{
-    IonError, IonResult, ByteRange,
+    ByteRange, IonError, IonResult,
     decoder::utilities::byte_source::ReadBytes,
     encoder::utilities::block_writer::{BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride},
     format::CODEC_NONE,
@@ -168,7 +168,9 @@ impl<P: BlockProcessor> BlockReader<P> {
             .container_offset
             .checked_add(entry.payload_offset)
             .ok_or_else(|| {
-                IonError::from(format!("{ctx}: block {block_index} payload offset overflows"))
+                IonError::from(format!(
+                    "{ctx}: block {block_index} payload offset overflows"
+                ))
             })?;
 
         let payload = self.source.read(ByteRange {
@@ -419,7 +421,10 @@ pub(crate) fn container_directory_range(
         .checked_add(container_len)
         .and_then(|end| end.checked_sub(directory_byte_count))
         .ok_or_else(|| IonError::from(format!("{ctx}: directory offset overflows")))?;
-    Ok(ByteRange { offset: directory_offset, length: directory_byte_count })
+    Ok(ByteRange {
+        offset: directory_offset,
+        length: directory_byte_count,
+    })
 }
 
 #[inline]

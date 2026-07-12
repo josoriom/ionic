@@ -4,15 +4,12 @@ use std::fs;
 
 use common::{canonical_diff_paths, decode_ion};
 use ionic::{
-    encoder::IonWriter,
+    IonWriter,
     ion::{
         IonReader,
         decoder::decode::ReadOptions,
         encoder::{
-            encode::{
-                WriteOptions,
-                TARGET_BLOCK_UNCOMPRESSED_BYTES,
-            },
+            encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
             utilities::SectionStorage,
         },
     },
@@ -85,7 +82,7 @@ fn spectrum_summary_keeps_coordinates() {
     let mut writer = IonWriter::create(&mut bytes, config()).unwrap();
     writer.write_stream(&mut reader).unwrap();
     let ion = IonReader::open(&bytes, ReadOptions::default()).unwrap();
-    let summary = ion.spec_summary(0).unwrap();
+    let summary = ion.spectrum_summary(0).unwrap();
     assert_eq!(summary.position_x, 11);
     assert_eq!(summary.position_y, 22);
     assert_eq!(summary.position_z, 3);

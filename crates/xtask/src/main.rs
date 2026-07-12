@@ -1,7 +1,10 @@
-use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
-use std::{env, fs};
+use std::{
+    env,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, ExitCode},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

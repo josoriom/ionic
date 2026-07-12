@@ -1,13 +1,17 @@
-use crate::mzml::schema::TagId;
-use crate::mzml::utilities::{
-    ParamCollector, ParseError, drain_until_close, read_cv_param, read_ref_group_ref,
-    read_software_param, read_user_param, tag_id_from_bytes,
-};
+use std::io::BufRead;
+
 use quick_xml::{
     Reader,
     events::{BytesStart, Event},
 };
-use std::io::BufRead;
+
+use crate::mzml::{
+    schema::TagId,
+    utilities::{
+        ParamCollector, ParseError, drain_until_close, read_cv_param, read_ref_group_ref,
+        read_software_param, read_user_param, tag_id_from_bytes,
+    },
+};
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Default)]

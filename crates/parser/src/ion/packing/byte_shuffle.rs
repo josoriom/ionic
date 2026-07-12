@@ -1,6 +1,5 @@
 use super::{Dtype, IonResult, Packing, PackingId, PackingInput};
-use crate::ion::byte_transpose;
-use crate::ion::IonError;
+use crate::ion::{IonError, byte_transpose};
 
 pub(crate) static BYTE_SHUFFLE: ByteShuffle = ByteShuffle;
 pub(crate) struct ByteShuffle;

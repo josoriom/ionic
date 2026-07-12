@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::ion::{IonError, IonResult, ByteRange};
+use crate::ion::{ByteRange, IonError, IonResult};
 
 pub trait ReadBytes: Send + Sync {
     fn read(&self, range: ByteRange) -> IonResult<Vec<u8>>;

@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, default::Default, sync::OnceLock};
+
+use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 static SCHEMA: OnceLock<SchemaTree> = OnceLock::new();

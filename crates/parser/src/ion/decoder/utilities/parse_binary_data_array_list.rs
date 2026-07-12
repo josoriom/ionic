@@ -3,12 +3,12 @@ use crate::{
         ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR, ACC_FLOAT_64BIT_STR, ACC_INT_16BIT_STR,
         ACC_INT_32BIT_STR, ACC_INT_64BIT_STR,
     },
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{
             ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
             ACC_ATTR_ENCODED_LENGTH, ACC_ATTR_REF,
         },
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, MetadataPolicy, OwnerRows},
             common::{get_attr_text, get_attr_u32},

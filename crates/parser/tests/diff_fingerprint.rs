@@ -1,9 +1,8 @@
 mod common;
 
-use common::test_files;
 use common::{
     BinaryDataExt, canonical_diff_paths, chromatogram_arrays, chromatograms, semantic_fingerprint,
-    spectra, spectrum_arrays,
+    spectra, spectrum_arrays, test_files,
 };
 
 #[test]

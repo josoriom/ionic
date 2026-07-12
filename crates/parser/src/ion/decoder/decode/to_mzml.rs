@@ -1,8 +1,9 @@
-use std::collections::HashMap;
-use super::*;
+use std::{borrow::Cow, collections::HashMap};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
+
+use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetadatumValue {
@@ -54,8 +55,7 @@ impl<'d> MzmlConverter<'d> {
         global_lookup.get_param_rows_into(&owner_rows, run_id, &policy, &mut param_buffer);
         let (cv_params, user_params) = parse_cv_and_user_params(&param_buffer);
 
-        let spectrum_list =
-            assemble_spectrum_list(&decoder.spectrum_metadata_grouped()?, &policy);
+        let spectrum_list = assemble_spectrum_list(&decoder.spectrum_metadata_grouped()?, &policy);
         let chromatogram_list =
             assemble_chromatogram_list(&decoder.chromatogram_metadata_grouped()?, &policy);
 
@@ -142,7 +142,8 @@ fn assemble_spectrum_list(
     let mut index_base = 0u32;
     for group in groups {
         let refs: Vec<&Metadatum> = group.iter().collect();
-        let Some(list) = parse_spectrum_list(&refs, &ChildrenLookup::new(group), policy, index_base)
+        let Some(list) =
+            parse_spectrum_list(&refs, &ChildrenLookup::new(group), policy, index_base)
         else {
             continue;
         };
@@ -219,7 +220,8 @@ pub(crate) fn attach_binaries<E: BinaryArrayOwner>(
     let _ = parallel;
 
     for index in 0..entries.len() {
-        let Some(item_refs) = read_array_addresses_from_buffers(entries_buf, array_addresses_buf, index)
+        let Some(item_refs) =
+            read_array_addresses_from_buffers(entries_buf, array_addresses_buf, index)
         else {
             continue;
         };
@@ -282,58 +284,86 @@ pub(crate) fn attach_binaries<E: BinaryArrayOwner>(
             .get_or_insert_with(BinaryDataArrayList::default);
 
         for group in groups {
-            let mut concatenated = Vec::new();
+            if let [array_address] = group.refs.as_slice() {
+                let bytes = unfiltered_ref_bytes(&data, &group, array_address, ctx)?;
+                attach_logical_array(
+                    list,
+                    group.array_type,
+                    group.array_cv_code,
+                    group.dtype,
+                    &bytes,
+                )?;
+            } else {
+                let mut total = 0usize;
+                for array_address in &group.refs {
+                    let (start, end) = ref_byte_range(array_address, ctx)?;
+                    total += end - start;
+                }
 
-            for array_address in &group.refs {
-                let block = data.get(&array_address.block_id).ok_or_else(|| {
-                    IonError::from(format!("{ctx}: missing block {}", array_address.block_id))
-                })?;
-                let (start, end) = {
-                    let (element_offset, count, stride) = address_read_params(array_address);
-                    let s = usize::try_from(element_offset)
-                        .ok()
-                        .and_then(|offset| offset.checked_mul(stride))
-                        .ok_or_else(|| {
-                            IonError::from(format!(
-                                "{ctx}: item range overflow for block {}",
-                                array_address.block_id
-                            ))
-                        })?;
-                    let e = usize::try_from(count)
-                        .ok()
-                        .and_then(|c| c.checked_mul(stride))
-                        .and_then(|len| s.checked_add(len))
-                        .ok_or_else(|| {
-                            IonError::from(format!(
-                                "{ctx}: item range overflow for block {}",
-                                array_address.block_id
-                            ))
-                        })?;
-                    (s, e)
-                };
-                let raw = block.get(start..end).ok_or_else(|| {
-                    IonError::from(format!(
-                        "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
-                        array_address.block_id,
-                        block.len()
-                    ))
-                })?;
-                let unfiltered = unfilter_array_bytes(raw, group.dtype, group.array_filter)?;
-                concatenated.extend_from_slice(&unfiltered);
+                let mut concatenated = Vec::new();
+                concatenated.reserve_exact(total);
+                for array_address in &group.refs {
+                    let bytes = unfiltered_ref_bytes(&data, &group, array_address, ctx)?;
+                    concatenated.extend_from_slice(&bytes);
+                }
+
+                attach_logical_array(
+                    list,
+                    group.array_type,
+                    group.array_cv_code,
+                    group.dtype,
+                    &concatenated,
+                )?;
             }
-
-            attach_logical_array(
-                list,
-                group.array_type,
-                group.array_cv_code,
-                group.dtype,
-                &concatenated,
-            )?;
         }
         list.count = Some(list.binary_data_arrays.len());
     }
 
     Ok(())
+}
+
+fn ref_byte_range(array_address: &ArrayAddress, ctx: &str) -> IonResult<(usize, usize)> {
+    let (element_offset, count, stride) = address_read_params(array_address);
+    let start = usize::try_from(element_offset)
+        .ok()
+        .and_then(|offset| offset.checked_mul(stride))
+        .ok_or_else(|| {
+            IonError::from(format!(
+                "{ctx}: item range overflow for block {}",
+                array_address.block_id
+            ))
+        })?;
+    let end = usize::try_from(count)
+        .ok()
+        .and_then(|c| c.checked_mul(stride))
+        .and_then(|len| start.checked_add(len))
+        .ok_or_else(|| {
+            IonError::from(format!(
+                "{ctx}: item range overflow for block {}",
+                array_address.block_id
+            ))
+        })?;
+    Ok((start, end))
+}
+
+fn unfiltered_ref_bytes<'d>(
+    data: &'d HashMap<u32, Vec<u8>>,
+    group: &ArrayGroup,
+    array_address: &ArrayAddress,
+    ctx: &str,
+) -> IonResult<Cow<'d, [u8]>> {
+    let block = data.get(&array_address.block_id).ok_or_else(|| {
+        IonError::from(format!("{ctx}: missing block {}", array_address.block_id))
+    })?;
+    let (start, end) = ref_byte_range(array_address, ctx)?;
+    let raw = block.get(start..end).ok_or_else(|| {
+        IonError::from(format!(
+            "{ctx}: item range [{start}..{end}] out of bounds for block {} (len={})",
+            array_address.block_id,
+            block.len()
+        ))
+    })?;
+    unfilter_array_bytes(raw, group.dtype, group.array_filter)
 }
 
 pub(crate) fn attach_logical_array(

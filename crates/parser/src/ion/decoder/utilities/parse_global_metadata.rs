@@ -1,12 +1,10 @@
-use crate::{
+use crate::ion::{
+    IonError, IonResult,
     decoder::decode::Metadatum,
-    ion::{
-        IonError, IonResult,
-        utilities::{
-            common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
-            decompression_limit::DecompressionLimit,
-            parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
-        },
+    utilities::{
+        common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
+        decompression_limit::DecompressionLimit,
+        parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
     },
 };
 

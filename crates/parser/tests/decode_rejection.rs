@@ -1,13 +1,13 @@
 mod common;
 
-use common::assertions::assert_mzml_semantic_eq;
-use common::test_files;
-use common::{decode_ion, encode_to_ion};
-use ionic::ion::{
-    HEADER_FORMAT_VERSION_OFFSET, IonReader, IonResult, ReadOptions,
-    format::MAX_SUPPORTED_VERSION,
+use common::{assertions::assert_mzml_semantic_eq, decode_ion, encode_to_ion, test_files};
+use ionic::{
+    ion::{
+        HEADER_FORMAT_VERSION_OFFSET, IonReader, IonResult, ReadOptions,
+        format::MAX_SUPPORTED_VERSION,
+    },
+    mzml::structs::MzML,
 };
-use ionic::mzml::structs::MzML;
 
 const HEADER_CRC32_OFFSET: usize = 1020;
 const HEADER_OFFSET_GLOBAL_META: usize = 192;
@@ -123,7 +123,10 @@ fn rejects_corrupted_global_meta() {
     assert!(len > 0, "fixture must have a global_meta section");
     bytes[off + len / 2] ^= 0xFF;
     let err = decode_ion(&bytes).expect_err("decode must reject corrupted global_meta");
-    assert!(err.contains("global_meta"), "unexpected decode error: {err}");
+    assert!(
+        err.contains("global_meta"),
+        "unexpected decode error: {err}"
+    );
 }
 
 #[test]
@@ -238,7 +241,10 @@ fn rejects_block_declaring_huge_uncompressed_size_6() {
     write_u64_at(&mut bytes, entry + 16, 1 << 30);
     let err = decode_ion_without_checksum_verification(&bytes)
         .expect_err("decode must reject an implausible declared uncompressed size");
-    assert!(err.contains("implausible"), "unexpected decode error: {err}");
+    assert!(
+        err.contains("implausible"),
+        "unexpected decode error: {err}"
+    );
 }
 
 #[test]

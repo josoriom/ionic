@@ -1,15 +1,15 @@
-use quick_xml::events::BytesStart;
 use std::io::BufRead;
 
-use crate::mzml::utilities::parse_product_list::parse_product;
-use crate::mzml::utilities::{
-    attr, attr_u32, attr_usize, parse_bda_list, parse_precursor, read_cv_param, read_ref_group_ref,
-    read_user_param,
-};
+use quick_xml::events::BytesStart;
+
 use crate::mzml::{
     schema::TagId,
     structs::*,
-    utilities::{ParamCollector, ParseError, parsing_workspace::ParsingWorkspace},
+    utilities::{
+        ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda_list, parse_precursor,
+        parse_product_list::parse_product, parsing_workspace::ParsingWorkspace, read_cv_param,
+        read_ref_group_ref, read_user_param,
+    },
 };
 
 pub(crate) fn parse_chromatogram_list<R: BufRead>(

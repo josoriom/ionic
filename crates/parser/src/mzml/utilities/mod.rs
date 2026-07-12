@@ -1,7 +1,7 @@
 pub(crate) mod normalize_tag;
 pub(crate) use normalize_tag::normalize_tag;
-pub(crate) mod parse_error;
-pub(crate) use parse_error::ParseError;
+pub mod parse_error;
+pub use parse_error::ParseError;
 pub(crate) mod classify_index_tag;
 pub(crate) use classify_index_tag::{IndexTag, classify_index_tag};
 pub(crate) mod traversal;

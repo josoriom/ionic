@@ -66,7 +66,9 @@ impl WindowDirectory {
             })
             .ok_or("window directory: size overflow")?;
         if bytes.len() as u64 != expected_len_u64 {
-            return Err("window directory: length does not match window_count and entry_count".into());
+            return Err(
+                "window directory: length does not match window_count and entry_count".into(),
+            );
         }
 
         let window_count = usize::try_from(window_count_u64)
@@ -108,7 +110,9 @@ impl WindowDirectory {
             let range = starts[window] as usize..starts[window + 1] as usize;
             for pair in spectrum_index[range].windows(2) {
                 if pair[1] <= pair[0] {
-                    return Err("window directory: spectrum_index must increase within a window".into());
+                    return Err(
+                        "window directory: spectrum_index must increase within a window".into(),
+                    );
                 }
             }
         }
@@ -175,7 +179,10 @@ mod tests {
         assert_eq!(index.window_count(), 2);
         assert_eq!(index.window_range(1), 2..4);
         let row = index.find_in_window(1, 1).unwrap();
-        assert_eq!((row.spectrum_index, row.mz_address, row.intensity_address), (1, 9, 13));
+        assert_eq!(
+            (row.spectrum_index, row.mz_address, row.intensity_address),
+            (1, 9, 13)
+        );
         assert!(index.find_in_window(1, 5).is_none());
     }
 

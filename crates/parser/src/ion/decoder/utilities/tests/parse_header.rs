@@ -1,5 +1,6 @@
-use crate::ion::{format::FILE_SIGNATURE, utilities::parse_header};
 use std::{fs, path::PathBuf};
+
+use crate::ion::{format::FILE_SIGNATURE, utilities::parse_header};
 
 const PATH: &str = "data/ion/test.ion";
 

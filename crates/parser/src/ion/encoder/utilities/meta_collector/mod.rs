@@ -6,19 +6,18 @@ mod tests;
 
 pub(crate) use grouper::{GroupedSection, MetaGrouper, serialize_global_meta_with_counts};
 pub(crate) use schema::MzmlListItem;
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
     accessions::{INTENSITY_ARRAY, MZ_ARRAY, TIME_ARRAY},
-    decoder::decode::MetadatumValue,
     ion::{
         IonResult,
         attr_meta::{
             AccessionTail, CV_CODE_UNKNOWN, CV_REF_ATTR, attr_cv_param, cv_ref_code_from_str,
             parse_accession_tail,
         },
+        decoder::decode::MetadatumValue,
         utilities::assign_attributes_into,
     },
     mzml::{
@@ -335,22 +334,10 @@ impl<'b> MetaParamWriter<'b> {
     pub(crate) fn push_one(&mut self, tag: TagId, id: u32, parent_id: u32, cv_param: CvParam) {
         self.buffer.push(tag, id, parent_id, cv_param);
     }
-    pub(crate) fn push_many(
-        &mut self,
-        tag: TagId,
-        id: u32,
-        parent_id: u32,
-        cv_params: &[CvParam],
-    ) {
+    pub(crate) fn push_many(&mut self, tag: TagId, id: u32, parent_id: u32, cv_params: &[CvParam]) {
         self.buffer.extend_cv_params(tag, id, parent_id, cv_params);
     }
-    fn push_user_params(
-        &mut self,
-        tag: TagId,
-        id: u32,
-        parent_id: u32,
-        user_params: &[UserParam],
-    ) {
+    fn push_user_params(&mut self, tag: TagId, id: u32, parent_id: u32, user_params: &[UserParam]) {
         self.buffer
             .extend_user_params(tag, id, parent_id, user_params);
     }

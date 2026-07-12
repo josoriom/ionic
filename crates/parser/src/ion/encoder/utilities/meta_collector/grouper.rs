@@ -1,12 +1,12 @@
-use crate::{
-    encoder::utilities::le_writers::{write_f64_slice_le, write_u32_slice_le},
-    ion::{IonResult, meta_groups::{META_GROUP_ENTRY_SIZE, MetaGroupEntry, write_group_header}},
-};
-
 use super::{
-    MetaParamBuffer, MetadataWriter, PackedMeta, PackedMetaBuilder, compress_bytes_if_enabled,
+    super::output::SectionChunk, MetaParamBuffer, MetadataWriter, PackedMeta, PackedMetaBuilder,
+    compress_bytes_if_enabled,
 };
-use super::super::output::SectionChunk;
+use crate::ion::{
+    IonResult,
+    encoder::utilities::le_writers::{write_f64_slice_le, write_u32_slice_le},
+    meta_groups::{META_GROUP_ENTRY_SIZE, MetaGroupEntry, write_group_header},
+};
 
 pub(crate) struct GroupedSection {
     pub(crate) section: SectionChunk,
@@ -177,7 +177,10 @@ pub(super) fn serialize_group(meta: &PackedMeta, item_start: usize, item_end: us
     out
 }
 
-pub(crate) fn serialize_global_meta_with_counts(counts: &super::GlobalCounts, m: &PackedMeta) -> IonResult<Vec<u8>> {
+pub(crate) fn serialize_global_meta_with_counts(
+    counts: &super::GlobalCounts,
+    m: &PackedMeta,
+) -> IonResult<Vec<u8>> {
     let mut buf = Vec::with_capacity(32 + packed_meta_byte_size(m));
     for (name, count) in [
         ("file_description", counts.n_file_description),
@@ -190,8 +193,12 @@ pub(crate) fn serialize_global_meta_with_counts(counts: &super::GlobalCounts, m:
         ("cvs", counts.n_cvs),
         ("run", counts.n_run),
     ] {
-        let stored = u16::try_from(count)
-            .map_err(|_| format!("global {name} count {count} exceeds format limit {}", u16::MAX))?;
+        let stored = u16::try_from(count).map_err(|_| {
+            format!(
+                "global {name} count {count} exceeds format limit {}",
+                u16::MAX
+            )
+        })?;
         buf.extend_from_slice(&stored.to_le_bytes());
     }
     buf.extend_from_slice(&[0u8; 14]);
@@ -235,8 +242,7 @@ fn write_packed_meta(buf: &mut Vec<u8>, m: &PackedMeta) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::GlobalCounts;
+    use super::{super::GlobalCounts, *};
 
     fn counts_of(values: [u32; 9]) -> GlobalCounts {
         GlobalCounts {
@@ -276,8 +282,14 @@ mod tests {
             let err = serialize_global_meta_with_counts(&counts, &empty_meta())
                 .expect_err("must reject count over u16::MAX");
             let message = err.to_string();
-            assert!(message.contains(name), "error `{message}` must name `{name}`");
-            assert!(message.contains("65536"), "error `{message}` must report the real value");
+            assert!(
+                message.contains(name),
+                "error `{message}` must name `{name}`"
+            );
+            assert!(
+                message.contains("65536"),
+                "error `{message}` must report the real value"
+            );
         }
     }
 

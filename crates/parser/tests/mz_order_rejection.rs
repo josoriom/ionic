@@ -3,17 +3,18 @@ mod common;
 use std::sync::Arc;
 
 use ionic::{
+    BytesSource,
     ion::{
-        IonReader, ReadOptions, Range,
+        IonReader, Range, ReadOptions,
         encoder::{
-            encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES},
+            encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
             ion_writer::IonWriter,
             scan_stream::MemoryReader,
             utilities::SectionStorage,
         },
     },
     mzml::structs::{
-        NumericArray, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
+        BinaryDataArray, BinaryDataArrayList, CvParam, MzML, NumericArray, Run, Spectrum,
         SpectrumList,
     },
 };
@@ -188,7 +189,8 @@ fn write_mzml_accepts_sorted_mz_spectrum_and_roundtrips() {
         .expect("sorted m/z must be accepted");
     assert!(!bytes.is_empty(), "output must be non-empty");
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    IonReader::open_bytes(arc, ReadOptions::default()).expect("file must open after encoding sorted m/z");
+    IonReader::open_source(Arc::new(BytesSource::new(arc)), ReadOptions::default())
+        .expect("file must open after encoding sorted m/z");
 }
 
 #[test]
@@ -204,11 +206,25 @@ fn read_mz_range_works_on_sorted_spectrum() {
         .write_mzml(&mzml)
         .expect("sorted m/z must be accepted");
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, ReadOptions::default()).expect("open must succeed");
+    let mut decoder =
+        IonReader::open_source(Arc::new(BytesSource::new(arc)), ReadOptions::default())
+            .expect("open must succeed");
     decoder.require_bounds().expect("window bounds must exist");
-    let window = decoder.read_window(0, Range { from: 150.0, to: 250.0 }).expect("read_mz_range must succeed");
+    let window = decoder
+        .read_window(
+            0,
+            Range {
+                from: 150.0,
+                to: 250.0,
+            },
+        )
+        .expect("read_mz_range must succeed");
     let mz = window.x.to_f64();
-    assert_eq!(mz.len(), 1, "window [150, 250] must contain exactly one point (200.0)");
+    assert_eq!(
+        mz.len(),
+        1,
+        "window [150, 250] must contain exactly one point (200.0)"
+    );
     assert!((mz[0] - 200.0).abs() < 1e-9, "window point must be 200.0");
 }
 

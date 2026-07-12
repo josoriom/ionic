@@ -4,11 +4,11 @@ use std::collections::{BTreeSet, HashMap};
 
 use ionic::mzml::structs::*;
 
-use super::binary_ext::BinaryDataExt;
 use super::{
-    bda_role, chromatograms, precursor_list_of_spectrum, product_list_of_spectrum,
-    scan_list_of_spectrum, set_of_ids, spectra, top_level_dp_ids, top_level_instrument_ids,
-    top_level_sample_ids, top_level_software_ids, top_level_source_file_ids,
+    bda_role, binary_ext::BinaryDataExt, chromatograms, precursor_list_of_spectrum,
+    product_list_of_spectrum, scan_list_of_spectrum, set_of_ids, spectra, top_level_dp_ids,
+    top_level_instrument_ids, top_level_sample_ids, top_level_software_ids,
+    top_level_source_file_ids,
 };
 
 pub const EPS_REL_F64: f64 = 1e-9;

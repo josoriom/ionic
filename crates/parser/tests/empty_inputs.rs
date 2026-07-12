@@ -1,10 +1,12 @@
 mod common;
 
-use ionic::ion::{IonReader, ReadOptions, encode};
-use ionic::mzml::{
-    bin_to_mzml::bin_to_mzml,
-    parse_mzml::{parse_indexed_mzml, parse_mzml},
-    structs::*,
+use ionic::{
+    ion::{IonReader, ReadOptions, WriteOptions, encoder::ion_writer::write_mzml_to_ion},
+    mzml::{
+        bin_to_mzml::bin_to_mzml,
+        parse_mzml::{parse_indexed_mzml, parse_mzml},
+        structs::*,
+    },
 };
 
 #[test]
@@ -84,7 +86,15 @@ fn bin_to_mzml_minimal_mzml_succeeds() {
 fn encode_empty_mzml() {
     let mzml = MzML::default();
     let mut buf = Vec::new();
-    let result = encode(&mzml, 0, false, &mut buf);
+    let result = write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut buf,
+    );
     assert!(result.is_ok(), "encoding empty MzML should succeed");
     assert!(!buf.is_empty(), "output should not be empty");
 }
@@ -110,7 +120,15 @@ fn encode_mzml_no_arrays() {
         ..Default::default()
     };
     let mut buf = Vec::new();
-    let result = encode(&mzml, 0, false, &mut buf);
+    let result = write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut buf,
+    );
     assert!(
         result.is_ok(),
         "encoding MzML with spectrum but no arrays should succeed"
@@ -156,7 +174,16 @@ fn roundtrip_empty_mzml() {
         ..Default::default()
     };
     let mut buf = Vec::new();
-    encode(&mzml, 0, false, &mut buf).expect("encode should succeed");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut buf,
+    )
+    .expect("encode should succeed");
 
     let mut decoder = IonReader::open(&buf, ReadOptions::default()).expect("decoder should open");
     let decoded = decoder.to_mzml().expect("to_mzml should succeed");
