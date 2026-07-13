@@ -245,7 +245,9 @@ impl<P: BlockProcessor> BlockReader<P> {
         let block_index = block_id as usize;
         let stride = Stride::from_size(element_stride);
         let (entry, payload) = self.get_block_payload(block_index, ctx)?;
-        self.decode_block(payload, entry.uncompressed_len_bytes as usize, stride)
+        let uncompressed_len = usize::try_from(entry.uncompressed_len_bytes)
+            .map_err(|_| IonError::from(format!("{ctx}: uncompressed length too large for this platform")))?;
+        self.decode_block(payload, uncompressed_len, stride)
     }
 
     #[inline]
@@ -336,7 +338,9 @@ impl<P: BlockProcessor> BlockReader<P> {
         let stride = Stride::from_size(element_stride);
         self.record_stride_or_fail(block_index, stride, ctx)?;
         let (entry, payload) = self.get_block_payload(block_index, ctx)?;
-        let decoded = self.decode_block(payload, entry.uncompressed_len_bytes as usize, stride)?;
+        let uncompressed_len = usize::try_from(entry.uncompressed_len_bytes)
+            .map_err(|_| IonError::from(format!("{ctx}: uncompressed length too large for this platform")))?;
+        let decoded = self.decode_block(payload, uncompressed_len, stride)?;
 
         let block_heap = decoded.len();
         self.evict_until_room(block_heap);

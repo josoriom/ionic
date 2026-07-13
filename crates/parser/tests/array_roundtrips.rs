@@ -400,6 +400,32 @@ fn delta_shuffle_applied_to_time_array() {
     }
 }
 
+#[test]
+fn read_chromatogram_array_keeps_native_f32_width_33() {
+    use common::helpers::make_chromatogram_f64;
+    let time: Vec<f64> = (0..64).map(|i| i as f64 * 0.5).collect();
+    let intensity: Vec<f64> = (0..64).map(|i| i as f64).collect();
+    let mzml = build_mzml(vec![], vec![make_chromatogram_f64("tic", time, intensity)]);
+    let buf = encode_to_ion(&mzml, 3, true);
+    let mut decoder = IonReader::open(&buf, ReadOptions::default()).unwrap();
+    let refs = decoder.chromatogram_array_addresses(0).unwrap();
+    let intensity_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
+    let native = decoder.read_chromatogram_array(intensity_ref).unwrap();
+    assert!(
+        matches!(native, NumericArray::F32(_)),
+        "read_chromatogram_array must keep the stored native f32 width"
+    );
+    let mut widened = Vec::new();
+    decoder
+        .read_chromatogram_values(intensity_ref, &mut widened)
+        .unwrap();
+    assert_eq!(
+        widened.len(),
+        64,
+        "read_chromatogram_values must still widen to f64"
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 

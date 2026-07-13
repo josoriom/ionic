@@ -118,7 +118,7 @@ pub(crate) fn finalize_bda(
     let Some(base64_bytes) = bda.pending_base64.take() else {
         return Ok(());
     };
-    let mut decoded = Vec::with_capacity(base64_bytes.len() * 3 / 4 + 8);
+    let mut decoded = Vec::with_capacity(base64_bytes.len() / 4 * 3 + 8);
     STANDARD.decode_vec(&base64_bytes, &mut decoded)?;
     if bda.pending_zlib {
         let declared_length = bda.array_length.or(default_array_length);

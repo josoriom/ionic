@@ -8,6 +8,7 @@ pub(crate) mod windowing;
 pub use filter_summary::{ChromatogramSummary, SpectrumSummary};
 pub use range::{ByteRange, Range};
 pub mod decoder;
+pub mod scan;
 pub mod format;
 pub(crate) mod version_generated;
 pub(crate) use decoder::utilities;

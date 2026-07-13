@@ -501,6 +501,26 @@ impl IonReader {
         decode_into(out, raw, array_address.dtype, array_address.array_filter)
     }
 
+    pub fn read_chromatogram_array(
+        &mut self,
+        array_address: &ArrayAddress,
+    ) -> IonResult<NumericArray> {
+        let container = self
+            .chrom_container
+            .as_mut()
+            .ok_or_else(|| IonError::from("no chromatogram container"))?;
+        let (element_offset, count, stride) = address_read_params(array_address);
+        let raw = container.get_array_bytes_from_block(
+            array_address.block_id,
+            element_offset,
+            count,
+            stride,
+            "read_chromatogram_array",
+        )?;
+        let values = unfilter_array_bytes(raw, array_address.dtype, array_address.array_filter)?;
+        super::to_mzml::decoded_bytes_to_binary_data(&values, array_address.dtype)
+    }
+
     pub(crate) fn read_group_values(
         &mut self,
         group: &ArrayGroup,

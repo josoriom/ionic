@@ -977,7 +977,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_flush_pools_one_compressor_per_worker_26() {
+    fn parallel_flush_usually_reuses_compressor_across_blocks_26() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1010,9 +1010,9 @@ mod tests {
         let fork_count = forks.load(Ordering::SeqCst);
         assert!(
             fork_count < block_count,
-            "expected the compressor to be pooled across many blocks, not forked once per block ({} blocks), got {} forks",
-            block_count,
-            fork_count
+            "map_init usually reuses a forked compressor across several blocks, so forks ({}) should stay below the block count ({}); an occasional flip under maximal rayon splitting is expected, not a regression",
+            fork_count,
+            block_count
         );
     }
 

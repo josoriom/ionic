@@ -7,10 +7,7 @@ pub use ion::{
     ByteRange, BytesSource, CallbackSource, ChromatogramSummary, DataXY, IonError, IonReader,
     IonResult, ItemKind, ItemSlice, Pixel, Range, ReadBytes, ReadOptions, Select, SourceBytes,
     SpectrumSummary, Window,
-    decoder::{
-        decode::{Metadatum, MetadatumValue},
-        utilities::spectrum_source::{ScanSource, ScanSummary, TimeUnit},
-    },
+    decoder::decode::{Metadatum, MetadatumValue},
     encoder::{
         encode::{DEFAULT_MZ_WINDOW, WriteOptions},
         ion_writer::{IonWriter, write_mzml_to_ion},
@@ -18,6 +15,7 @@ pub use ion::{
         utilities::{SectionStorage, WriteBytes},
     },
     open_ranges,
+    scan::{ScanSource, ScanSummary, TimeUnit},
 };
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub use ion::{FileSource, FileWriter};
