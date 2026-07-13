@@ -6,7 +6,6 @@ pub enum ParseError {
     Base64(base64::DecodeError),
     Decompress(String),
     UnexpectedEof { context: String, byte_offset: u64 },
-    UnexpectedTag { tag: String, byte_offset: u64 },
 }
 
 impl Display for ParseError {
@@ -22,9 +21,6 @@ impl Display for ParseError {
                 f,
                 "unexpected end of file inside <{context}> (byte {byte_offset})"
             ),
-            Self::UnexpectedTag { tag, byte_offset } => {
-                write!(f, "unexpected tag <{tag}> at byte {byte_offset}")
-            }
         }
     }
 }

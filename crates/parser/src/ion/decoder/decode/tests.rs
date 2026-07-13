@@ -980,6 +980,56 @@ fn encode_one_spectrum_windowed_mode(
     encoded
 }
 
+fn encode_one_chromatogram_windowed(time: Vec<f64>, int: Vec<f64>, time_window: f64) -> Vec<u8> {
+    use crate::{
+        ion::encoder::{
+            encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
+            ion_writer::write_mzml_to_ion,
+        },
+        mzml::structs::{BinaryDataArrayList, Chromatogram, ChromatogramList, MzML, Run},
+    };
+
+    let chromatogram = Chromatogram {
+        id: "split_chrom".to_string(),
+        binary_data_array_list: Some(BinaryDataArrayList {
+            count: Some(2),
+            binary_data_arrays: vec![
+                make_split_bda("MS:1000595", "time array", time),
+                make_split_bda("MS:1000515", "intensity array", int),
+            ],
+        }),
+        ..Default::default()
+    };
+
+    let mzml_in = MzML {
+        run: Run {
+            chromatogram_list: Some(ChromatogramList {
+                count: Some(1),
+                default_data_processing_ref: None,
+                chromatograms: vec![chromatogram],
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut encoded = Vec::new();
+    write_mzml_to_ion(
+        &mzml_in,
+        WriteOptions {
+            compression_level: 3,
+            force_f32: false,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
+            section_storage: SectionStorage::Memory,
+            mz_window: time_window,
+        },
+        &mut encoded,
+    )
+    .unwrap();
+    encoded
+}
+
 #[test]
 fn to_mzml_keeps_all_spectra_across_metadata_group_boundaries() {
     use crate::{
@@ -1694,6 +1744,45 @@ fn candidate_items_empty_on_a1_crc_failure() {
             "A0 should be marked bad checksum after CRC failure"
         );
     }
+}
+
+#[test]
+fn ensure_chrom_window_directory_distinguishes_missing_from_bad_checksum() {
+    let n = 5000;
+    let time: Vec<f64> = (0..n).map(|i| i as f64 * 0.001).collect();
+    let int: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let mut encoded = encode_one_chromatogram_windowed(time, int, 10.0);
+
+    let b1_offset = {
+        let header = parse_header(&encoded[..1024]).unwrap();
+        header.off_chrom_window_directory as usize
+    };
+    assert!(b1_offset > 0, "chromatogram window directory should exist");
+
+    encoded[b1_offset] ^= 0xFF;
+
+    let mut decoder = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+    decoder.ensure_chrom_window_directory();
+
+    assert!(
+        matches!(
+            decoder.chrom_window_directory,
+            WindowDirectoryCache::BadChecksum
+        ),
+        "B0 should be marked bad checksum after CRC failure"
+    );
+
+    let spectrum_only = encode_one_spectrum_windowed(vec![100.0, 200.0], vec![1.0, 2.0], 10.0);
+    let mut missing_decoder = IonReader::open(&spectrum_only, ReadOptions::default()).unwrap();
+    missing_decoder.ensure_chrom_window_directory();
+
+    assert!(
+        matches!(
+            missing_decoder.chrom_window_directory,
+            WindowDirectoryCache::Missing
+        ),
+        "a file with no chromatogram window directory must stay Missing, not BadChecksum"
+    );
 }
 
 #[test]

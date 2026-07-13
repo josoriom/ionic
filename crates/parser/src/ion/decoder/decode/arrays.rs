@@ -267,7 +267,18 @@ pub(crate) fn unfilter_array_bytes(
 ) -> IonResult<std::borrow::Cow<'_, [u8]>> {
     let pk_id = PackingId::from_byte(array_filter)?;
     match pk_id {
-        PackingId::Raw | PackingId::ByteShuffle => Ok(std::borrow::Cow::Borrowed(raw)),
+        PackingId::Raw => Ok(std::borrow::Cow::Borrowed(raw)),
+        PackingId::ByteShuffle => match crate::ion::packing::Dtype::from_byte(dtype) {
+            Ok(
+                dtype_enum @ (crate::ion::packing::Dtype::F64 | crate::ion::packing::Dtype::F32),
+            ) => {
+                let mut out = Vec::new();
+                crate::ion::packing::packing_by_id(PackingId::ByteShuffle)
+                    .decode(raw, dtype_enum, &mut out)?;
+                Ok(std::borrow::Cow::Owned(out))
+            }
+            _ => Ok(std::borrow::Cow::Borrowed(raw)),
+        },
         PackingId::DeltaShuffle => match crate::ion::packing::Dtype::from_byte(dtype) {
             Ok(
                 dtype_enum @ (crate::ion::packing::Dtype::F64 | crate::ion::packing::Dtype::F32),
@@ -464,7 +475,7 @@ impl IonReader {
             element_offset,
             count,
             stride,
-            "read_array_typed",
+            "read_spectrum_array",
         )?;
         let values = unfilter_array_bytes(raw, array_address.dtype, array_address.array_filter)?;
         super::to_mzml::decoded_bytes_to_binary_data(&values, array_address.dtype)
@@ -485,7 +496,7 @@ impl IonReader {
             element_offset,
             count,
             stride,
-            "read_chromatogram_array",
+            "read_chromatogram_values",
         )?;
         decode_into(out, raw, array_address.dtype, array_address.array_filter)
     }
@@ -569,6 +580,44 @@ mod tests {
         let err = unfilter_array_bytes(&raw, FILE_DTYPE_F64, PackingId::DeltaShuffle as u8)
             .expect_err("7 bytes is not a multiple of the f64 word size");
         assert!(err.contains("not a multiple of the word size"));
+    }
+
+    #[test]
+    fn unfilter_array_bytes_byte_shuffle_f64_round_trips_71() {
+        use crate::ion::packing::{PackingInput, packing_by_id};
+
+        let data: Vec<f64> = (0..600)
+            .map(|i| 250.0 + (i as f64) * 0.0137 + ((i * 5 % 11) as f64) * 0.0011)
+            .collect();
+        let raw: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+
+        let mut shuffled = Vec::new();
+        packing_by_id(PackingId::ByteShuffle)
+            .encode(PackingInput::F64(&data), &mut shuffled)
+            .unwrap();
+
+        assert_ne!(
+            shuffled, raw,
+            "shuffled layout must differ from raw for varying data"
+        );
+
+        let unfiltered =
+            unfilter_array_bytes(&shuffled, FILE_DTYPE_F64, PackingId::ByteShuffle as u8).unwrap();
+
+        assert_eq!(
+            unfiltered.as_ref(),
+            raw.as_slice(),
+            "decode of ByteShuffle-tagged bytes must unshuffle back to raw"
+        );
+
+        let out: Vec<f64> = unfiltered
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        assert_eq!(out.len(), data.len());
+        for (a, b) in out.iter().zip(data.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
     }
 
     #[test]

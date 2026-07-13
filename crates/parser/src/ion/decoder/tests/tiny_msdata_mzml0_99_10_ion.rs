@@ -600,7 +600,7 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         "isolation window lower offset",
         "MS:1000828",
         "MS",
-        Some("2"),
+        Some("2.0"),
         None,
     );
     assert_cv(
@@ -609,7 +609,7 @@ fn tiny_msdata_mzml0_99_10_second_spectrum() {
         "isolation window upper offset",
         "MS:1000829",
         "MS",
-        Some("2"),
+        Some("2.0"),
         None,
     );
     let sil = p0

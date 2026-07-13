@@ -8,8 +8,8 @@ use crate::{
         schema::TagId,
         structs::*,
         utilities::{
-            ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda, parse_bda_list,
-            parse_precursor, parse_precursor_list::parse_precursor_list,
+            PREALLOC_CAP, ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda,
+            parse_bda_list, parse_precursor, parse_precursor_list::parse_precursor_list,
             parse_product_list::parse_product_list, parse_scan, parse_scan_list,
             parsing_workspace::ParsingWorkspace, read_cv_param, read_ref_group_ref,
             read_user_param,
@@ -25,7 +25,7 @@ pub(crate) fn parse_spectrum_list<R: BufRead>(
     let mut list = SpectrumList {
         count,
         default_data_processing_ref: attr(start, b"defaultDataProcessingRef"),
-        spectra: Vec::with_capacity(count.unwrap_or(0)),
+        spectra: Vec::with_capacity(count.unwrap_or(0).min(PREALLOC_CAP)),
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();

@@ -7,10 +7,10 @@ use crate::{
     ion::{
         attr_meta::*,
         decoder::decode::{Metadatum, MetadatumValue},
-        utilities::{assign_attributes, common::find_node_by_tag},
+        utilities::assign_attributes,
     },
     mzml::{
-        schema::{TagId, schema},
+        schema::{SchemaNode, SchemaTree, TagId, schema},
         structs::{MzML, Spectrum},
     },
     utilities::test::mzml as parse_mzml_cached,
@@ -23,6 +23,22 @@ const ION_PATH: &str = "data/ion/test.ion";
 
 fn spectra_meta_from_test_ion() -> Vec<Metadatum> {
     super::meta::spectra_metadata(ION_PATH)
+}
+
+fn find_node_by_tag(tree: &SchemaTree, tag: TagId) -> Option<&SchemaNode> {
+    if let Some(n) = tree.root_by_tag(tag) {
+        return Some(n);
+    }
+    for root in tree.roots.values() {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if node.self_tags.contains(&tag) {
+                return Some(node);
+            }
+            stack.extend(node.children.values());
+        }
+    }
+    None
 }
 
 fn schema_attrs_for_tag(tag: TagId) -> &'static HashMap<String, Vec<String>> {

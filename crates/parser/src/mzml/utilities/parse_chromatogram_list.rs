@@ -6,9 +6,9 @@ use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda_list, parse_precursor,
-        parse_product_list::parse_product, parsing_workspace::ParsingWorkspace, read_cv_param,
-        read_ref_group_ref, read_user_param,
+        PREALLOC_CAP, ParamCollector, ParseError, attr, attr_u32, attr_usize, parse_bda_list,
+        parse_precursor, parse_product_list::parse_product, parsing_workspace::ParsingWorkspace,
+        read_cv_param, read_ref_group_ref, read_user_param,
     },
 };
 
@@ -20,7 +20,7 @@ pub(crate) fn parse_chromatogram_list<R: BufRead>(
     let mut list = ChromatogramList {
         count,
         default_data_processing_ref: attr(start, b"defaultDataProcessingRef"),
-        chromatograms: Vec::with_capacity(count.unwrap_or(0)),
+        chromatograms: Vec::with_capacity(count.unwrap_or(0).min(PREALLOC_CAP)),
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();

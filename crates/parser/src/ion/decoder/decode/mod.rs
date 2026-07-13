@@ -78,7 +78,7 @@ fn check_address_table(entries_buf: &[u8], table: &[u8], name: &str) -> IonResul
         .ok_or_else(|| IonError::from(format!("{name}: address count overflows the table size")))?;
     if table.len() as u64 != expected {
         return Err(IonError::from(format!(
-            "{name}: record size is not {ARRAY_ADDRESS_BYTES} bytes (old format); re-encode with `ionic convert --update`"
+            "{name}: record size is not {ARRAY_ADDRESS_BYTES} bytes (old format); re-encode the file from its mzML source with `ionic convert`"
         )));
     }
     Ok(())
@@ -297,7 +297,7 @@ impl IonReader {
         };
 
         let spec_meta_reader = MetaGroupReader::new(
-            Arc::from(spec_meta_buf),
+            spec_meta_buf.into_arc(),
             header.spec_meta_group_count,
             header.meta_group_size,
             header.spectrum_count,
@@ -314,7 +314,7 @@ impl IonReader {
         )?;
 
         let chrom_meta_reader = MetaGroupReader::new(
-            Arc::from(chrom_meta_buf),
+            chrom_meta_buf.into_arc(),
             header.chrom_meta_group_count,
             header.meta_group_size,
             header.chrom_count,
@@ -335,13 +335,13 @@ impl IonReader {
             source,
             spec_window_directory: WindowDirectoryCache::Unloaded,
             chrom_window_directory: WindowDirectoryCache::Unloaded,
-            spec_summary_buf: Arc::from(spec_summary_buf),
-            chrom_summary_buf: Arc::from(chrom_summary_buf),
-            spec_entries_buf: Arc::from(spec_entries_buf),
-            spec_array_addresses: Arc::from(spec_array_addresses),
-            chrom_entries_buf: Arc::from(chrom_entries_buf),
-            chrom_array_addresses: Arc::from(chrom_array_addresses),
-            global_meta_buf: Arc::from(global_meta_buf),
+            spec_summary_buf: spec_summary_buf.into_arc(),
+            chrom_summary_buf: chrom_summary_buf.into_arc(),
+            spec_entries_buf: spec_entries_buf.into_arc(),
+            spec_array_addresses: spec_array_addresses.into_arc(),
+            chrom_entries_buf: chrom_entries_buf.into_arc(),
+            chrom_array_addresses: chrom_array_addresses.into_arc(),
+            global_meta_buf: global_meta_buf.into_arc(),
             spec_container,
             chrom_container,
             spec_meta_reader,
@@ -397,8 +397,13 @@ impl IonReader {
             return;
         }
         self.chrom_window_directory = match self.load_chrom_window_directory() {
-            Some(index) => WindowDirectoryCache::Loaded(index),
-            None => WindowDirectoryCache::Missing,
+            Ok(index) => WindowDirectoryCache::Loaded(index),
+            Err(IonError::MissingChromatogramBounds) => WindowDirectoryCache::Missing,
+            Err(IonError::BadChromatogramBoundsChecksum) => WindowDirectoryCache::BadChecksum,
+            Err(IonError::MalformedChromatogramBounds(reason)) => {
+                WindowDirectoryCache::Malformed(reason)
+            }
+            Err(other) => WindowDirectoryCache::Malformed(other.to_string()),
         };
     }
 
@@ -434,9 +439,9 @@ impl IonReader {
         .map_err(|error| IonError::MalformedSpectrumBounds(error.to_string()))
     }
 
-    fn load_chrom_window_directory(&self) -> Option<WindowDirectory> {
+    fn load_chrom_window_directory(&self) -> IonResult<WindowDirectory> {
         if self.header.len_chrom_window_directory == 0 {
-            return None;
+            return Err(IonError::MissingChromatogramBounds);
         }
         let chrom_array_address_count =
             self.chrom_array_addresses.len() as u64 / ARRAY_ADDRESS_BYTES as u64;
@@ -446,22 +451,26 @@ impl IonReader {
                 offset: self.header.off_chrom_window_directory,
                 length: self.header.len_chrom_window_directory,
             })
-            .ok()?;
+            .map_err(|error| {
+                IonError::MalformedChromatogramBounds(format!("read failed: {error}"))
+            })?;
         if crc32fast::hash(&bytes) != self.header.chrom_window_directory_crc32 {
-            return None;
+            return Err(IonError::BadChromatogramBoundsChecksum);
         }
         let decompressed = self
             .decompress_window_directory(
                 &bytes,
                 self.header.plain_len_chrom_window_directory as usize,
             )
-            .ok()?;
+            .map_err(|error| {
+                IonError::MalformedChromatogramBounds(format!("decompression failed: {error}"))
+            })?;
         WindowDirectory::from_bytes(
             &decompressed,
             chrom_array_address_count,
             self.header.chrom_count,
         )
-        .ok()
+        .map_err(|error| IonError::MalformedChromatogramBounds(error.to_string()))
     }
 
     fn decompress_window_directory(&self, bytes: &[u8], plain_len: usize) -> IonResult<Vec<u8>> {

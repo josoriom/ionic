@@ -168,24 +168,37 @@ fn append_range(dst: &mut NumericArray, src: &NumericArray, start: usize, end: u
     }
 }
 
-fn range_in_sorted(x: &NumericArray, low: f64, high: f64, paired: usize) -> (usize, usize) {
-    match x {
-        NumericArray::F64(values) => {
-            let values = &values[..paired];
-            (
-                values.partition_point(|&value| value < low),
-                values.partition_point(|&value| value <= high),
-            )
+fn first_index_at_or_after(x: &NumericArray, positions: std::ops::Range<usize>, target: f64) -> usize {
+    let (mut low, mut high) = (positions.start, positions.end);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if value_at(x, middle) < target {
+            low = middle + 1;
+        } else {
+            high = middle;
         }
-        NumericArray::F32(values) => {
-            let values = &values[..paired];
-            (
-                values.partition_point(|&value| (value as f64) < low),
-                values.partition_point(|&value| (value as f64) <= high),
-            )
-        }
-        _ => (0, paired),
     }
+    low
+}
+
+fn first_index_after(x: &NumericArray, positions: std::ops::Range<usize>, target: f64) -> usize {
+    let (mut low, mut high) = (positions.start, positions.end);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if value_at(x, middle) <= target {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
+fn range_in_sorted(x: &NumericArray, low: f64, high: f64, paired: usize) -> (usize, usize) {
+    (
+        first_index_at_or_after(x, 0..paired, low),
+        first_index_after(x, 0..paired, high),
+    )
 }
 
 fn is_sorted(x: &NumericArray, len: usize) -> bool {

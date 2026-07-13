@@ -6,8 +6,8 @@ use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParamCollector, ParseError, attr, attr_usize, parsing_workspace::ParsingWorkspace,
-        read_cv_param, read_ref_group_ref, read_user_param,
+        PREALLOC_CAP, ParamCollector, ParseError, attr, attr_usize,
+        parsing_workspace::ParsingWorkspace, read_cv_param, read_ref_group_ref, read_user_param,
     },
 };
 
@@ -18,7 +18,7 @@ pub(crate) fn parse_scan_list<R: BufRead>(
     let count = attr_usize(start, b"count");
     let mut scan_list = ScanList {
         count,
-        scans: Vec::with_capacity(count.unwrap_or(0)),
+        scans: Vec::with_capacity(count.unwrap_or(0).min(PREALLOC_CAP)),
         ..Default::default()
     };
 

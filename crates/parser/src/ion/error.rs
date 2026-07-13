@@ -13,6 +13,9 @@ pub enum IonError {
     MissingSpectrumBounds,
     BadSpectrumBoundsChecksum,
     MalformedSpectrumBounds(String),
+    MissingChromatogramBounds,
+    BadChromatogramBoundsChecksum,
+    MalformedChromatogramBounds(String),
 }
 
 pub type IonResult<T> = Result<T, IonError>;
@@ -39,6 +42,15 @@ impl Display for IonError {
             Self::BadSpectrumBoundsChecksum => f.write_str("spectrum bounds (A0) checksum failed"),
             Self::MalformedSpectrumBounds(reason) => {
                 write!(f, "spectrum bounds (A0) malformed: {reason}")
+            }
+            Self::MissingChromatogramBounds => f.write_str(
+                "chromatogram has no window bounds (A0); re-encode the file with the current Ionic",
+            ),
+            Self::BadChromatogramBoundsChecksum => {
+                f.write_str("chromatogram bounds (A0) checksum failed")
+            }
+            Self::MalformedChromatogramBounds(reason) => {
+                write!(f, "chromatogram bounds (A0) malformed: {reason}")
             }
         }
     }

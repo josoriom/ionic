@@ -6,8 +6,8 @@ use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParamCollector, ParseError, attr, attr_usize, parsing_workspace::ParsingWorkspace,
-        read_cv_param, read_user_param,
+        PREALLOC_CAP, ParamCollector, ParseError, attr, attr_usize,
+        parsing_workspace::ParsingWorkspace, read_cv_param, read_user_param,
     },
 };
 
@@ -18,7 +18,7 @@ pub(crate) fn parse_precursor_list<R: BufRead>(
     let count = attr_usize(start, b"count");
     let mut list = PrecursorList {
         count,
-        precursors: Vec::with_capacity(count.unwrap_or(0)),
+        precursors: Vec::with_capacity(count.unwrap_or(0).min(PREALLOC_CAP)),
         ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {

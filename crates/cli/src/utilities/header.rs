@@ -1,27 +1,62 @@
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    io::IsTerminal,
+    path::Path,
+    sync::OnceLock,
+};
 
 use ionic::ion::{
     format::{CODEC_NONE, CODEC_ZSTD, FILE_SIGNATURE, FILE_TRAILER, HEADER_SIZE, is_supported},
     get_version_from_header,
 };
 
-const RESET: &str = "\x1b[0m";
-const GREEN: &str = "\x1b[1;32m";
-const RED: &str = "\x1b[1;31m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
+static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
+
+fn color_enabled() -> bool {
+    *COLOR_ENABLED.get_or_init(|| {
+        std::env::var_os("NO_COLOR").is_none()
+            && std::io::stdout().is_terminal()
+            && std::io::stderr().is_terminal()
+    })
+}
+
+fn ansi(code: &'static str) -> &'static str {
+    if color_enabled() { code } else { "" }
+}
+
+fn reset() -> &'static str {
+    ansi("\x1b[0m")
+}
+
+fn green() -> &'static str {
+    ansi("\x1b[1;32m")
+}
+
+fn red() -> &'static str {
+    ansi("\x1b[1;31m")
+}
+
+fn bold() -> &'static str {
+    ansi("\x1b[1m")
+}
+
+fn dim() -> &'static str {
+    ansi("\x1b[2m")
+}
 
 const SPEC_SUMMARY_ROW: usize = 128;
 
 struct Section {
+    name: &'static str,
     offset: u64,
     size: u64,
     ok: bool,
 }
 
 impl Section {
-    fn new(_name: &'static str, offset: u64, size: u64) -> Self {
+    fn new(name: &'static str, offset: u64, size: u64) -> Self {
         Self {
+            name,
             offset,
             size,
             ok: true,
@@ -44,7 +79,10 @@ pub(crate) fn check_ion_file(path: &Path) -> Result<(), String> {
     println!();
     print_sections(&view);
     println!();
-    print_integrity(&view);
+    let (failed, total) = print_integrity(&view);
+    if failed > 0 {
+        return Err(format!("{failed} of {total} integrity checks failed"));
+    }
     Ok(())
 }
 
@@ -307,26 +345,42 @@ fn open_window_directory(
 fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
     let mut sections = vec![
         Section::new(
-            "spec_window_directory",
+            "A0 — spectrum m/z-window directory",
             u64_at(header, 32),
             u64_at(header, 40),
         ),
-        Section::new("spec_summary", u64_at(header, 48), u64_at(header, 56)),
-        Section::new("spec_entries", u64_at(header, 64), u64_at(header, 72)),
         Section::new(
-            "spec_array_addresses",
+            "A1 — spectrum fast-filter summary",
+            u64_at(header, 48),
+            u64_at(header, 56),
+        ),
+        Section::new(
+            "A2 — spectrum array index",
+            u64_at(header, 64),
+            u64_at(header, 72),
+        ),
+        Section::new(
+            "A3 — spectrum array address table",
             u64_at(header, 80),
             u64_at(header, 88),
         ),
         Section::new(
-            "chrom_window_directory",
+            "B0 — chromatogram m/z-window directory",
             u64_at(header, 96),
             u64_at(header, 104),
         ),
-        Section::new("chrom_summary", u64_at(header, 112), u64_at(header, 120)),
-        Section::new("chrom_entries", u64_at(header, 128), u64_at(header, 136)),
         Section::new(
-            "chrom_array_addresses",
+            "B1 — chromatogram fast-filter summary",
+            u64_at(header, 112),
+            u64_at(header, 120),
+        ),
+        Section::new(
+            "B2 — chromatogram array index",
+            u64_at(header, 128),
+            u64_at(header, 136),
+        ),
+        Section::new(
+            "B3 — chromatogram array address table",
             u64_at(header, 144),
             u64_at(header, 152),
         ),
@@ -363,7 +417,8 @@ fn build_sections(header: &[u8], total_file_size: u64) -> Vec<Section> {
 }
 
 fn print_summary(view: &HeaderView<'_>) {
-    println!("{BOLD}File Summary{RESET}");
+    let (bold, reset) = (bold(), reset());
+    println!("{bold}File Summary{reset}");
     let sig = bytes_text(&view.header[0..8]);
     field(
         "signature",
@@ -429,58 +484,37 @@ fn print_summary(view: &HeaderView<'_>) {
 }
 
 fn print_sections(view: &HeaderView<'_>) {
-    println!("{BOLD}Sections{RESET}");
+    let (bold, reset, red, dim, green) = (bold(), reset(), red(), dim(), green());
+    println!("{bold}Sections{reset}");
     let spec_count = view.read_header_u64(256);
     let chrom_count = view.read_header_u64(264);
-    let results: [(&str, Result<(), String>); 8] = [
-        (
-            "A0 — spectrum m/z-window directory",
-            view.spec_window_dir.clone().map(|_| ()),
-        ),
-        (
-            "A1 — spectrum fast-filter summary",
-            view.open_fixed(48, 56, 128, Some(spec_count)),
-        ),
-        (
-            "A2 — spectrum array index",
-            view.open_fixed(64, 72, 16, Some(spec_count)),
-        ),
-        (
-            "A3 — spectrum array address table",
-            view.open_fixed(80, 88, 32, None),
-        ),
-        (
-            "B0 — chromatogram m/z-window directory",
-            view.chrom_window_dir.clone().map(|_| ()),
-        ),
-        (
-            "B1 — chromatogram fast-filter summary",
-            view.open_fixed(112, 120, 128, Some(chrom_count)),
-        ),
-        (
-            "B2 — chromatogram array index",
-            view.open_fixed(128, 136, 16, Some(chrom_count)),
-        ),
-        (
-            "B3 — chromatogram array address table",
-            view.open_fixed(144, 152, 32, None),
-        ),
+    let checks: [Result<(), String>; 8] = [
+        view.spec_window_dir.clone().map(|_| ()),
+        view.open_fixed(48, 56, 128, Some(spec_count)),
+        view.open_fixed(64, 72, 16, Some(spec_count)),
+        view.open_fixed(80, 88, 32, None),
+        view.chrom_window_dir.clone().map(|_| ()),
+        view.open_fixed(112, 120, 128, Some(chrom_count)),
+        view.open_fixed(128, 136, 16, Some(chrom_count)),
+        view.open_fixed(144, 152, 32, None),
     ];
 
     let mut failed = 0;
-    for (label, result) in &results {
+    for (section, result) in view.sections[..checks.len()].iter().zip(checks.iter()) {
         if let Err(why) = result {
-            println!("  {RED}✗{RESET}  {label}  {DIM}({why}){RESET}");
+            let label = section.name;
+            println!("  {red}✗{reset}  {label}  {dim}({why}){reset}");
             failed += 1;
         }
     }
     if failed == 0 {
-        println!("  {GREEN}✓{RESET}  all {} sections opened", results.len());
+        println!("  {green}✓{reset}  all {} sections opened", checks.len());
     }
 }
 
-fn print_integrity(view: &HeaderView<'_>) {
-    println!("{BOLD}Integrity Checks{RESET}");
+fn print_integrity(view: &HeaderView<'_>) -> (usize, usize) {
+    let (bold, reset, red, green) = (bold(), reset(), red(), green());
+    println!("{bold}Integrity Checks{reset}");
     let checks: &[(&str, bool)] = &[
         ("1   file signature", view.signature_ok()),
         ("2   header CRC-32", view.header_crc_ok()),
@@ -526,26 +560,28 @@ fn print_integrity(view: &HeaderView<'_>) {
     let mut failed = 0;
     for (label, ok) in checks {
         if !*ok {
-            println!("  {RED}✗{RESET}  {label}");
+            println!("  {red}✗{reset}  {label}");
             failed += 1;
         }
     }
     let passed = checks.len() - failed;
     println!();
-    let color = if failed == 0 { GREEN } else { RED };
+    let color = if failed == 0 { green } else { red };
     println!(
-        "{color}{BOLD}{passed}/{} checks passed{RESET}",
+        "{color}{bold}{passed}/{} checks passed{reset}",
         checks.len()
     );
+    (failed, checks.len())
 }
 
 fn field(name: &str, value: &str, status: Option<bool>) {
+    let (dim, reset, green, red) = (dim(), reset(), green(), red());
     let indicator = match status {
         None => String::new(),
-        Some(true) => format!("  {GREEN}✓{RESET}"),
-        Some(false) => format!("  {RED}✗{RESET}"),
+        Some(true) => format!("  {green}✓{reset}"),
+        Some(false) => format!("  {red}✗{reset}"),
     };
-    println!("  {DIM}{name:<20}{RESET}  {value}{indicator}");
+    println!("  {dim}{name:<20}{reset}  {value}{indicator}");
 }
 
 fn bytes_text(bytes: &[u8]) -> String {

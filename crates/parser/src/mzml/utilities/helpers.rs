@@ -134,6 +134,8 @@ pub fn attr_usize(e: &BytesStart, name: &[u8]) -> Option<usize> {
     attr_str(e, name).and_then(|s| s.parse().ok())
 }
 
+pub const PREALLOC_CAP: usize = 1 << 16;
+
 #[inline]
 pub fn read_cv_param(e: &BytesStart) -> CvParam {
     CvParam {

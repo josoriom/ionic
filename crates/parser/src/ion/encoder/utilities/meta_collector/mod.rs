@@ -214,19 +214,16 @@ impl ValuePool {
                     || text.contains('e')
                     || text.contains('E')
                     || text.starts_with('-') && text[1..].contains('.');
-                if looks_numeric && let Ok(n) = text.parse::<f64>() {
+                if looks_numeric
+                    && let Ok(n) = text.parse::<f64>()
+                    && n.to_string() == text
+                {
                     let index = self.numeric_count;
                     self.numeric_values.push(n);
                     self.numeric_count += 1;
                     return ValueEncoding { kind: 0, index };
                 }
-                let index = self.string_count;
-                let bytes = text.as_bytes();
-                self.string_offsets.push(self.string_bytes.len() as u32);
-                self.string_lengths.push(bytes.len() as u32);
-                self.string_bytes.extend_from_slice(bytes);
-                self.string_count += 1;
-                ValueEncoding { kind: 1, index }
+                self.store_string(text)
             }
         }
     }
@@ -234,16 +231,18 @@ impl ValuePool {
     pub(crate) fn encode_as_string(&mut self, value: Option<&str>) -> ValueEncoding {
         match value {
             None | Some("") => ValueEncoding { kind: 2, index: 0 },
-            Some(text) => {
-                let index = self.string_count;
-                let bytes = text.as_bytes();
-                self.string_offsets.push(self.string_bytes.len() as u32);
-                self.string_lengths.push(bytes.len() as u32);
-                self.string_bytes.extend_from_slice(bytes);
-                self.string_count += 1;
-                ValueEncoding { kind: 1, index }
-            }
+            Some(text) => self.store_string(text),
         }
+    }
+
+    fn store_string(&mut self, text: &str) -> ValueEncoding {
+        let index = self.string_count;
+        let bytes = text.as_bytes();
+        self.string_offsets.push(self.string_bytes.len() as u32);
+        self.string_lengths.push(bytes.len() as u32);
+        self.string_bytes.extend_from_slice(bytes);
+        self.string_count += 1;
+        ValueEncoding { kind: 1, index }
     }
 }
 

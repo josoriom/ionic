@@ -212,14 +212,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_huge_declared_counts_with_a_short_buffer_instead_of_panicking() {
-        let mut bytes = Vec::new();
+    fn rejects_window_count_whose_starts_len_wraps_to_an_empty_directory_bonus() {
+        let mut bytes = Vec::with_capacity(8);
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
 
         let result = WindowDirectory::from_bytes(&bytes, 16, 2);
 
-        assert!(result.is_err());
+        let err = match result {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!(
+                "adversarial window_count near u32::MAX must be rejected cleanly, never panic"
+            ),
+        };
+        assert!(
+            err.contains("size overflow")
+                || err.contains("length does not match")
+                || err.contains("too large for this platform"),
+            "unexpected error: {err}"
+        );
     }
 }

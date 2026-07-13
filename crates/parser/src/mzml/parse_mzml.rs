@@ -17,7 +17,7 @@ use crate::mzml::{
 fn finalize_spectrum(spectrum: &mut Spectrum) -> Result<(), ParseError> {
     if let Some(bdal) = spectrum.binary_data_array_list.as_mut() {
         for bda in &mut bdal.binary_data_arrays {
-            finalize_bda(bda)?;
+            finalize_bda(bda, spectrum.default_array_length)?;
         }
     }
     Ok(())
@@ -26,7 +26,7 @@ fn finalize_spectrum(spectrum: &mut Spectrum) -> Result<(), ParseError> {
 fn finalize_chromatogram(chrom: &mut Chromatogram) -> Result<(), ParseError> {
     if let Some(bdal) = chrom.binary_data_array_list.as_mut() {
         for bda in &mut bdal.binary_data_arrays {
-            finalize_bda(bda)?;
+            finalize_bda(bda, chrom.default_array_length)?;
         }
     }
     Ok(())

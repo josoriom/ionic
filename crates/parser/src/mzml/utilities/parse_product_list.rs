@@ -6,7 +6,7 @@ use crate::mzml::{
     schema::TagId,
     structs::*,
     utilities::{
-        ParamCollector, ParseError, attr, attr_usize, parse_isolation_window,
+        PREALLOC_CAP, ParamCollector, ParseError, attr, attr_usize, parse_isolation_window,
         parsing_workspace::ParsingWorkspace, read_cv_param, read_user_param,
     },
 };
@@ -18,7 +18,7 @@ pub(crate) fn parse_product_list<R: BufRead>(
     let count = attr_usize(start, b"count");
     let mut list = ProductList {
         count,
-        products: Vec::with_capacity(count.unwrap_or(0)),
+        products: Vec::with_capacity(count.unwrap_or(0).min(PREALLOC_CAP)),
         ..Default::default()
     };
     ws.for_each_child(start, |ws, event| {

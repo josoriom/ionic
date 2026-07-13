@@ -485,6 +485,14 @@ fn write_fixed_array_payload(
                 Ok(())
             }
         },
+        PackingId::ByteShuffle => match (data, dtype_enum) {
+            (ArrayData::F64(slice), Dtype::F64) => packing.encode(PackingInput::F64(slice), buf),
+            (ArrayData::F32(slice), Dtype::F32) => packing.encode(PackingInput::F32(slice), buf),
+            _ => {
+                write_array_data(buf, data, dtype);
+                Ok(())
+            }
+        },
         _ => {
             write_array_data(buf, data, dtype);
             Ok(())
@@ -769,6 +777,45 @@ mod tests {
         let mut summary = [0u8; SPEC_SUMMARY_SIZE];
         summary[0..8].copy_from_slice(&rt.to_le_bytes());
         summary
+    }
+
+    #[test]
+    fn byte_shuffle_array_encode_arm_shuffles_not_raw_71() {
+        use crate::ion::packing::packing_by_id;
+
+        let data: Vec<f64> = (0..600)
+            .map(|i| 100.0 + (i as f64) * 0.0137 + ((i * 7 % 13) as f64) * 0.0009)
+            .collect();
+
+        let byte_shuffle = packing_by_id(PackingId::ByteShuffle);
+
+        let mut shuffled = Vec::new();
+        write_fixed_array_payload(
+            &mut shuffled,
+            ArrayData::F64(&data),
+            FILE_DTYPE_F64,
+            Dtype::F64,
+            byte_shuffle,
+        )
+        .unwrap();
+
+        let mut raw = Vec::new();
+        write_array_data(&mut raw, ArrayData::F64(&data), FILE_DTYPE_F64);
+
+        assert_eq!(shuffled.len(), raw.len());
+        assert_ne!(
+            shuffled, raw,
+            "ByteShuffle encode arm must shuffle, not write raw bytes"
+        );
+
+        let mut expected = Vec::new();
+        byte_shuffle
+            .encode(PackingInput::F64(&data), &mut expected)
+            .unwrap();
+        assert_eq!(
+            shuffled, expected,
+            "ByteShuffle encode arm must produce exactly the SIMD byte-transpose output"
+        );
     }
 
     #[test]

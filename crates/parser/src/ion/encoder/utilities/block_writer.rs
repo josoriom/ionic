@@ -955,6 +955,67 @@ mod tests {
         }
     }
 
+    struct CountingCompressor {
+        forks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl BlockCompressor for CountingCompressor {
+        fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize> {
+            output.clear();
+            output.extend_from_slice(input);
+            Ok(input.len())
+        }
+        fn fork(&self) -> IonResult<Self> {
+            self.forks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Self {
+                forks: self.forks.clone(),
+            })
+        }
+        fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
+            shuffle_with_tail(input, output, element_stride);
+        }
+    }
+
+    #[test]
+    fn parallel_flush_pools_one_compressor_per_worker_26() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let forks = Arc::new(AtomicUsize::new(0));
+        let block_count = std::cmp::max(256, rayon::current_num_threads() * 8);
+
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            8,
+            CompressionMode::Compressed(CountingCompressor {
+                forks: forks.clone(),
+            }),
+            PackingId::ByteShuffle,
+        );
+        builder.set_par_min_blocks(0);
+        builder.set_max_pending_bytes(usize::MAX);
+
+        for i in 0..block_count {
+            builder
+                .add_item_to_box(1, 8, 4, |buf| {
+                    buf.extend_from_slice(&[(i % 256) as u8; 8]);
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        builder.finish().unwrap();
+
+        let fork_count = forks.load(Ordering::SeqCst);
+        assert!(
+            fork_count < block_count,
+            "expected the compressor to be pooled across many blocks, not forked once per block ({} blocks), got {} forks",
+            block_count,
+            fork_count
+        );
+    }
+
     #[test]
     fn block_writer_raw_single_item() {
         let mut output = VecOutput(Vec::new());

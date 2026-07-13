@@ -4,6 +4,7 @@ use std::{borrow::Cow, collections::HashMap};
 use rayon::prelude::*;
 
 use super::*;
+use crate::ion::decoder::utilities::byte_source::SourceBytes;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetadatumValue {
@@ -249,12 +250,12 @@ pub(crate) fn attach_binaries<E: BinaryArrayOwner>(
     let mut block_list: Vec<_> = blocks.into_iter().collect();
     block_list.sort_unstable_by_key(|(block_id, _)| *block_id);
 
-    let load = |(block_id, stride): (u32, usize)| -> IonResult<(u32, Vec<u8>)> {
+    let load = |(block_id, stride): (u32, usize)| -> IonResult<(u32, SourceBytes)> {
         Ok((block_id, container.read_block(block_id, stride, ctx)?))
     };
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let data: HashMap<u32, Vec<u8>> = if parallel && block_list.len() >= 4 {
+    let data: HashMap<u32, SourceBytes> = if parallel && block_list.len() >= 4 {
         block_list
             .into_par_iter()
             .map(load)
@@ -270,7 +271,7 @@ pub(crate) fn attach_binaries<E: BinaryArrayOwner>(
             .collect()
     };
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    let data: HashMap<u32, Vec<u8>> = block_list
+    let data: HashMap<u32, SourceBytes> = block_list
         .into_iter()
         .map(load)
         .collect::<IonResult<Vec<_>>>()?
@@ -347,7 +348,7 @@ fn ref_byte_range(array_address: &ArrayAddress, ctx: &str) -> IonResult<(usize, 
 }
 
 fn unfiltered_ref_bytes<'d>(
-    data: &'d HashMap<u32, Vec<u8>>,
+    data: &'d HashMap<u32, SourceBytes>,
     group: &ArrayGroup,
     array_address: &ArrayAddress,
     ctx: &str,

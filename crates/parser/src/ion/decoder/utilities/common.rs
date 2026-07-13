@@ -15,16 +15,7 @@ use crate::{
             utilities::decompression_limit::DecompressionLimit,
         },
     },
-    mzml::{
-        schema::{SchemaNode, SchemaTree as Schema, TagId},
-        structs::{BinaryDataArray, BinaryDataArrayList, NumericArray},
-    },
 };
-
-#[allow(dead_code)]
-pub(crate) const ACC_Y_INTENSITY: &str = "MS:1000515";
-#[allow(dead_code)]
-pub(crate) const ACC_Y_SNR: &str = "MS:1000786";
 
 #[inline]
 pub(crate) fn take<'a>(
@@ -276,77 +267,6 @@ pub(crate) fn vs_len_bytes(vk: &[u8], vi: &[u32], voff: &[u32], vlen: &[u32]) ->
         }
     }
     Ok(max_end)
-}
-
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn xy_lengths_from_bdal(
-    list: Option<&BinaryDataArrayList>,
-) -> (Option<usize>, Option<usize>) {
-    let Some(list) = list else {
-        return (None, None);
-    };
-    let (mut x_len, mut y_len) = (None, None);
-    for bda in &list.binary_data_arrays {
-        let len = decoded_len(bda);
-        if len == 0 {
-            continue;
-        }
-        if is_y_array(bda) {
-            y_len.get_or_insert(len);
-        } else {
-            x_len.get_or_insert(len);
-        }
-        if x_len.is_some() && y_len.is_some() {
-            break;
-        }
-    }
-    (x_len, y_len)
-}
-
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn decoded_len(bda: &BinaryDataArray) -> usize {
-    match bda.binary.as_ref() {
-        None => 0,
-        Some(bin) => match bin {
-            NumericArray::F16(v) => v.len(),
-            NumericArray::F32(v) => v.len(),
-            NumericArray::F64(v) => v.len(),
-            NumericArray::I16(v) => v.len(),
-            NumericArray::I32(v) => v.len(),
-            NumericArray::I64(v) => v.len(),
-        },
-    }
-}
-
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn is_y_array(bda: &BinaryDataArray) -> bool {
-    bda.cv_params.iter().any(|p| {
-        matches!(
-            p.accession.as_deref(),
-            Some(ACC_Y_INTENSITY) | Some(ACC_Y_SNR)
-        )
-    })
-}
-
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn find_node_by_tag(schema: &Schema, tag: TagId) -> Option<&SchemaNode> {
-    if let Some(n) = schema.root_by_tag(tag) {
-        return Some(n);
-    }
-    for root in schema.roots.values() {
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            if node.self_tags.contains(&tag) {
-                return Some(node);
-            }
-            stack.extend(node.children.values());
-        }
-    }
-    None
 }
 
 #[inline]

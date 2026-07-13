@@ -118,24 +118,6 @@ pub struct TempFile {
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl TempFile {
-    pub fn new(output_path: &Path) -> IonResult<Self> {
-        let output_folder = output_path.parent().unwrap_or_else(|| Path::new("."));
-        let output_name = output_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("ion");
-        let process_id = std::process::id();
-        let time_id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|time| time.as_nanos())
-            .unwrap_or(0);
-        let temp_name = format!(".{output_name}.tmp.{process_id}.{time_id}");
-        Ok(Self {
-            path: output_folder.join(temp_name),
-            delete_on_drop: true,
-        })
-    }
-
     pub fn in_dir(dir: &Path, tag: &str) -> IonResult<Self> {
         let process_id = std::process::id();
         let time_id = SystemTime::now()
@@ -153,18 +135,7 @@ impl TempFile {
         &self.path
     }
 
-    pub fn move_to(mut self, output_path: &Path) -> IonResult<()> {
-        fs::rename(&self.path, output_path).map_err(|err| {
-            IonError::from(format!(
-                "cannot move '{}' to '{}': {err}",
-                self.path.display(),
-                output_path.display()
-            ))
-        })?;
-        self.delete_on_drop = false;
-        Ok(())
-    }
-
+    #[cfg(test)]
     pub fn sweep_orphans(output_path: &Path) {
         let output_folder = output_path.parent().unwrap_or_else(|| Path::new("."));
         let output_name = match output_path.file_name().and_then(|value| value.to_str()) {
@@ -202,6 +173,7 @@ impl TempFile {
     }
 }
 
+#[cfg(test)]
 #[cfg(unix)]
 fn process_is_running(pid: u32) -> bool {
     unsafe extern "C" {
@@ -213,6 +185,7 @@ fn process_is_running(pid: u32) -> bool {
     std::io::Error::last_os_error().kind() == std::io::ErrorKind::PermissionDenied
 }
 
+#[cfg(test)]
 #[cfg(windows)]
 fn process_is_running(pid: u32) -> bool {
     use std::ffi::c_void;

@@ -1,11 +1,12 @@
-use std::{collections::HashMap, default::Default, sync::OnceLock};
-
 use serde::{Deserialize, Serialize};
 
-#[allow(dead_code)]
+#[cfg(test)]
+use std::{collections::HashMap, sync::OnceLock};
+
+#[cfg(test)]
 static SCHEMA: OnceLock<SchemaTree> = OnceLock::new();
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn schema() -> &'static SchemaTree {
     SCHEMA.get_or_init(|| {
         let mut tree: SchemaTree =
@@ -200,6 +201,7 @@ impl TagId {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn as_u8(self) -> u8 {
         self as u8
@@ -273,6 +275,7 @@ impl From<u8> for TagId {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Use {
@@ -280,6 +283,7 @@ pub(crate) enum Use {
     Optional,
 }
 
+#[cfg(test)]
 impl Default for Use {
     #[inline]
     fn default() -> Self {
@@ -287,10 +291,12 @@ impl Default for Use {
     }
 }
 
+#[cfg(test)]
 fn default_child_key_by_tag() -> Vec<Option<String>> {
     vec![None; 256]
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct SchemaNode {
     #[serde(rename = "self", default)]
@@ -315,6 +321,7 @@ pub(crate) struct SchemaNode {
     pub(crate) child_key_by_tag: Vec<Option<String>>,
 }
 
+#[cfg(test)]
 impl SchemaNode {
     #[inline]
     pub(crate) fn build_children_lookup(&mut self) {
@@ -339,10 +346,12 @@ impl SchemaNode {
     }
 }
 
+#[cfg(test)]
 fn default_key_by_tag() -> Vec<Option<String>> {
     vec![None; 256]
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct SchemaTree {
     #[serde(flatten)]
@@ -352,6 +361,7 @@ pub(crate) struct SchemaTree {
     root_key_by_tag: Vec<Option<String>>,
 }
 
+#[cfg(test)]
 impl SchemaTree {
     pub(crate) fn build_index(&mut self) {
         if self.root_key_by_tag.len() != 256 {

@@ -1,13 +1,12 @@
 pub(crate) mod accessions;
 pub mod ion;
-pub mod legacy;
 pub mod mzml;
 pub mod utilities;
 
 pub use ion::{
     ByteRange, BytesSource, CallbackSource, ChromatogramSummary, DataXY, IonError, IonReader,
-    IonResult, ItemKind, ItemSlice, Pixel, Range, ReadBytes, ReadOptions, Select, SpectrumSummary,
-    Window,
+    IonResult, ItemKind, ItemSlice, Pixel, Range, ReadBytes, ReadOptions, Select, SourceBytes,
+    SpectrumSummary, Window,
     decoder::{
         decode::{Metadatum, MetadatumValue},
         utilities::spectrum_source::{ScanSource, ScanSummary, TimeUnit},
@@ -22,7 +21,6 @@ pub use ion::{
 };
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub use ion::{FileSource, FileWriter};
-pub use legacy::{read_old_file_to_mzml, upgrade_old_ion};
 pub use mzml::{
     BinToMzmlError, ParseError, bin_to_mzml, parse_indexed_mzml, parse_mzml,
     structs::{Chromatogram, MzML, NumericArray, Spectrum},

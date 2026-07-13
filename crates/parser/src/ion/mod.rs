@@ -18,7 +18,7 @@ pub use decoder::{
         DataXY, IonReader, ItemKind, ItemSlice, Pixel, ReadOptions, Select, Window, open_ranges,
     },
     utilities::{
-        byte_source::{BytesSource, CallbackSource, ReadBytes},
+        byte_source::{BytesSource, CallbackSource, ReadBytes, SourceBytes},
         decompression_limit::{DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionLimit},
     },
 };

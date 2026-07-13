@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::ion::{
     ByteRange, IonError, IonResult,
-    decoder::utilities::byte_source::ReadBytes,
+    decoder::utilities::byte_source::{ReadBytes, SourceBytes},
     encoder::utilities::block_writer::{BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride},
     format::CODEC_NONE,
     packing::PackingId,
@@ -66,7 +66,7 @@ pub(crate) struct BlockReader<P: BlockProcessor> {
     container_offset: u64,
     container_len: u64,
     entries: Vec<BlockDirEntry>,
-    cache: Box<[Option<Vec<u8>>]>,
+    cache: Box<[Option<SourceBytes>]>,
     lru_prev: Box<[usize]>,
     lru_next: Box<[usize]>,
     lru_head: usize,
@@ -145,7 +145,7 @@ impl<P: BlockProcessor> BlockReader<P> {
         &self,
         block_index: usize,
         ctx: &'static str,
-    ) -> IonResult<(BlockDirEntry, Vec<u8>)> {
+    ) -> IonResult<(BlockDirEntry, SourceBytes)> {
         let entry = *self.entries.get(block_index).ok_or_else(|| {
             IonError::from(format!(
                 "{ctx}: block index {block_index} out of range (count={})",
@@ -195,17 +195,17 @@ impl<P: BlockProcessor> BlockReader<P> {
 
     fn decode_block(
         &self,
-        payload: Vec<u8>,
+        payload: SourceBytes,
         uncompressed_len: usize,
         stride: Stride,
-    ) -> IonResult<Vec<u8>> {
+    ) -> IonResult<SourceBytes> {
         self.decompression_limit
             .validate(payload.len(), uncompressed_len)?;
 
         let needs_unshuffle =
             self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
-        let mut data = if self.compression_codec == CODEC_NONE {
+        if self.compression_codec == CODEC_NONE {
             if payload.len() != uncompressed_len {
                 return Err(format!(
                     "uncompressed payload size mismatch: got {}, expected {uncompressed_len}",
@@ -213,20 +213,27 @@ impl<P: BlockProcessor> BlockReader<P> {
                 )
                 .into());
             }
-            payload
-        } else {
-            self.processor
-                .decompress(&payload, uncompressed_len, self.decompression_limit)?
-        };
-
-        if needs_unshuffle {
+            if !needs_unshuffle {
+                return Ok(payload);
+            }
             let mut scratch = vec![0u8; uncompressed_len];
             self.processor
-                .unshuffle(&data, &mut scratch, stride.as_usize());
-            data = scratch;
+                .unshuffle(&payload, &mut scratch, stride.as_usize());
+            return Ok(SourceBytes::Owned(scratch));
         }
 
-        Ok(data)
+        let decompressed =
+            self.processor
+                .decompress(&payload, uncompressed_len, self.decompression_limit)?;
+
+        if !needs_unshuffle {
+            return Ok(SourceBytes::Owned(decompressed));
+        }
+
+        let mut scratch = vec![0u8; uncompressed_len];
+        self.processor
+            .unshuffle(&decompressed, &mut scratch, stride.as_usize());
+        Ok(SourceBytes::Owned(scratch))
     }
 
     pub(crate) fn read_block(
@@ -234,7 +241,7 @@ impl<P: BlockProcessor> BlockReader<P> {
         block_id: u32,
         element_stride: usize,
         ctx: &'static str,
-    ) -> IonResult<Vec<u8>> {
+    ) -> IonResult<SourceBytes> {
         let block_index = block_id as usize;
         let stride = Stride::from_size(element_stride);
         let (entry, payload) = self.get_block_payload(block_index, ctx)?;

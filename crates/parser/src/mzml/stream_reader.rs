@@ -571,7 +571,7 @@ fn parse_or_error<T>(path: &Path, result: Result<T, ParseError>) -> IonResult<T>
 fn finish_spectrum_arrays(spectrum: &mut Spectrum) -> Result<(), ParseError> {
     if let Some(list) = spectrum.binary_data_array_list.as_mut() {
         for array in &mut list.binary_data_arrays {
-            finalize_bda(array)?;
+            finalize_bda(array, spectrum.default_array_length)?;
         }
     }
     Ok(())
@@ -581,7 +581,7 @@ fn finish_spectrum_arrays(spectrum: &mut Spectrum) -> Result<(), ParseError> {
 fn finish_chromatogram_arrays(chromatogram: &mut Chromatogram) -> Result<(), ParseError> {
     if let Some(list) = chromatogram.binary_data_array_list.as_mut() {
         for array in &mut list.binary_data_arrays {
-            finalize_bda(array)?;
+            finalize_bda(array, chromatogram.default_array_length)?;
         }
     }
     Ok(())
