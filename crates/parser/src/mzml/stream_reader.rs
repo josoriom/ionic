@@ -11,14 +11,6 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
-use crate::{
-    ion::{
-        IonResult,
-        encoder::scan_stream::{ScanStream, MemoryReader},
-    },
-    mzml::structs::{Chromatogram, MzML, Spectrum},
-};
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::{
     ion::IonError,
@@ -38,6 +30,13 @@ use crate::{
             read_user_param, tag_id_from_bytes,
         },
     },
+};
+use crate::{
+    ion::{
+        IonResult,
+        encoder::scan_stream::{MemoryReader, ScanStream},
+    },
+    mzml::structs::{Chromatogram, MzML, Spectrum},
 };
 
 pub struct MzmlReader {
@@ -572,7 +571,7 @@ fn parse_or_error<T>(path: &Path, result: Result<T, ParseError>) -> IonResult<T>
 fn finish_spectrum_arrays(spectrum: &mut Spectrum) -> Result<(), ParseError> {
     if let Some(list) = spectrum.binary_data_array_list.as_mut() {
         for array in &mut list.binary_data_arrays {
-            finalize_bda(array)?;
+            finalize_bda(array, spectrum.default_array_length)?;
         }
     }
     Ok(())
@@ -582,7 +581,7 @@ fn finish_spectrum_arrays(spectrum: &mut Spectrum) -> Result<(), ParseError> {
 fn finish_chromatogram_arrays(chromatogram: &mut Chromatogram) -> Result<(), ParseError> {
     if let Some(list) = chromatogram.binary_data_array_list.as_mut() {
         for array in &mut list.binary_data_arrays {
-            finalize_bda(array)?;
+            finalize_bda(array, chromatogram.default_array_length)?;
         }
     }
     Ok(())

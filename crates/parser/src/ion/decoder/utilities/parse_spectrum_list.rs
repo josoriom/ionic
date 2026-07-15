@@ -1,6 +1,5 @@
 use crate::{
     accessions::ACC_MS_LEVEL,
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{
             ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF, ACC_ATTR_DEFAULT_ARRAY_LENGTH,
@@ -8,6 +7,7 @@ use crate::{
             ACC_ATTR_NATIVE_ID, ACC_ATTR_REF, ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF,
             ACC_ATTR_SPOT_ID,
         },
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
             common::{get_attr_text, get_attr_u32},

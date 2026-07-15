@@ -1,8 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
-use common::{decode_ion, encode_to_ion, semantic_fingerprint};
+use common::{assertions::*, decode_ion, encode_to_ion, semantic_fingerprint, test_files};
 use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml};
 
 #[test]
@@ -61,4 +59,3 @@ fn internal_test_file_regression_guard_anpc() {
     let out = decode_ion(&bytes).expect("decode should succeed");
     assert_mzml_semantic_eq(src, &out);
 }
-

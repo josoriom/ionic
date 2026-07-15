@@ -1,19 +1,21 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
-use miniz_oxide::inflate::decompress_to_vec_zlib;
-use quick_xml::events::BytesStart;
 use std::io::BufRead;
+
+use base64::{Engine, engine::general_purpose::STANDARD};
+use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
+use quick_xml::events::BytesStart;
 
 use crate::{
     accessions::{
         ACC_COMPRESSION_ZLIB, ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR, ACC_FLOAT_64BIT_STR,
         ACC_INT_16BIT_STR, ACC_INT_32BIT_STR, ACC_INT_64BIT_STR,
     },
+    ion::DecompressionLimit,
     mzml::{
         schema::TagId,
-        structs::{NumericArray, BinaryDataArray, BinaryDataArrayList, NumericType},
+        structs::{BinaryDataArray, BinaryDataArrayList, NumericArray, NumericType},
         utilities::{
-            ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize, read_base64_binary,
-            read_cv_param, read_ref_group_ref, read_user_param,
+            PREALLOC_CAP, ParamCollector, ParseError, ParsingWorkspace, attr, attr_usize,
+            read_base64_binary, read_cv_param, read_ref_group_ref, read_user_param,
         },
     },
 };
@@ -25,7 +27,7 @@ pub(crate) fn parse_bda_list<R: BufRead>(
     let count = attr_usize(start, b"count");
     let mut list = BinaryDataArrayList {
         count,
-        binary_data_arrays: Vec::with_capacity(count.unwrap_or(0)),
+        binary_data_arrays: Vec::with_capacity(count.unwrap_or(0).min(PREALLOC_CAP)),
     };
     ws.for_each_child(start, |ws, event| {
         let (tag, element, is_open) = event.into_parts();
@@ -76,7 +78,7 @@ pub(crate) fn parse_bda<R: BufRead>(
             }
             TagId::Binary => {
                 if let Some(len) = bda.encoded_length {
-                    base64_bytes.reserve(len);
+                    base64_bytes.reserve(len.min(PREALLOC_CAP));
                 }
                 let closing = element.name().as_ref().to_vec();
                 read_base64_binary(ws, &closing, &mut base64_bytes)?;
@@ -97,14 +99,37 @@ pub(crate) fn parse_bda<R: BufRead>(
     Ok(bda)
 }
 
-pub(crate) fn finalize_bda(bda: &mut BinaryDataArray) -> Result<(), ParseError> {
+const MAX_NUMERIC_STRIDE_BYTES: usize = 8;
+const DECOMPRESSED_SIZE_MARGIN_BYTES: usize = 1024;
+const MAX_UNCOMPRESSED_SIZE_WITHOUT_DECLARED_LENGTH: usize = 1 << 31;
+
+fn max_decompressed_size(array_length: Option<usize>) -> usize {
+    match array_length {
+        Some(declared_length) => declared_length
+            .saturating_mul(MAX_NUMERIC_STRIDE_BYTES)
+            .saturating_add(DECOMPRESSED_SIZE_MARGIN_BYTES),
+        None => MAX_UNCOMPRESSED_SIZE_WITHOUT_DECLARED_LENGTH,
+    }
+}
+
+pub(crate) fn finalize_bda(
+    bda: &mut BinaryDataArray,
+    default_array_length: Option<usize>,
+) -> Result<(), ParseError> {
     let Some(base64_bytes) = bda.pending_base64.take() else {
         return Ok(());
     };
-    let mut decoded = Vec::with_capacity(base64_bytes.len() * 3 / 4 + 8);
+    let mut decoded = Vec::with_capacity(base64_bytes.len() / 4 * 3 + 8);
     STANDARD.decode_vec(&base64_bytes, &mut decoded)?;
     if bda.pending_zlib {
-        decoded = decompress_to_vec_zlib(&decoded)
+        let declared_length = bda.array_length.or(default_array_length);
+        let max_size = max_decompressed_size(declared_length);
+        if declared_length.is_some() {
+            DecompressionLimit::default()
+                .validate(decoded.len(), max_size)
+                .map_err(|error| ParseError::Decompress(error.to_string()))?;
+        }
+        decoded = decompress_to_vec_zlib_with_limit(&decoded, max_size)
             .map_err(|e| ParseError::Decompress(format!("{e:?}")))?;
     }
     bda.binary = Some(decode_binary_data(

@@ -1,7 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
+use common::{assertions::*, test_files};
 
 #[test]
 fn repeated_spectrum_access_is_stable() {

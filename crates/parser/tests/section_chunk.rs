@@ -1,14 +1,7 @@
 use std::path::PathBuf;
 
 use ionic::{
-    ion::{
-        encoder::encode::{
-            WriteOptions,
-            TARGET_BLOCK_UNCOMPRESSED_BYTES,
-        },
-        encoder::ion_writer::write_mzml_to_ion,
-        encoder::utilities::SectionStorage,
-    },
+    ion::{SectionStorage, TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions, write_mzml_to_ion},
     mzml::parse_mzml::parse_mzml,
 };
 

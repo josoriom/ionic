@@ -1,18 +1,22 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
 use std::fmt::{Display, Formatter};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use miniz_oxide::deflate::compress_to_vec_zlib;
-use quick_xml::Writer;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::{
+    Writer,
+    events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event},
+};
 use sha1::{Digest, Sha1};
 
-use crate::accessions::{
-    ACC_ANALYZER_QUAD, ACC_ANALYZER_TOF, ACC_COMPRESSION_NONE, ACC_COMPRESSION_ZLIB,
-    ACC_DETECTOR_EM, ACC_DETECTOR_PHOTOMULT, ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR,
-    ACC_FLOAT_64BIT_STR, ACC_INT_16BIT_STR, ACC_INT_32BIT_STR, ACC_INT_64BIT_STR, ACC_SOURCE_EI,
-    ACC_SOURCE_ESI,
+use crate::{
+    accessions::{
+        ACC_ANALYZER_QUAD, ACC_ANALYZER_TOF, ACC_COMPRESSION_NONE, ACC_COMPRESSION_ZLIB,
+        ACC_DETECTOR_EM, ACC_DETECTOR_PHOTOMULT, ACC_FLOAT_16BIT_STR, ACC_FLOAT_32BIT_STR,
+        ACC_FLOAT_64BIT_STR, ACC_INT_16BIT_STR, ACC_INT_32BIT_STR, ACC_INT_64BIT_STR,
+        ACC_SOURCE_EI, ACC_SOURCE_ESI,
+    },
+    mzml::structs::*,
 };
-use crate::mzml::structs::*;
 
 #[derive(Debug)]
 pub enum BinToMzmlError {
@@ -185,7 +189,21 @@ pub fn bin_to_mzml(mzml: &MzML) -> Result<Vec<u8>, BinToMzmlError> {
 
     writer.write_event(Event::End(BytesEnd::new("indexedmzML")))?;
 
-    Ok(writer.into_inner())
+    let output = writer.into_inner();
+    if first_illegal_xml_byte(&output).is_some() {
+        return Err(BinToMzmlError::InvalidData(
+            "output contains an XML-1.0-illegal control character",
+        ));
+    }
+    Ok(output)
+}
+
+fn first_illegal_xml_byte(bytes: &[u8]) -> Option<(usize, u8)> {
+    bytes
+        .iter()
+        .enumerate()
+        .find(|&(_, &b)| matches!(b, 0x00..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F))
+        .map(|(i, &b)| (i, b))
 }
 
 fn default_cv_list() -> CvList {
@@ -1148,6 +1166,7 @@ fn write_binary_data_array(
 
     let cv_has_zlib = has_accession(ACC_COMPRESSION_ZLIB);
     let cv_has_no_comp = has_accession(ACC_COMPRESSION_NONE);
+    let synthesize_no_compression = !cv_has_zlib && !cv_has_no_comp;
 
     let cv_has_f64 = has_accession(ACC_FLOAT_64BIT_STR);
     let cv_has_f32 = has_accession(ACC_FLOAT_32BIT_STR);
@@ -1216,11 +1235,6 @@ fn write_binary_data_array(
             }
         };
 
-        if !cv_has_zlib && !cv_has_no_comp {
-            return Err(BinToMzmlError::InvalidData(
-                "binaryDataArray missing compression cvParam (MS:1000576 or MS:1000574)",
-            ));
-        }
         if cv_has_zlib && !raw_bytes.is_empty() {
             raw_bytes = compress_to_vec_zlib(&raw_bytes, 6);
         }
@@ -1301,6 +1315,17 @@ fn write_binary_data_array(
     }
 
     write_cv_params(writer, &bda.cv_params)?;
+    if synthesize_no_compression {
+        write_cv_param(
+            writer,
+            &CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some(ACC_COMPRESSION_NONE.to_string()),
+                name: "no compression".to_string(),
+                ..Default::default()
+            },
+        )?;
+    }
     write_user_params(writer, &bda.user_params)?;
 
     writer.write_event(Event::Start(BytesStart::new("binary")))?;

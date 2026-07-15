@@ -1,10 +1,9 @@
 mod common;
 
-use common::helpers::{ensure_first_product_mut, ensure_referenceable_param_group};
-use common::test_files;
 use common::{
     chromatogram_by_id, decode_ion, encode_to_ion, first_scan, first_scan_mut,
-    product_list_of_spectrum, spectrum_by_id,
+    helpers::{ensure_first_product_mut, ensure_referenceable_param_group},
+    product_list_of_spectrum, spectrum_by_id, test_files,
 };
 use ionic::mzml::structs::*;
 

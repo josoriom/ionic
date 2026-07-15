@@ -1,6 +1,8 @@
-use crate::accessions as acc_const;
-use crate::ion::attr_meta::parse_accession_tail;
-use crate::mzml::structs::{NumericArray, CvParam, MzML, Spectrum};
+use crate::{
+    accessions as acc_const,
+    ion::attr_meta::parse_accession_tail,
+    mzml::structs::{CvParam, MzML, NumericArray, Spectrum},
+};
 
 #[inline]
 fn acc(s: Option<&str>) -> u32 {
@@ -240,10 +242,7 @@ fn rt_from_params(params: &[CvParam]) -> Option<(f64, TimeUnit)> {
             if !value.is_finite() {
                 return None;
             }
-            let unit = time_unit_from(
-                param.unit_accession.as_deref(),
-                param.unit_name.as_deref(),
-            );
+            let unit = time_unit_from(param.unit_accession.as_deref(), param.unit_name.as_deref());
             return Some((value, unit));
         }
     }

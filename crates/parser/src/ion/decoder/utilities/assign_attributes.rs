@@ -1,15 +1,22 @@
-use crate::decoder::decode::{Metadatum, MetadatumValue};
-use crate::ion::attr_meta::{
-    ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
-    ACC_ATTR_DEFAULT_ARRAY_LENGTH, ACC_ATTR_DEFAULT_DATA_PROCESSING_REF, ACC_ATTR_ENCODED_LENGTH,
-    ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_ID, ACC_ATTR_INDEX,
-    ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_NATIVE_ID, ACC_ATTR_SCAN_NUMBER,
-    ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF, ACC_ATTR_SPOT_ID, AccessionTail, CV_REF_ATTR,
-};
-use crate::mzml::schema::TagId;
-use crate::mzml::structs::{
-    BinaryDataArray, Chromatogram, ChromatogramList, Precursor, Product, Scan, Spectrum,
-    SpectrumList,
+use crate::{
+    ion::{
+        attr_meta::{
+            ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
+            ACC_ATTR_DEFAULT_ARRAY_LENGTH, ACC_ATTR_DEFAULT_DATA_PROCESSING_REF,
+            ACC_ATTR_ENCODED_LENGTH, ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_ID, ACC_ATTR_INDEX,
+            ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_NATIVE_ID, ACC_ATTR_SCAN_NUMBER,
+            ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF, ACC_ATTR_SPOT_ID, AccessionTail,
+            CV_REF_ATTR,
+        },
+        decoder::decode::{Metadatum, MetadatumValue},
+    },
+    mzml::{
+        schema::TagId,
+        structs::{
+            BinaryDataArray, Chromatogram, ChromatogramList, Precursor, Product, Scan, Spectrum,
+            SpectrumList,
+        },
+    },
 };
 
 pub(crate) trait EmitAttributes {

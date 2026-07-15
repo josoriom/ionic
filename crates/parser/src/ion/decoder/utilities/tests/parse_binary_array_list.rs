@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::mzml::structs::CvParam;
 use crate::{
     ion::utilities::{
         children_lookup::{ChildrenLookup, OwnerRows},
         parse_binary_data_array_list,
     },
-    mzml::schema::TagId,
+    mzml::{schema::TagId, structs::CvParam},
 };
 
 const PATH: &str = "data/ion/test.ion";

@@ -1,5 +1,6 @@
-use crate::{decoder::decode::Metadatum, mzml::schema::TagId};
 use hashbrown::{HashMap as HbHashMap, HashSet as HbHashSet, hash_map};
+
+use crate::{ion::decoder::decode::Metadatum, mzml::schema::TagId};
 
 type Map<K, V> = HbHashMap<K, V>;
 
@@ -171,7 +172,7 @@ const fn encode_parent_tag_key(parent_id: u32, tag: TagId) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::decode::MetadatumValue;
+    use crate::ion::decoder::decode::MetadatumValue;
 
     fn metadatum(id: u32, parent_id: u32, tag_id: TagId) -> Metadatum {
         Metadatum {

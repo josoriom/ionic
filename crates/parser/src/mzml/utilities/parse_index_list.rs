@@ -1,8 +1,9 @@
+use std::io::{BufRead, Cursor};
+
 use quick_xml::{
     Reader,
     events::{BytesStart, Event},
 };
-use std::io::{BufRead, Cursor};
 
 use crate::mzml::{
     structs::*,

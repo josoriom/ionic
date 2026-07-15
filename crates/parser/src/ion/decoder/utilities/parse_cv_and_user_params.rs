@@ -1,14 +1,16 @@
 use crate::{
-    decoder::decode::{Metadatum, MetadatumValue},
     ion::{
         attr_meta::CV_REF_ATTR,
+        decoder::decode::{Metadatum, MetadatumValue},
         utilities::{
             common::{is_cv_prefix, unit_cv_ref, value_to_opt_string},
             cv_table,
         },
     },
-    mzml::schema::TagId,
-    mzml::structs::{CvParam, UserParam},
+    mzml::{
+        schema::TagId,
+        structs::{CvParam, UserParam},
+    },
 };
 
 #[inline]

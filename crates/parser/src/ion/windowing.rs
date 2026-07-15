@@ -37,7 +37,11 @@ impl Windowing {
         window_index(self.width, mz)
     }
 
-    pub(crate) fn split_sorted(&self, count: usize, mz_at: impl Fn(usize) -> f64) -> Vec<WindowRange> {
+    pub(crate) fn split_sorted(
+        &self,
+        count: usize,
+        mz_at: impl Fn(usize) -> f64,
+    ) -> Vec<WindowRange> {
         let mut ranges = Vec::new();
         let mut start = 0;
         while start < count {
@@ -82,9 +86,30 @@ mod tests {
         let mz = [10.0, 40.0, 60.0, 90.0, 120.0];
         let ranges = windowing.split_sorted(mz.len(), |i| mz[i]);
         assert_eq!(window_indices(&ranges), vec![0, 1, 2]);
-        assert_eq!(ranges[0], WindowRange { window_index: 0, start: 0, end: 2 });
-        assert_eq!(ranges[1], WindowRange { window_index: 1, start: 2, end: 4 });
-        assert_eq!(ranges[2], WindowRange { window_index: 2, start: 4, end: 5 });
+        assert_eq!(
+            ranges[0],
+            WindowRange {
+                window_index: 0,
+                start: 0,
+                end: 2
+            }
+        );
+        assert_eq!(
+            ranges[1],
+            WindowRange {
+                window_index: 1,
+                start: 2,
+                end: 4
+            }
+        );
+        assert_eq!(
+            ranges[2],
+            WindowRange {
+                window_index: 2,
+                start: 4,
+                end: 5
+            }
+        );
     }
 
     #[test]

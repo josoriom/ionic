@@ -1,7 +1,9 @@
+use hashbrown::HashSet;
+
 use crate::{
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF},
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
             common::get_attr_text,
@@ -16,7 +18,6 @@ use crate::{
         },
     },
 };
-use hashbrown::HashSet;
 
 const ACC_SUFFIX_TARGET_MZ: &str = "1000827";
 const ACC_SUFFIX_TARGET_NAME: &str = "1001225";

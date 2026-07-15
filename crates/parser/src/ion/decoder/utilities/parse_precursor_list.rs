@@ -1,10 +1,10 @@
 use crate::{
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{
             ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_REF, ACC_ATTR_SOURCE_FILE_REF,
             ACC_ATTR_SPECTRUM_REF,
         },
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,

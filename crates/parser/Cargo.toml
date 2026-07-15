@@ -14,6 +14,7 @@ hashbrown = "0.17.1"
 itoa = { workspace = true }
 crc32fast = "1.5.0"
 sha1 = "0.11"
+bytemuck = "1"
 
 [target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies]
 zstd = { workspace = true }

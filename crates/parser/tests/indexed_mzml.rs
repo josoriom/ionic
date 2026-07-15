@@ -1,7 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
+use common::{assertions::*, test_files};
 use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_indexed_mzml};
 
 #[test]

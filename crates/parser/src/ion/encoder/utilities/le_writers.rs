@@ -1,5 +1,3 @@
-use std::slice;
-
 #[inline]
 pub(crate) fn write_u32_le(buf: &mut Vec<u8>, v: u32) {
     buf.extend_from_slice(&v.to_le_bytes());
@@ -38,15 +36,10 @@ fn write_i64_le_scalar(buf: &mut Vec<u8>, v: i64) {
 }
 
 macro_rules! write_typed_slice_le {
-    ($fn_name:ident, $elem_ty:ty, $elem_size:expr, $scalar_writer:ident) => {
+    ($fn_name:ident, $elem_ty:ty, $scalar_writer:ident) => {
         pub(crate) fn $fn_name(buf: &mut Vec<u8>, values: &[$elem_ty]) {
             if cfg!(target_endian = "little") {
-                unsafe {
-                    buf.extend_from_slice(slice::from_raw_parts(
-                        values.as_ptr() as *const u8,
-                        values.len() * $elem_size,
-                    ));
-                }
+                buf.extend_from_slice(bytemuck::cast_slice::<$elem_ty, u8>(values));
             } else {
                 for &v in values {
                     $scalar_writer(buf, v);
@@ -56,13 +49,13 @@ macro_rules! write_typed_slice_le {
     };
 }
 
-write_typed_slice_le!(write_u16_slice_le, u16, 2, write_u16_le_scalar);
-write_typed_slice_le!(write_i16_slice_le, i16, 2, write_i16_le_scalar);
-write_typed_slice_le!(write_i32_slice_le, i32, 4, write_i32_le_scalar);
-write_typed_slice_le!(write_i64_slice_le, i64, 8, write_i64_le_scalar);
-write_typed_slice_le!(write_u32_slice_le, u32, 4, write_u32_le);
-write_typed_slice_le!(write_f32_slice_le, f32, 4, write_f32_le);
-write_typed_slice_le!(write_f64_slice_le, f64, 8, write_f64_le);
+write_typed_slice_le!(write_u16_slice_le, u16, write_u16_le_scalar);
+write_typed_slice_le!(write_i16_slice_le, i16, write_i16_le_scalar);
+write_typed_slice_le!(write_i32_slice_le, i32, write_i32_le_scalar);
+write_typed_slice_le!(write_i64_slice_le, i64, write_i64_le_scalar);
+write_typed_slice_le!(write_u32_slice_le, u32, write_u32_le);
+write_typed_slice_le!(write_f32_slice_le, f32, write_f32_le);
+write_typed_slice_le!(write_f64_slice_le, f64, write_f64_le);
 
 #[cfg(test)]
 mod tests {

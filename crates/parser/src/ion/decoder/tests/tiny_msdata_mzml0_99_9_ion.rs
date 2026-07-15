@@ -1,12 +1,12 @@
+use std::sync::OnceLock;
+
 use crate::{
-    mzml::structs::{NumericArray, MzML, NumericType},
+    mzml::structs::{MzML, NumericArray, NumericType},
     utilities::test::{
         CvRefMode, assert_cv, assert_software_param, parse_ion_as_mzml, spectrum_description,
         spectrum_precursor_list, spectrum_scan_list,
     },
 };
-
-use std::sync::OnceLock;
 
 static MZML_CACHE: OnceLock<MzML> = OnceLock::new();
 
@@ -598,7 +598,7 @@ fn tiny_msdata_mzml0_99_9_second_spectrum() {
         "isolation window lower offset",
         "MS:1000828",
         "MS",
-        Some("2"),
+        Some("2.0"),
         None,
     );
     assert_cv(
@@ -607,7 +607,7 @@ fn tiny_msdata_mzml0_99_9_second_spectrum() {
         "isolation window upper offset",
         "MS:1000829",
         "MS",
-        Some("2"),
+        Some("2.0"),
         None,
     );
     let sil = p0

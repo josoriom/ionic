@@ -1,7 +1,7 @@
 use crate::{
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_ID, ACC_ATTR_ORDER, ACC_ATTR_REF, ACC_ATTR_SCAN_SETTINGS_REF},
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
             common::get_attr_text,
@@ -244,7 +244,7 @@ fn parse_param_group_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::decode::MetadatumValue;
+    use crate::ion::decoder::decode::MetadatumValue;
 
     fn make_metadatum(id: u32, parent_id: u32, tag_id: TagId) -> Metadatum {
         Metadatum {

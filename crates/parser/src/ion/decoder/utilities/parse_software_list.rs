@@ -1,7 +1,7 @@
 use crate::{
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{ACC_ATTR_COUNT, ACC_ATTR_ID, ACC_ATTR_NAME, ACC_ATTR_REF, ACC_ATTR_VERSION},
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
             common::get_attr_text,

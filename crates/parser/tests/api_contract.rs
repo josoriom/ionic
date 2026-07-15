@@ -7,15 +7,10 @@ use common::{
     decode_ion, encode_to_ion, test_files,
 };
 use ionic::{
-    ByteRange, ScanSource, Range,
+    ByteRange, BytesSource, CallbackSource, Range, ScanSource,
     ion::{
-        IonReader, ReadOptions, IonError, open_ranges,
-        encoder::{
-            encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES},
-            ion_writer::IonWriter,
-            utilities::SectionStorage,
-            scan_stream::MemoryReader,
-        },
+        IonError, IonReader, IonWriter, MemoryReader, ReadOptions, SectionStorage,
+        TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions, open_ranges,
     },
 };
 
@@ -50,7 +45,9 @@ fn encode_with_segments(src: &ionic::mzml::structs::MzML) -> Vec<u8> {
     let config = segmented_write_config();
     let mut writer = IonWriter::create(&mut bytes, config).expect("writer begin must succeed");
     let mut reader = MemoryReader::new(src.clone());
-    writer.write_stream(&mut reader).expect("write_stream must succeed");
+    writer
+        .write_stream(&mut reader)
+        .expect("write_stream must succeed");
     bytes
 }
 
@@ -70,7 +67,9 @@ fn encode_windowed(src: &ionic::mzml::structs::MzML) -> Vec<u8> {
     let config = windowed_write_config();
     let mut writer = IonWriter::create(&mut bytes, config).expect("writer begin must succeed");
     let mut reader = MemoryReader::new(src.clone());
-    writer.write_stream(&mut reader).expect("write_stream must succeed");
+    writer
+        .write_stream(&mut reader)
+        .expect("write_stream must succeed");
     bytes
 }
 
@@ -107,7 +106,9 @@ fn root_level_imports_cover_a_full_read_workflow() {
     let _spectrum: Option<ionic::Spectrum> = reader.spectrum(0).expect("get_spectrum");
 
     reader.require_bounds().expect("bounds must load");
-    let peaks: ionic::DataXY = reader.read_window(0, Range { from: 0.0, to: 1e9 }).expect("read_mz_range");
+    let peaks: ionic::DataXY = reader
+        .read_window(0, Range { from: 0.0, to: 1e9 })
+        .expect("read_mz_range");
     assert_eq!(peaks.x.len(), peaks.y.len());
 
     let _mzml: ionic::MzML = reader.to_mzml().expect("to_mzml");
@@ -118,7 +119,10 @@ fn encode_is_deterministic() {
     let src = test_files::tiny_pwiz_11();
     let first = encode_to_ion(src, 12, false);
     let second = encode_to_ion(src, 12, false);
-    assert_eq!(first, second, "two identical encodes must produce byte-identical output");
+    assert_eq!(
+        first, second,
+        "two identical encodes must produce byte-identical output"
+    );
 }
 
 #[test]
@@ -143,7 +147,8 @@ fn open_bytes_to_mzml_matches_reference() {
     let bytes = encode_to_ion(src, 6, false);
     let reference = decode_ion(&bytes).expect("reference decode must succeed");
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open_bytes must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open_bytes must succeed");
     let result = decoder.to_mzml().expect("to_mzml must succeed");
     assert_mzml_semantic_eq(&reference, &result);
 }
@@ -155,15 +160,15 @@ fn open_via_callback_to_mzml_matches_reference() {
     let reference = decode_ion(&bytes).expect("reference decode must succeed");
     let shared: Arc<[u8]> = Arc::from(bytes.as_slice());
     let callback_bytes = shared.clone();
-    let mut decoder = IonReader::open_remote(
-        move |range: ByteRange| {
+    let mut decoder = IonReader::open_source(
+        Arc::new(CallbackSource::new(move |range: ByteRange| {
             let start = range.offset as usize;
             let end = start + range.length as usize;
             callback_bytes
                 .get(start..end)
                 .map(|slice| slice.to_vec())
                 .ok_or_else(|| IonError::from("callback: read out of bounds"))
-        },
+        })),
         default_config(),
     )
     .expect("open_remote must succeed");
@@ -177,19 +182,21 @@ fn arc_and_callback_open_paths_give_equal_results() {
     let bytes = encode_to_ion(src, 6, false);
 
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut arc_decoder = IonReader::open_bytes(arc.clone(), default_config()).expect("open_bytes must succeed");
+    let mut arc_decoder =
+        IonReader::open_source(Arc::new(BytesSource::new(arc.clone())), default_config())
+            .expect("open_bytes must succeed");
     let arc_mzml = arc_decoder.to_mzml().expect("arc to_mzml must succeed");
 
     let callback_data = arc.clone();
-    let mut cb_decoder = IonReader::open_remote(
-        move |range: ByteRange| {
+    let mut cb_decoder = IonReader::open_source(
+        Arc::new(CallbackSource::new(move |range: ByteRange| {
             let start = range.offset as usize;
             let end = start + range.length as usize;
             callback_data
                 .get(start..end)
                 .map(|slice| slice.to_vec())
                 .ok_or_else(|| IonError::from("callback: out of bounds"))
-        },
+        })),
         default_config(),
     )
     .expect("open_remote must succeed");
@@ -199,11 +206,42 @@ fn arc_and_callback_open_paths_give_equal_results() {
 }
 
 #[test]
+fn open_source_with_bytes_source_shares_the_arc_instead_of_copying() {
+    let src = test_files::tiny_pwiz_11();
+    let bytes = encode_to_ion(src, 6, false);
+    let shared: Arc<[u8]> = Arc::from(bytes.as_slice());
+    let pointer_before = Arc::as_ptr(&shared);
+    let strong_count_before = Arc::strong_count(&shared);
+
+    let reader =
+        IonReader::open_source(Arc::new(BytesSource::new(shared.clone())), default_config())
+            .expect("open_source must succeed");
+
+    assert_eq!(
+        Arc::as_ptr(&shared),
+        pointer_before,
+        "the shared buffer must stay at the same address"
+    );
+    assert!(
+        Arc::strong_count(&shared) > strong_count_before,
+        "BytesSource must hold a clone of the Arc rather than a fresh copy of the bytes"
+    );
+
+    drop(reader);
+    assert_eq!(
+        Arc::strong_count(&shared),
+        strong_count_before,
+        "dropping the reader must release the shared clone"
+    );
+}
+
+#[test]
 fn spectrum_count_and_chromatogram_count_are_stable() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 6, false);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     let spec_count = decoder.spectrum_count();
     let chrom_count = decoder.chromatogram_count();
     assert!(spec_count > 0, "spectrum count must be positive");
@@ -215,11 +253,15 @@ fn scan_source_summary_count_equals_spectrum_count() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 6, false);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     let total = decoder.spectrum_count();
     let mut counted = 0usize;
     decoder.for_each_summary(&mut |_, _| counted += 1);
-    assert_eq!(counted as u64, total, "for_each_summary count must equal spectrum_count");
+    assert_eq!(
+        counted as u64, total,
+        "for_each_summary count must equal spectrum_count"
+    );
 }
 
 #[test]
@@ -227,13 +269,18 @@ fn load_scan_gives_arrays_for_first_spectrum() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 6, false);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     let mut mz = Vec::new();
     let mut intensity = Vec::new();
     let loaded = decoder.load_scan(0, &mut mz, &mut intensity);
     assert!(loaded, "load_scan must return true for index 0");
     assert!(!mz.is_empty(), "mz must not be empty");
-    assert_eq!(mz.len(), intensity.len(), "mz and intensity must have equal length");
+    assert_eq!(
+        mz.len(),
+        intensity.len(),
+        "mz and intensity must have equal length"
+    );
 }
 
 #[test]
@@ -273,7 +320,9 @@ fn write_via_memory_reader_matches_direct_encode() {
     let mut reader = MemoryReader::new(src.clone());
     let mut writer =
         IonWriter::create(&mut stream_bytes, stream_write_config()).expect("begin must succeed");
-    writer.write_stream(&mut reader).expect("write_stream must succeed");
+    writer
+        .write_stream(&mut reader)
+        .expect("write_stream must succeed");
     let stream_decoded = decode_ion(&stream_bytes).expect("stream decode must succeed");
     assert_mzml_semantic_eq(&reference, &stream_decoded);
 }
@@ -283,7 +332,8 @@ fn require_bounds_succeeds_for_segmented_file() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_with_segments(src);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     decoder
         .require_bounds()
         .expect("require_bounds must succeed when file has window bounds");
@@ -294,7 +344,8 @@ fn mz_range_read_returns_data_for_segmented_file() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_with_segments(src);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     decoder
         .require_bounds()
         .expect("require_bounds must succeed");
@@ -306,7 +357,10 @@ fn mz_range_read_returns_data_for_segmented_file() {
         window.y.len(),
         "window mz and intensity must have equal length"
     );
-    assert!(!window.x.is_empty(), "wide window must return data for a non-empty spectrum");
+    assert!(
+        !window.x.is_empty(),
+        "wide window must return data for a non-empty spectrum"
+    );
 }
 
 #[test]
@@ -314,7 +368,8 @@ fn mz_range_matches_get_spectrum_for_full_range() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_with_segments(src);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     decoder
         .require_bounds()
         .expect("require_bounds must succeed");
@@ -346,14 +401,18 @@ fn mz_range_block_ranges_are_non_empty_for_segmented_file() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_with_segments(src);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let mut decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let mut decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     decoder
         .require_bounds()
         .expect("require_bounds must succeed");
     let ranges = decoder
         .byte_ranges(0, Range { from: 0.0, to: 1e9 })
         .expect("plan_mz_range must succeed");
-    assert!(!ranges.is_empty(), "wide window must return at least one block range");
+    assert!(
+        !ranges.is_empty(),
+        "wide window must return at least one block range"
+    );
 }
 
 #[test]
@@ -361,7 +420,8 @@ fn spec_summary_matches_source_facts() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 6, false);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
 
     let source_spectra = common::spectra(src);
     assert_eq!(
@@ -372,7 +432,7 @@ fn spec_summary_matches_source_facts() {
 
     for (index, source) in source_spectra.iter().enumerate() {
         let summary = decoder
-            .spec_summary(index)
+            .spectrum_summary(index)
             .expect("spec_summary must return Some for a valid index");
 
         let expected_level = source.ms_level.unwrap_or(0) as u8;
@@ -402,10 +462,11 @@ fn format_version_is_supported() {
     let src = test_files::tiny_pwiz_11();
     let bytes = encode_to_ion(src, 6, false);
     let arc: Arc<[u8]> = Arc::from(bytes.as_slice());
-    let decoder = IonReader::open_bytes(arc, default_config()).expect("open must succeed");
+    let decoder = IonReader::open_source(Arc::new(BytesSource::new(arc)), default_config())
+        .expect("open must succeed");
     let version = decoder.format_version();
     assert!(
-        ionic::ion::format::is_supported(version),
+        ionic::ion::is_supported(version),
         "format_version must be within supported range"
     );
 }
@@ -421,20 +482,20 @@ const GOLDEN_ENCODES: &[GoldenEncode] = &[
     GoldenEncode {
         name: "tiny_pwiz_10",
         path: "crates/parser/data/mzml/tiny.pwiz.1.0.mzML",
-        encoded_len: 13544,
-        encoded_fnv: 0xd9c5_1be2_1466_4123,
+        encoded_len: 13568,
+        encoded_fnv: 0x4e74_1ab7_a7e6_d24c,
     },
     GoldenEncode {
         name: "tiny_pwiz_11",
         path: "crates/parser/data/mzml/tiny.pwiz.1.1.mzML",
-        encoded_len: 14496,
-        encoded_fnv: 0x5ece_ec29_bbd4_d574,
+        encoded_len: 14776,
+        encoded_fnv: 0x190e_4b68_cbb7_81eb,
     },
     GoldenEncode {
         name: "anpc_test",
         path: "crates/parser/data/mzml/test.mzML",
-        encoded_len: 9192,
-        encoded_fnv: 0x4584_1014_4f13_1af1,
+        encoded_len: 9272,
+        encoded_fnv: 0x32f1_dad1_161d_acc0,
     },
 ];
 
@@ -465,14 +526,22 @@ fn spec_array_addresses_crc_tamper_fails_closed_with_verify_on_and_opens_with_ve
 
     let off_spec_array_addresses = u64::from_le_bytes(bytes[80..88].try_into().unwrap()) as usize;
     let len_spec_array_addresses = u64::from_le_bytes(bytes[88..96].try_into().unwrap()) as usize;
-    assert!(len_spec_array_addresses > 0, "spec_array_addresses must be non-empty for this test to be meaningful");
+    assert!(
+        len_spec_array_addresses > 0,
+        "spec_array_addresses must be non-empty for this test to be meaningful"
+    );
 
     let mut tampered = bytes.clone();
     tampered[off_spec_array_addresses] ^= 0xFF;
 
-    let verify_on = ReadOptions { verify_checksums: true, ..ReadOptions::default() };
+    let verify_on = ReadOptions {
+        verify_checksums: true,
+        ..ReadOptions::default()
+    };
     match IonReader::open(&tampered, verify_on) {
-        Ok(_) => panic!("tampered spec_array_addresses must be rejected when verify_checksums is true"),
+        Ok(_) => {
+            panic!("tampered spec_array_addresses must be rejected when verify_checksums is true")
+        }
         Err(err) => {
             let msg = err.to_string();
             assert!(
@@ -482,7 +551,10 @@ fn spec_array_addresses_crc_tamper_fails_closed_with_verify_on_and_opens_with_ve
         }
     }
 
-    let verify_off = ReadOptions { verify_checksums: false, ..ReadOptions::default() };
+    let verify_off = ReadOptions {
+        verify_checksums: false,
+        ..ReadOptions::default()
+    };
     IonReader::open(&tampered, verify_off)
         .expect("tampered spec_array_addresses must open when verify_checksums is false");
 }
@@ -490,8 +562,15 @@ fn spec_array_addresses_crc_tamper_fails_closed_with_verify_on_and_opens_with_ve
 #[test]
 fn public_api_surface_is_frozen() {
     let mz = ionic::Range { from: 0.0, to: 1.0 };
-    let _byte = ionic::ByteRange { offset: 0, length: 0 };
-    let pixel = ionic::Pixel { x: mz, y: mz, z: mz };
+    let _byte = ionic::ByteRange {
+        offset: 0,
+        length: 0,
+    };
+    let pixel = ionic::Pixel {
+        x: mz,
+        y: mz,
+        z: mz,
+    };
     let _all = ionic::Select::All;
     let _rt = ionic::Select::Rt(mz);
     let _area = ionic::Select::Area(pixel);
@@ -553,12 +632,17 @@ fn public_api_surface_is_frozen() {
     let _read: ionic::DataXY = reader.read_window(0, mz).expect("read_window must succeed");
 
     reader
-        .scans_in(mz, ionic::Select::All, None, &mut |window: &ionic::Window| {
-            let _: usize = window.index;
-            let _: &ionic::ScanSummary = window.summary;
-            let _: &[f64] = window.mz;
-            let _: &[f64] = window.intensity;
-        })
+        .scans_in(
+            mz,
+            ionic::Select::All,
+            None,
+            &mut |window: &ionic::Window| {
+                let _: usize = window.index;
+                let _: &ionic::ScanSummary = window.summary;
+                let _: &[f64] = window.mz;
+                let _: &[f64] = window.intensity;
+            },
+        )
         .expect("scans_in must succeed");
 
     let _spectrum: Option<ionic::Spectrum> = reader.spectrum(0).expect("spectrum must succeed");
@@ -570,7 +654,9 @@ fn public_api_surface_is_frozen() {
     let mut writer = ionic::IonWriter::create(&mut output, ionic::WriteOptions::default())
         .expect("create must succeed");
     let mut stream = ionic::MemoryReader::new(reader.to_mzml().expect("to_mzml must succeed"));
-    writer.write_stream(&mut stream).expect("write_stream must succeed");
+    writer
+        .write_stream(&mut stream)
+        .expect("write_stream must succeed");
 
     let mut output2 = Vec::new();
     ionic::IonWriter::create(&mut output2, ionic::WriteOptions::default())

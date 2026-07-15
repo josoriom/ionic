@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use crate::accessions::{
+    ACC_COMPRESSION_NONE, FLOAT_64BIT, INTENSITY_ARRAY, MZ_ARRAY, format_accession,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MzML {
     pub cv_list: Option<CvList>,
@@ -11,6 +15,23 @@ pub struct MzML {
     pub data_processing_list: Option<DataProcessingList>,
     pub scan_settings_list: Option<ScanSettingsList>,
     pub run: Run,
+}
+
+impl MzML {
+    pub fn from_spectra(spectra: Vec<Spectrum>) -> Self {
+        let count = spectra.len();
+        Self {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    count: Some(count),
+                    spectra,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -533,4 +554,50 @@ pub struct Spectrum {
     pub precursor_list: Option<PrecursorList>,
     pub product_list: Option<ProductList>,
     pub binary_data_array_list: Option<BinaryDataArrayList>,
+}
+
+impl Spectrum {
+    pub fn new(id: impl Into<String>, mz: Vec<f64>, intensity: Vec<f64>) -> Self {
+        let default_array_length = mz.len();
+        let mz_array = float64_array(MZ_ARRAY, "m/z array", mz);
+        let intensity_array = float64_array(INTENSITY_ARRAY, "intensity array", intensity);
+        Self {
+            id: id.into(),
+            default_array_length: Some(default_array_length),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![mz_array, intensity_array],
+            }),
+            ..Default::default()
+        }
+    }
+}
+
+fn float64_array(accession_tail: u32, name: &str, values: Vec<f64>) -> BinaryDataArray {
+    BinaryDataArray {
+        array_length: Some(values.len()),
+        numeric_type: Some(NumericType::Float64),
+        cv_params: vec![
+            CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some(format_accession(accession_tail)),
+                name: name.to_string(),
+                ..Default::default()
+            },
+            CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some(format_accession(FLOAT_64BIT)),
+                name: "64-bit float".to_string(),
+                ..Default::default()
+            },
+            CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some(ACC_COMPRESSION_NONE.to_string()),
+                name: "no compression".to_string(),
+                ..Default::default()
+            },
+        ],
+        binary: Some(NumericArray::F64(values)),
+        ..Default::default()
+    }
 }

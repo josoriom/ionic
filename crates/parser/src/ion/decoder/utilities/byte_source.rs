@@ -1,9 +1,49 @@
 use std::sync::Arc;
 
-use crate::ion::{IonError, IonResult, ByteRange};
+use crate::ion::{ByteRange, IonError, IonResult};
 
 pub trait ReadBytes: Send + Sync {
-    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>>;
+    fn read(&self, range: ByteRange) -> IonResult<SourceBytes>;
+    fn total_len(&self) -> Option<u64>;
+}
+
+#[derive(Clone)]
+pub enum SourceBytes {
+    Owned(Vec<u8>),
+    Memory {
+        data: Arc<[u8]>,
+        start: usize,
+        end: usize,
+    },
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    Mapped {
+        map: Arc<memmap2::Mmap>,
+        start: usize,
+        end: usize,
+    },
+}
+
+impl std::ops::Deref for SourceBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            SourceBytes::Owned(bytes) => bytes,
+            SourceBytes::Memory { data, start, end } => &data[*start..*end],
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            SourceBytes::Mapped { map, start, end } => &map[*start..*end],
+        }
+    }
+}
+
+impl SourceBytes {
+    pub fn into_arc(self) -> Arc<[u8]> {
+        match self {
+            SourceBytes::Owned(bytes) => Arc::from(bytes),
+            SourceBytes::Memory { data, start, end } => Arc::from(&data[start..end]),
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            SourceBytes::Mapped { map, start, end } => Arc::from(&map[start..end]),
+        }
+    }
 }
 
 pub struct BytesSource {
@@ -17,41 +57,59 @@ impl BytesSource {
 }
 
 impl ReadBytes for BytesSource {
-    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
+    fn read(&self, range: ByteRange) -> IonResult<SourceBytes> {
         let start = to_usize(range.offset, "offset")?;
         let end = start
             .checked_add(to_usize(range.length, "length")?)
             .ok_or_else(|| IonError::from("byte source: range overflows"))?;
-        self.data
-            .get(start..end)
-            .map(|bytes| bytes.to_vec())
-            .ok_or_else(|| IonError::from("byte source: read out of bounds"))
+        if self.data.get(start..end).is_some() {
+            Ok(SourceBytes::Memory {
+                data: self.data.clone(),
+                start,
+                end,
+            })
+        } else {
+            Err(IonError::from("byte source: read out of bounds"))
+        }
+    }
+
+    fn total_len(&self) -> Option<u64> {
+        Some(self.data.len() as u64)
     }
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub struct FileSource {
-    map: memmap2::Mmap,
+    map: Arc<memmap2::Mmap>,
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl FileSource {
     pub fn new(map: memmap2::Mmap) -> Self {
-        Self { map }
+        Self { map: Arc::new(map) }
     }
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 impl ReadBytes for FileSource {
-    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
+    fn read(&self, range: ByteRange) -> IonResult<SourceBytes> {
         let start = to_usize(range.offset, "offset")?;
         let end = start
             .checked_add(to_usize(range.length, "length")?)
             .ok_or_else(|| IonError::from("byte source: range overflows"))?;
-        self.map
-            .get(start..end)
-            .map(|bytes| bytes.to_vec())
-            .ok_or_else(|| IonError::from("byte source: read out of bounds"))
+        if self.map.get(start..end).is_some() {
+            Ok(SourceBytes::Mapped {
+                map: self.map.clone(),
+                start,
+                end,
+            })
+        } else {
+            Err(IonError::from("byte source: read out of bounds"))
+        }
+    }
+
+    fn total_len(&self) -> Option<u64> {
+        Some(self.map.len() as u64)
     }
 }
 
@@ -70,10 +128,14 @@ impl CallbackSource {
 }
 
 impl ReadBytes for CallbackSource {
-    fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
+    fn read(&self, range: ByteRange) -> IonResult<SourceBytes> {
         let bytes = (self.read)(range)?;
         allow_len(&bytes, range.length)?;
-        Ok(bytes)
+        Ok(SourceBytes::Owned(bytes))
+    }
+
+    fn total_len(&self) -> Option<u64> {
+        None
     }
 }
 

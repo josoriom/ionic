@@ -5,17 +5,8 @@ pub(crate) trait DeltaWord: Copy + Default {
     const BYTES: usize;
     fn wrapping_sub(self, rhs: Self) -> Self;
     fn wrapping_add(self, rhs: Self) -> Self;
-    fn bitxor(self, rhs: Self) -> Self;
-    fn leading_zeros(self) -> u32;
-    fn trailing_zeros(self) -> u32;
-    fn shr_bytes(self, bytes: usize) -> Self;
-    fn shl_bytes(self, bytes: usize) -> Self;
     fn to_le_bytes_into(self, out: &mut Vec<u8>);
     fn from_le_chunk(chunk: &[u8]) -> Self;
-    fn to_u64(self) -> u64;
-    fn to_signed_i64(self) -> i64;
-    fn from_u64(v: u64) -> Self;
-    fn byte_at(self, i: usize) -> u8;
 }
 
 impl DeltaWord for u32 {
@@ -26,38 +17,11 @@ impl DeltaWord for u32 {
     fn wrapping_add(self, rhs: Self) -> Self {
         self.wrapping_add(rhs)
     }
-    fn bitxor(self, rhs: Self) -> Self {
-        self ^ rhs
-    }
-    fn leading_zeros(self) -> u32 {
-        self.leading_zeros()
-    }
-    fn trailing_zeros(self) -> u32 {
-        self.trailing_zeros()
-    }
-    fn shr_bytes(self, bytes: usize) -> Self {
-        self >> (bytes * 8)
-    }
-    fn shl_bytes(self, bytes: usize) -> Self {
-        self << (bytes * 8)
-    }
     fn to_le_bytes_into(self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.to_le_bytes());
     }
     fn from_le_chunk(chunk: &[u8]) -> Self {
         u32::from_le_bytes(chunk.try_into().unwrap())
-    }
-    fn to_u64(self) -> u64 {
-        self as u64
-    }
-    fn to_signed_i64(self) -> i64 {
-        self as i32 as i64
-    }
-    fn from_u64(v: u64) -> Self {
-        v as u32
-    }
-    fn byte_at(self, i: usize) -> u8 {
-        ((self >> (i * 8)) & 0xFF) as u8
     }
 }
 
@@ -69,38 +33,11 @@ impl DeltaWord for u64 {
     fn wrapping_add(self, rhs: Self) -> Self {
         self.wrapping_add(rhs)
     }
-    fn bitxor(self, rhs: Self) -> Self {
-        self ^ rhs
-    }
-    fn leading_zeros(self) -> u32 {
-        self.leading_zeros()
-    }
-    fn trailing_zeros(self) -> u32 {
-        self.trailing_zeros()
-    }
-    fn shr_bytes(self, bytes: usize) -> Self {
-        self >> (bytes * 8)
-    }
-    fn shl_bytes(self, bytes: usize) -> Self {
-        self << (bytes * 8)
-    }
     fn to_le_bytes_into(self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.to_le_bytes());
     }
     fn from_le_chunk(chunk: &[u8]) -> Self {
         u64::from_le_bytes(chunk.try_into().unwrap())
-    }
-    fn to_u64(self) -> u64 {
-        self
-    }
-    fn to_signed_i64(self) -> i64 {
-        self as i64
-    }
-    fn from_u64(v: u64) -> Self {
-        v
-    }
-    fn byte_at(self, i: usize) -> u8 {
-        ((self >> (i * 8)) & 0xFF) as u8
     }
 }
 
@@ -178,10 +115,6 @@ pub(crate) enum PackingInput<'a> {
 pub(crate) trait Packing: Send + Sync {
     fn id(&self) -> PackingId;
 
-    fn min_input_len(&self) -> usize {
-        1
-    }
-
     fn is_variable_length(&self) -> bool {
         false
     }
@@ -237,7 +170,6 @@ pub(crate) fn packing_for(
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn packing_by_id(id: PackingId) -> &'static dyn Packing {
     use byte_shuffle::BYTE_SHUFFLE;
     use delta_shuffle::DELTA_SHUFFLE;

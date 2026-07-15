@@ -1,13 +1,5 @@
 use crate::{accessions::ACC_MS_LEVEL, mzml::structs::*};
 
-#[allow(dead_code)]
-pub enum ParamEvent {
-    Cv(CvParam),
-    User(UserParam),
-    Software(SoftwareParam),
-    Ref(ReferenceableParamGroupRef),
-}
-
 pub trait ParamCollector {
     fn receive_cv(&mut self, param: CvParam);
     fn receive_user(&mut self, param: UserParam);

@@ -1,11 +1,13 @@
-use crate::ion::{
-    decoder::decode::Metadatum,
-    utilities::{
-        children_lookup::{ChildrenLookup, DefaultMetadataPolicy},
-        parse_chromatogram_list,
+use crate::{
+    ion::{
+        decoder::decode::Metadatum,
+        utilities::{
+            children_lookup::{ChildrenLookup, DefaultMetadataPolicy},
+            parse_chromatogram_list,
+        },
     },
+    mzml::structs::{ChromatogramList, CvParam},
 };
-use crate::mzml::structs::{ChromatogramList, CvParam};
 
 const PATH: &str = "data/ion/test.ion";
 

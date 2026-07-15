@@ -3,15 +3,26 @@ mod common;
 use std::fs;
 
 use common::helpers::{minimal_file_description, synthetic_binary_data_array};
-use ionic::ion::{IonReader, ReadOptions, encode, encoder::FileWriter};
-use ionic::mzml::structs::*;
+use ionic::{
+    ion::{FileWriter, IonReader, ReadOptions, WriteOptions, write_mzml_to_ion},
+    mzml::structs::*,
+};
 
 #[test]
 fn memory_mode_roundtrip_multi_spectrum() {
     let mzml = build_multi_spectrum_mzml(10, 100);
 
     let mut buf = Vec::new();
-    encode(&mzml, 6, false, &mut buf).expect("encode should succeed");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 6,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut buf,
+    )
+    .expect("encode should succeed");
     assert!(!buf.is_empty(), "output should not be empty");
 
     let mut decoder = IonReader::open(&buf, ReadOptions::default()).expect("decoder open");
@@ -37,12 +48,20 @@ fn streaming_mode_roundtrip_via_tempfile() {
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join("ionic_test_streaming.ion");
 
-    let mut file_output = FileWriter::open(temp_path.to_str().unwrap())
-        .unwrap_or_else(|e| {
-            panic!("failed to create FileWriter: {e}");
-        });
+    let mut file_output = FileWriter::open(temp_path.to_str().unwrap()).unwrap_or_else(|e| {
+        panic!("failed to create FileWriter: {e}");
+    });
 
-    encode(&mzml, 3, false, &mut file_output).expect("streaming encode should succeed");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 3,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut file_output,
+    )
+    .expect("streaming encode should succeed");
     drop(file_output);
 
     let bytes = fs::read(&temp_path).expect("should read temp file");
@@ -65,12 +84,30 @@ fn memory_and_streaming_produce_equivalent_results() {
     let mzml = build_multi_spectrum_mzml(3, 20);
 
     let mut mem_buf = Vec::new();
-    encode(&mzml, 0, false, &mut mem_buf).expect("memory encode");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut mem_buf,
+    )
+    .expect("memory encode");
 
     let temp_path = std::env::temp_dir().join("ionic_test_equiv.ion");
-    let mut file_output = FileWriter::open(temp_path.to_str().unwrap())
-        .expect("create file output");
-    encode(&mzml, 0, false, &mut file_output).expect("streaming encode");
+    let mut file_output =
+        FileWriter::open(temp_path.to_str().unwrap()).expect("create file output");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut file_output,
+    )
+    .expect("streaming encode");
     drop(file_output); // ensure flush
     let stream_buf = fs::read(&temp_path).expect("read temp file");
 
@@ -134,7 +171,16 @@ fn large_array_roundtrip_stress() {
     };
 
     let mut buf = Vec::new();
-    encode(&mzml, 12, false, &mut buf).expect("encode large array");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 12,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut buf,
+    )
+    .expect("encode large array");
 
     let mut decoder = IonReader::open(&buf, ReadOptions::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");

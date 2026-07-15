@@ -1,7 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::helpers::*;
+use common::{assertions::*, helpers::*};
 
 #[test]
 fn ref_groups_and_list_metadata_survive_full_pipeline() {

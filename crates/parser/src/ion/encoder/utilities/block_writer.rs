@@ -1,14 +1,14 @@
+use std::collections::HashMap;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
-use std::collections::HashMap;
-
-use crate::encoder::utilities::output::WriteBytes;
-use crate::ion::byte_transpose::shuffle_with_tail;
-use crate::ion::packing::PackingId;
-use crate::ion::{IonError, IonResult};
+use crate::ion::{
+    IonError, IonResult, byte_transpose::shuffle_with_tail, encoder::utilities::output::WriteBytes,
+    packing::PackingId,
+};
 
 pub(crate) const BLOCK_DIRECTORY_ENTRY_SIZE: usize = 32;
 const DEFAULT_MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
@@ -407,7 +407,7 @@ pub(crate) struct BlockWriter<'output, C: BlockCompressor> {
     par_min_blocks: usize,
 }
 
-impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
+impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
     pub(crate) fn new(
         output: &'output mut dyn WriteBytes,
         max_block_uncompressed_size: usize,
@@ -601,18 +601,16 @@ impl<'output, C: BlockCompressor + Send> BlockWriter<'output, C> {
                 })
                 .collect(),
             CompressionMode::Compressed(compressor) => {
-                let mut forks = Vec::with_capacity(blocks.len());
-                for _ in 0..blocks.len() {
-                    forks.push(compressor.fork()?);
-                }
                 let block_packing_id = self.block_packing_id;
                 blocks
                     .into_par_iter()
-                    .zip(forks.into_par_iter())
-                    .map(|(block, compressor)| {
-                        let mut mode = CompressionMode::Compressed(compressor);
-                        Self::make_block(block_packing_id, block, &mut mode)
-                    })
+                    .map_init(
+                        || compressor.fork().map(CompressionMode::Compressed),
+                        |worker, block| {
+                            let mode = worker.as_mut().map_err(|error| error.clone())?;
+                            Self::make_block(block_packing_id, block, mode)
+                        },
+                    )
                     .collect()
             }
         }
@@ -957,6 +955,69 @@ mod tests {
         }
     }
 
+    struct CountingCompressor {
+        forks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl BlockCompressor for CountingCompressor {
+        fn compress(&mut self, input: &[u8], output: &mut Vec<u8>) -> IonResult<usize> {
+            output.clear();
+            output.extend_from_slice(input);
+            Ok(input.len())
+        }
+        fn fork(&self) -> IonResult<Self> {
+            self.forks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Self {
+                forks: self.forks.clone(),
+            })
+        }
+        fn shuffle_bytes_into(&self, input: &[u8], output: &mut [u8], element_stride: usize) {
+            shuffle_with_tail(input, output, element_stride);
+        }
+    }
+
+    #[test]
+    fn parallel_flush_usually_reuses_compressor_across_blocks_26() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let forks = Arc::new(AtomicUsize::new(0));
+        let block_count = std::cmp::max(256, rayon::current_num_threads() * 8);
+
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            8,
+            CompressionMode::Compressed(CountingCompressor {
+                forks: forks.clone(),
+            }),
+            PackingId::ByteShuffle,
+        );
+        builder.set_par_min_blocks(0);
+        builder.set_max_pending_bytes(usize::MAX);
+
+        for i in 0..block_count {
+            builder
+                .add_item_to_box(1, 8, 4, |buf| {
+                    buf.extend_from_slice(&[(i % 256) as u8; 8]);
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        builder.finish().unwrap();
+
+        let fork_count = forks.load(Ordering::SeqCst);
+        assert!(
+            fork_count < block_count,
+            "map_init usually reuses a forked compressor across several blocks, so forks ({}) should stay below the block count ({}); an occasional flip under maximal rayon splitting is expected, not a regression",
+            fork_count,
+            block_count
+        );
+    }
+
     #[test]
     fn block_writer_raw_single_item() {
         let mut output = VecOutput(Vec::new());
@@ -1049,8 +1110,16 @@ mod tests {
             let at = directory_start + block_id as usize * BLOCK_DIRECTORY_ENTRY_SIZE + 28;
             u32::from_le_bytes(output.0[at..at + 4].try_into().unwrap())
         };
-        assert_eq!(reserved_tail(window_0_block), 0, "block directory tail must be reserved zero");
-        assert_eq!(reserved_tail(window_1_block), 0, "block directory tail must be reserved zero");
+        assert_eq!(
+            reserved_tail(window_0_block),
+            0,
+            "block directory tail must be reserved zero"
+        );
+        assert_eq!(
+            reserved_tail(window_1_block),
+            0,
+            "block directory tail must be reserved zero"
+        );
     }
 
     #[test]

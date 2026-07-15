@@ -1,9 +1,9 @@
 use std::{
     fs,
-    io::{Read, Seek, SeekFrom, Write, stderr, stdout},
+    io::{IsTerminal, Read, Seek, SeekFrom, Write, stderr, stdout},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
     time::Instant,
@@ -14,35 +14,59 @@ use clap::{
     ValueEnum,
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
+use ionic::{
+    ion::{
+        FILE_TRAILER, FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage, WriteOptions,
+    },
+    mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
+};
 use mimalloc::MiMalloc;
 use rayon::{ThreadPoolBuilder, prelude::*};
 use regex::Regex;
 use serde::Serialize;
 
-use ionic::{
-    ion::{
-        FileWriter, IonReader, ReadOptions, TempFile,
-        encoder::{encode::WriteOptions, ion_writer::IonWriter, utilities::SectionStorage},
-        format::FILE_TRAILER,
-    },
-    mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
-};
-
-mod legacy;
 mod utilities;
 
-use utilities::check_ion_file;
+use utilities::{TempOutput, check_ion_file, sweep_orphans};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const ANSI_RESET: &str = "\x1b[0m";
-const ANSI_GREEN: &str = "\x1b[1;32m";
-const ANSI_YELLOW: &str = "\x1b[1;33m";
-const ANSI_RED: &str = "\x1b[1;31m";
-const ANSI_BLUE: &str = "\x1b[1;34m";
+const MB: f64 = 1024.0 * 1024.0;
+
+static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
+
+fn color_enabled() -> bool {
+    *COLOR_ENABLED.get_or_init(|| {
+        std::env::var_os("NO_COLOR").is_none() && stdout().is_terminal() && stderr().is_terminal()
+    })
+}
+
+fn ansi(code: &'static str) -> &'static str {
+    if color_enabled() { code } else { "" }
+}
+
+fn ansi_reset() -> &'static str {
+    ansi("\x1b[0m")
+}
+
+fn ansi_green() -> &'static str {
+    ansi("\x1b[1;32m")
+}
+
+fn ansi_yellow() -> &'static str {
+    ansi("\x1b[1;33m")
+}
+
+fn ansi_red() -> &'static str {
+    ansi("\x1b[1;31m")
+}
+
+fn ansi_blue() -> &'static str {
+    ansi("\x1b[1;34m")
+}
 
 const AFTER_HELP: &str = "
 \x1b[1;33mQUICK REFERENCE\x1b[0m (full flags are in `ionic convert --help` / `ionic cat --help`)
@@ -77,7 +101,7 @@ fn cli_styles() -> Styles {
     disable_version_flag = true
 )]
 struct Cli {
-    #[arg(short = 'v', long = "version", action = ArgAction::SetTrue, global = true, help = "Print the version")]
+    #[arg(short = 'v', long = "version", action = ArgAction::SetTrue, help = "Print the version")]
     version: bool,
 
     #[command(subcommand)]
@@ -94,7 +118,7 @@ enum Cmd {
 #[command(
     group(
         ArgGroup::new("convert_mode")
-            .args(["mzml_to_ion", "ion_to_mzml"])
+            .args(["mzml_to_ion", "ion_to_mzml", "benchmark_decode"])
             .multiple(false)
     ),
     group(
@@ -104,10 +128,19 @@ enum Cmd {
     )
 )]
 struct ConvertArgs {
-    #[arg(short = 'i', long = "input-path", required = true, help = "File or folder to convert")]
+    #[arg(
+        short = 'i',
+        long = "input-path",
+        required = true,
+        help = "File or folder to convert"
+    )]
     input_path: PathBuf,
 
-    #[arg(short = 'o', long = "output-path", help = "Folder to write results into")]
+    #[arg(
+        short = 'o',
+        long = "output-path",
+        help = "Folder to write results into"
+    )]
     output_path: Option<PathBuf>,
 
     #[arg(
@@ -129,13 +162,25 @@ struct ConvertArgs {
     #[arg(long, default_value_t = false, action = ArgAction::SetTrue, help = "Overwrite output files that exist")]
     overwrite: bool,
 
-    #[arg(long = "pattern", value_name = "TEXT", help = "Only files whose name contains TEXT")]
+    #[arg(
+        long = "pattern",
+        value_name = "TEXT",
+        help = "Only files whose name contains TEXT"
+    )]
     pattern: Option<String>,
 
-    #[arg(long = "pattern-exact", value_name = "NAME", help = "Only files named exactly NAME")]
+    #[arg(
+        long = "pattern-exact",
+        value_name = "NAME",
+        help = "Only files named exactly NAME"
+    )]
     pattern_exact: Option<String>,
 
-    #[arg(long = "regex", value_name = "REGEX", help = "Only files matching REGEX")]
+    #[arg(
+        long = "regex",
+        value_name = "REGEX",
+        help = "Only files matching REGEX"
+    )]
     regex: Option<String>,
 
     #[arg(
@@ -161,9 +206,6 @@ struct ConvertArgs {
     )]
     section_storage: SectionStorageArg,
 
-    #[arg(long = "update", default_value_t = false, action = ArgAction::SetTrue)]
-    update: bool,
-
     #[arg(
         long = "mz-window",
         default_value_t = 250.0,
@@ -171,9 +213,6 @@ struct ConvertArgs {
         help = "m/z split width in Da (smaller = read less)"
     )]
     mz_window: f64,
-
-    #[arg(long = "dry-run", default_value_t = false, action = ArgAction::SetTrue)]
-    dry_run: bool,
 
     #[arg(long = "force-f32", default_value_t = false, action = ArgAction::SetTrue, help = "Store f64 arrays as 32-bit floats (smaller, lossy)")]
     force_f32: bool,
@@ -205,14 +244,17 @@ struct ConvertWhich {
     #[arg(long = "ion-to-mzml", help = "Convert ion back to mzML")]
     ion_to_mzml: bool,
 
-    #[arg(long = "benchmark-decode")]
+    #[arg(
+        long = "benchmark-decode",
+        help = "Benchmark decode speed by reading every spectrum's arrays"
+    )]
     benchmark_decode: bool,
 }
 
 #[derive(Clone, Copy)]
 enum Encoding {
-    Parallel,
-    Sequential,
+    WithinFileParallel,
+    FileLevelParallel,
 }
 
 #[derive(Args)]
@@ -233,20 +275,22 @@ struct CatArgs {
     #[arg(long = "check", action = ArgAction::SetTrue, default_value_t = false, help = "Validate the file and report integrity")]
     check: bool,
 
-    #[arg(long = "scan", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Spectrum N metadata as JSON (1-based)")]
+    #[arg(long = "scan", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata of the Nth spectrum (1-based)")]
     scan: Option<u32>,
 
-    #[arg(long = "scan-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Spectrum N metadata + arrays as JSON")]
+    #[arg(long = "scan-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata + arrays of the Nth spectrum (1-based)")]
     scan_full: Option<u32>,
 
-    #[arg(long = "chrom", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Chromatogram N metadata as JSON (1-based)")]
+    #[arg(long = "chrom", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata of the Nth chromatogram (1-based)")]
     chrom: Option<u32>,
 
-    #[arg(long = "chrom-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Chromatogram N metadata + arrays as JSON")]
+    #[arg(long = "chrom-full", value_name = "N", value_parser = clap::value_parser!(u32).range(1..), help = "Metadata + arrays of the Nth chromatogram (1-based)")]
     chrom_full: Option<u32>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> std::process::ExitCode {
+    color_enabled();
+
     let mut cmd = Cli::command();
     cmd = cmd
         .styles(cli_styles())
@@ -258,13 +302,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli.version {
         println!("{VERSION}");
-        return Ok(());
+        return std::process::ExitCode::SUCCESS;
     }
 
-    match cli.cmd {
-        Some(Cmd::Convert(cmd)) => convert(cmd).map_err(|e| e.into()),
-        Some(Cmd::Cat(cmd)) => cat(cmd).map_err(|e| e.into()),
+    let result = match cli.cmd {
+        Some(Cmd::Convert(cmd)) => convert(cmd),
+        Some(Cmd::Cat(cmd)) => cat(cmd),
         None => Ok(()),
+    };
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::ExitCode::FAILURE
+        }
     }
 }
 
@@ -284,6 +336,9 @@ fn cat(cmd: CatArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
     let file_path = resolve_user_path(&cwd, &cmd.file_path);
     if cmd.check {
+        if file_ext_lower(&file_path) != "ion" {
+            return Err(format!("--check expects a .ion file, got {file_path:?}"));
+        }
         return check_ion_file(&file_path);
     }
     if let Some(n) = cmd.scan {
@@ -388,7 +443,6 @@ fn out_name_for_bin_file_as_mzml(path: &Path) -> Option<String> {
 }
 
 fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
-    let bytes = fs::read(file_path).map_err(|e| format!("read failed: {e}"))?;
     let ext = file_ext_lower(file_path);
 
     if ext == "ion" {
@@ -397,6 +451,7 @@ fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
         return ion.metadata().map_err(|e| format!("metadata failed: {e}"));
     }
     if ext == "mzml" {
+        let bytes = fs::read(file_path).map_err(|e| format!("read failed: {e}"))?;
         return parse_mzml(&bytes).map_err(|e| format!("parse_mzml failed: {e}"));
     }
 
@@ -410,8 +465,8 @@ fn write_mzml_as_ion(
     output_path: &Path,
     config: WriteOptions,
 ) -> Result<(), String> {
-    TempFile::sweep_orphans(output_path);
-    let temp_output = TempFile::new(output_path).map_err(|error| error.to_string())?;
+    sweep_orphans(output_path)?;
+    let temp_output = TempOutput::new(output_path)?;
     let mut input_reader = MzmlReader::open(input_path).map_err(|error| error.to_string())?;
     {
         let mut output_file =
@@ -424,9 +479,7 @@ fn write_mzml_as_ion(
         drop(ion_writer);
         output_file.flush().map_err(|error| error.to_string())?;
     }
-    temp_output
-        .move_to(output_path)
-        .map_err(|error| error.to_string())
+    temp_output.move_to(output_path)
 }
 
 #[derive(Debug, Clone)]
@@ -499,7 +552,7 @@ fn build_name_filter(
 
     Ok(Some(Box::new(move |name: &str| {
         if let Some(needle) = &exact
-            && name.contains(needle)
+            && name == needle.as_str()
         {
             return true;
         }
@@ -521,11 +574,33 @@ fn build_name_filter(
     })))
 }
 
+fn accepts_file(path: &Path, exts: &[&str], name_filter: Option<&dyn Fn(&str) -> bool>) -> bool {
+    let ext = file_ext_lower(path);
+    if !exts.iter().any(|want| ext == *want) {
+        return false;
+    }
+    if let Some(f) = name_filter {
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !f(name) {
+            return false;
+        }
+    }
+    true
+}
+
 fn collect_files_with_exts(
     input_root: &Path,
     exts: &[&str],
     name_filter: Option<&dyn Fn(&str) -> bool>,
 ) -> Result<Vec<PathBuf>, String> {
+    if input_root.is_file() {
+        let mut out = Vec::new();
+        if accepts_file(input_root, exts, name_filter) {
+            out.push(input_root.to_path_buf());
+        }
+        return Ok(out);
+    }
+
     let mut out = Vec::new();
     let mut stack = vec![input_root.to_path_buf()];
 
@@ -533,25 +608,21 @@ fn collect_files_with_exts(
         let entries = fs::read_dir(&dir).map_err(|e| format!("read dir failed: {e}"))?;
         for entry in entries {
             let entry = entry.map_err(|e| format!("read dir entry failed: {e}"))?;
+            let file_type = match entry.file_type() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
             let p = entry.path();
-            if p.is_dir() {
+            if file_type.is_dir() {
                 stack.push(p);
                 continue;
             }
-            if !p.is_file() {
+            if !file_type.is_file() {
                 continue;
             }
-            let ext = file_ext_lower(&p);
-            if !exts.iter().any(|want| ext == *want) {
-                continue;
+            if accepts_file(&p, exts, name_filter) {
+                out.push(p);
             }
-            if let Some(f) = name_filter {
-                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                if !f(name) {
-                    continue;
-                }
-            }
-            out.push(p);
         }
     }
 
@@ -559,10 +630,15 @@ fn collect_files_with_exts(
     Ok(out)
 }
 
-fn size_to_bytes(value: f64, unit_bytes: f64, flag: &str) -> Result<usize, String> {
+fn validate_positive_finite(value: f64, flag: &str) -> Result<(), String> {
     if !value.is_finite() || value <= 0.0 {
         return Err(format!("{flag} must be a positive finite number"));
     }
+    Ok(())
+}
+
+fn size_to_bytes(value: f64, unit_bytes: f64, flag: &str) -> Result<usize, String> {
+    validate_positive_finite(value, flag)?;
     let bytes = value * unit_bytes;
     if bytes < 1.0 {
         return Err(format!("{flag} is too small; it rounds to zero bytes"));
@@ -573,13 +649,213 @@ fn size_to_bytes(value: f64, unit_bytes: f64, flag: &str) -> Result<usize, Strin
     Ok(bytes as usize)
 }
 
+struct Palette {
+    reset: &'static str,
+    green: &'static str,
+    yellow: &'static str,
+    red: &'static str,
+    blue: &'static str,
+}
+
+impl Palette {
+    fn current() -> Self {
+        Self {
+            reset: ansi_reset(),
+            green: ansi_green(),
+            yellow: ansi_yellow(),
+            red: ansi_red(),
+            blue: ansi_blue(),
+        }
+    }
+}
+
+struct ConvertCounters {
+    print_lock: Mutex<()>,
+    done: AtomicUsize,
+    ok: AtomicU32,
+    failed: AtomicU32,
+    skipped: AtomicU32,
+    fixed: AtomicU32,
+    had_failed: AtomicBool,
+}
+
+impl ConvertCounters {
+    fn new() -> Self {
+        Self {
+            print_lock: Mutex::new(()),
+            done: AtomicUsize::new(0),
+            ok: AtomicU32::new(0),
+            failed: AtomicU32::new(0),
+            skipped: AtomicU32::new(0),
+            fixed: AtomicU32::new(0),
+            had_failed: AtomicBool::new(false),
+        }
+    }
+
+    fn next_step(&self) -> usize {
+        self.done.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn had_any_failure(&self) -> bool {
+        self.had_failed.load(Ordering::Relaxed)
+    }
+}
+
+fn print_progress_line(print_lock: &Mutex<()>, to_stderr: bool, line: &str) {
+    let _guard = print_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if to_stderr {
+        eprintln!("{line}");
+        let _ = stderr().flush();
+    } else {
+        println!("{line}");
+        let _ = stdout().flush();
+    }
+}
+
+fn print_convert_totals(counters: &ConvertCounters, elapsed: std::time::Duration) {
+    let ok = counters.ok.load(Ordering::Relaxed);
+    let failed = counters.failed.load(Ordering::Relaxed);
+    let skipped = counters.skipped.load(Ordering::Relaxed);
+    let fixed = counters.fixed.load(Ordering::Relaxed);
+    let total_secs = elapsed.as_secs();
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    println!(
+        "ok={ok} failed={failed} skipped={skipped} fixed={fixed} total_time={h:02}:{m:02}:{s:02}"
+    );
+}
+
+struct ConversionJob<'a> {
+    counters: &'a ConvertCounters,
+    palette: &'a Palette,
+    input_root: &'a Path,
+    output_root: &'a Path,
+    overwrite: bool,
+    total: usize,
+}
+
+impl<'a> ConversionJob<'a> {
+    fn run(
+        &self,
+        in_path: &Path,
+        derive_out_name: impl Fn(&Path) -> Option<String>,
+        output_is_valid: impl Fn(&Path, u64) -> bool,
+        perform: impl FnOnce(&Path, &Path) -> Result<(), String>,
+    ) {
+        let rel = match in_path.strip_prefix(self.input_root) {
+            Ok(v) => v,
+            Err(_) => {
+                self.report_error(in_path, "cannot make relative path".to_string());
+                return;
+            }
+        };
+
+        let out_name = match derive_out_name(in_path) {
+            Some(v) => v,
+            None => {
+                self.report_skipped_unnamed(in_path);
+                return;
+            }
+        };
+
+        let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
+        let out_dir = self.output_root.join(parent_rel);
+        let out_path = out_dir.join(out_name);
+
+        let mut fixing_bad_output = false;
+        if !self.overwrite
+            && let Ok(m) = fs::metadata(&out_path)
+            && m.is_file()
+        {
+            let out_len = m.len();
+            if out_len > 0 && output_is_valid(&out_path, out_len) {
+                self.report_skipped_existing(in_path, &out_path, out_len);
+                return;
+            }
+            fixing_bad_output = true;
+        }
+
+        if let Err(e) = fs::create_dir_all(&out_dir) {
+            self.report_error(&out_dir, format!("create output dir failed: {e}"));
+            return;
+        }
+
+        let t0 = Instant::now();
+        let in_mb = megabytes_of(in_path);
+
+        if let Err(message) = perform(in_path, &out_path) {
+            self.report_error(&out_path, message);
+            return;
+        }
+
+        let out_mb = megabytes_of(&out_path);
+        self.counters.ok.fetch_add(1, Ordering::Relaxed);
+        if fixing_bad_output {
+            self.counters.fixed.fetch_add(1, Ordering::Relaxed);
+        }
+        let n = self.counters.next_step();
+        let elapsed_s = t0.elapsed().as_secs_f64();
+
+        let (tag, color) = if fixing_bad_output {
+            ("[fixed]", self.palette.blue)
+        } else {
+            ("[ok]", self.palette.green)
+        };
+        let name = basename(&out_path);
+        let reset = self.palette.reset;
+        let total = self.total;
+        let line = format!(
+            "{color}{tag}{reset} [{n}/{total}] output: {name}  input={in_mb:.2} MB, output={out_mb:.2} MB, time={elapsed_s:.3}s"
+        );
+        print_progress_line(&self.counters.print_lock, false, &line);
+    }
+
+    fn report_error(&self, path: &Path, message: String) {
+        self.counters.had_failed.store(true, Ordering::Relaxed);
+        self.counters.failed.fetch_add(1, Ordering::Relaxed);
+        let n = self.counters.next_step();
+        let name = basename(path);
+        let red = self.palette.red;
+        let reset = self.palette.reset;
+        let total = self.total;
+        let line = format!("{red}[error]{reset} [{n}/{total}] {name}: {message}");
+        print_progress_line(&self.counters.print_lock, true, &line);
+    }
+
+    fn report_skipped_unnamed(&self, in_path: &Path) {
+        self.counters.skipped.fetch_add(1, Ordering::Relaxed);
+        let n = self.counters.next_step();
+        let name = basename(in_path);
+        let yellow = self.palette.yellow;
+        let reset = self.palette.reset;
+        let total = self.total;
+        let line = format!("{yellow}[skipped]{reset} [{n}/{total}] {name}");
+        print_progress_line(&self.counters.print_lock, false, &line);
+    }
+
+    fn report_skipped_existing(&self, in_path: &Path, out_path: &Path, out_len: u64) {
+        self.counters.skipped.fetch_add(1, Ordering::Relaxed);
+        let n = self.counters.next_step();
+        let in_mb = megabytes_of(in_path);
+        let out_mb = out_len as f64 / MB;
+        let name = basename(out_path);
+        let yellow = self.palette.yellow;
+        let reset = self.palette.reset;
+        let total = self.total;
+        let line = format!(
+            "{yellow}[skipped]{reset} [{n}/{total}] {name}  input={in_mb:.2} MB, output={out_mb:.2} MB"
+        );
+        print_progress_line(&self.counters.print_lock, false, &line);
+    }
+}
+
 fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
 
     let input_root = resolve_user_path(&cwd, &cmd.input_path);
     let output_root = match &cmd.output_path {
         Some(path) => resolve_user_path(&cwd, path),
-        None if cmd.update => input_root.clone(),
         None => return Err("--output-path is required".to_string()),
     };
 
@@ -591,9 +867,8 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         cmd.regex.as_deref(),
     )?;
 
-    const MB: f64 = 1024.0 * 1024.0;
-
     let block_size = size_to_bytes(cmd.block_size_mb, MB, "--block-size")?;
+    validate_positive_finite(cmd.mz_window, "--mz-window")?;
 
     let cores = match cmd.cores {
         0 => std::thread::available_parallelism()
@@ -607,39 +882,22 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         .map_err(|e| format!("rayon thread pool init failed: {e}"))?;
 
     let encoding = if cmd.many_files {
-        Encoding::Sequential
+        Encoding::FileLevelParallel
     } else {
-        Encoding::Parallel
+        Encoding::WithinFileParallel
     };
-
-    if cmd.update {
-        return legacy::run_update(
-            &input_root,
-            &output_root,
-            filter.as_deref(),
-            cmd.dry_run,
-            &pool,
-            matches!(encoding, Encoding::Sequential),
-        );
-    }
 
     let t_all = Instant::now();
 
     let benchmark_decode = cmd.which.benchmark_decode;
 
-    let default_mzml_to_ion =
-        !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml && !benchmark_decode;
+    let default_mzml_to_ion = !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml && !benchmark_decode;
 
     let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let ion_to_mzml = cmd.which.ion_to_mzml;
 
-    let print_lock = Arc::new(Mutex::new(()));
-    let done = Arc::new(AtomicUsize::new(0));
-    let ok = Arc::new(AtomicU32::new(0));
-    let failed = Arc::new(AtomicU32::new(0));
-    let skipped = Arc::new(AtomicU32::new(0));
-    let fixed_bad_total = Arc::new(AtomicU32::new(0));
-    let had_failed = Arc::new(AtomicBool::new(false));
+    let palette = Palette::current();
+    let counters = ConvertCounters::new();
 
     if mzml_to_ion {
         let out_ext = "ion";
@@ -653,167 +911,44 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             ));
         }
 
-        let total = files.len();
+        let job = ConversionJob {
+            counters: &counters,
+            palette: &palette,
+            input_root: &input_root,
+            output_root: &output_root,
+            overwrite: cmd.overwrite,
+            total: files.len(),
+        };
+
+        let config = WriteOptions {
+            compression_level: cmd.compression_level,
+            force_f32: f32_compress,
+            block_size,
+            parallel: matches!(encoding, Encoding::WithinFileParallel),
+            section_storage: cmd.section_storage.storage(),
+            mz_window: cmd.mz_window,
+        };
 
         let convert_mzml_to_ion = |in_path: &PathBuf| {
-            let rel = match in_path.strip_prefix(&input_root) {
-                Ok(v) => v,
-                Err(_) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: cannot make relative path",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-
-            let out_name = match out_name_for_mzml_file(in_path, out_ext) {
-                Some(v) => v,
-                None => {
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    println!(
-                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}",
-                        n, total, name
-                    );
-                    let _ = stdout().flush();
-                    return;
-                }
-            };
-
-            let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
-            let out_dir = output_root.join(parent_rel);
-            let out_path = out_dir.join(out_name);
-
-            let mut fixed_bad = false;
-            if !cmd.overwrite
-                && let Ok(m) = fs::metadata(&out_path)
-                && m.is_file()
-            {
-                let out_len = m.len();
-                if out_len > 0 && has_valid_trailer(&out_path, out_len) {
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-                    let in_mb = fs::metadata(in_path)
-                        .map(|m| m.len() as f64 / MB)
-                        .unwrap_or(0.0);
-                    let out_mb = out_len as f64 / MB;
-
-                    let name = basename(&out_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    println!(
-                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
-                        n, total, name, in_mb, out_mb
-                    );
-                    let _ = stdout().flush();
-                    return;
-                }
-                fixed_bad = true;
-            }
-
-            if let Err(e) = fs::create_dir_all(&out_dir) {
-                had_failed.store(true, Ordering::Relaxed);
-                failed.fetch_add(1, Ordering::Relaxed);
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let name = basename(&out_dir);
-                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                eprintln!(
-                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: create output dir failed: {e}",
-                    n, total, name
-                );
-                let _ = stderr().flush();
-                return;
-            }
-
-            let t0 = Instant::now();
-
-            let in_mb = fs::metadata(in_path)
-                .map(|m| m.len() as f64 / MB)
-                .unwrap_or(0.0);
-
-            let config = WriteOptions {
-                compression_level: cmd.compression_level,
-                force_f32: f32_compress,
-                block_size,
-                parallel: matches!(encoding, Encoding::Parallel),
-                section_storage: cmd.section_storage.storage(),
-                mz_window: cmd.mz_window,
-            };
-            if let Err(e) = write_mzml_as_ion(in_path, &out_path, config) {
-                had_failed.store(true, Ordering::Relaxed);
-                failed.fetch_add(1, Ordering::Relaxed);
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let name = basename(&out_path);
-                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                eprintln!(
-                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: encode failed: {e}",
-                    n, total, name
-                );
-                let _ = stderr().flush();
-                return;
-            }
-
-            let out_mb = fs::metadata(&out_path)
-                .map(|m| m.len() as f64 / MB)
-                .unwrap_or(0.0);
-
-            ok.fetch_add(1, Ordering::Relaxed);
-            if fixed_bad {
-                fixed_bad_total.fetch_add(1, Ordering::Relaxed);
-            }
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-            let elapsed_s = t0.elapsed().as_secs_f64();
-
-            let (tag, color) = if fixed_bad {
-                ("[fixed]", ANSI_BLUE)
-            } else {
-                ("[ok]", ANSI_GREEN)
-            };
-
-            let name = basename(&out_path);
-
-            {
-                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                println!(
-                    "{color}{tag}{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
-                    n, total, name, in_mb, out_mb, elapsed_s
-                );
-                let _ = stdout().flush();
-            }
+            job.run(
+                in_path,
+                |p| out_name_for_mzml_file(p, out_ext),
+                has_valid_trailer,
+                |in_path, out_path| {
+                    write_mzml_as_ion(in_path, out_path, config)
+                        .map_err(|e| format!("encode failed: {e}"))
+                },
+            );
         };
 
         pool.install(|| match encoding {
-            Encoding::Sequential => files.par_iter().for_each(convert_mzml_to_ion),
-            Encoding::Parallel => files.iter().for_each(convert_mzml_to_ion),
+            Encoding::FileLevelParallel => files.par_iter().for_each(convert_mzml_to_ion),
+            Encoding::WithinFileParallel => files.iter().for_each(convert_mzml_to_ion),
         });
 
-        let ok = ok.load(Ordering::Relaxed);
-        let failed = failed.load(Ordering::Relaxed);
-        let skipped = skipped.load(Ordering::Relaxed);
-        let fixed_bad = fixed_bad_total.load(Ordering::Relaxed);
+        print_convert_totals(&counters, t_all.elapsed());
 
-        let d = t_all.elapsed();
-        let total_secs = d.as_secs();
-        let h = total_secs / 3600;
-        let m = (total_secs % 3600) / 60;
-        let s = total_secs % 60;
-
-        println!(
-            "ok={ok} failed={failed} skipped={skipped} fixed={fixed_bad} total_time={:02}:{:02}:{:02}",
-            h, m, s
-        );
-
-        if had_failed.load(Ordering::Relaxed) {
+        if counters.had_any_failure() {
             return Err("some files failed".to_string());
         }
         return Ok(());
@@ -828,199 +963,48 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             ));
         }
 
-        let total = files.len();
+        let job = ConversionJob {
+            counters: &counters,
+            palette: &palette,
+            input_root: &input_root,
+            output_root: &output_root,
+            overwrite: cmd.overwrite,
+            total: files.len(),
+        };
 
         let convert_ion_to_mzml = |in_path: &PathBuf| {
-            let rel = match in_path.strip_prefix(&input_root) {
-                Ok(v) => v,
-                Err(_) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: cannot make relative path",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-
-            let out_name = match out_name_for_bin_file_as_mzml(in_path) {
-                Some(v) => v,
-                None => {
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    println!(
-                        "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}",
-                        n, total, name
-                    );
-                    let _ = stdout().flush();
-                    return;
-                }
-            };
-
-            let parent_rel = rel.parent().unwrap_or_else(|| Path::new(""));
-            let out_dir = output_root.join(parent_rel);
-            let out_path = out_dir.join(out_name);
-
-            if !cmd.overwrite
-                && let Ok(m) = fs::metadata(&out_path)
-                && m.is_file()
-                && m.len() > 0
-            {
-                skipped.fetch_add(1, Ordering::Relaxed);
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-                let in_mb = fs::metadata(in_path)
-                    .map(|m| m.len() as f64 / MB)
-                    .unwrap_or(0.0);
-                let out_mb = m.len() as f64 / MB;
-
-                let name = basename(&out_path);
-                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                println!(
-                    "{ANSI_YELLOW}[skipped]{ANSI_RESET} [{}/{}] {}  input={:.2} MB, output={:.2} MB",
-                    n, total, name, in_mb, out_mb
-                );
-                let _ = stdout().flush();
-                return;
-            }
-
-            if let Err(e) = fs::create_dir_all(&out_dir) {
-                had_failed.store(true, Ordering::Relaxed);
-                failed.fetch_add(1, Ordering::Relaxed);
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let name = basename(&out_dir);
-                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                eprintln!(
-                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: create output dir failed: {e}",
-                    n, total, name
-                );
-                let _ = stderr().flush();
-                return;
-            }
-
-            let t0 = Instant::now();
-
-            let in_mb = fs::metadata(in_path)
-                .map(|m| m.len() as f64 / MB)
-                .unwrap_or(0.0);
-
-            let mut ion = match IonReader::open_file(
+            job.run(
                 in_path,
-                ReadOptions {
-                    parallel: matches!(encoding, Encoding::Parallel),
-                    ..ReadOptions::default()
+                out_name_for_bin_file_as_mzml,
+                mzml_output_is_complete,
+                |in_path, out_path| {
+                    let mut ion = IonReader::open_file(
+                        in_path,
+                        ReadOptions {
+                            parallel: matches!(encoding, Encoding::WithinFileParallel),
+                            ..ReadOptions::default()
+                        },
+                    )
+                    .map_err(|e| format!("IonReader::open_file failed: {e}"))?;
+
+                    let mzml = ion.to_mzml().map_err(|e| format!("to_mzml failed: {e}"))?;
+
+                    let xml = bin_to_mzml(&mzml).map_err(|e| format!("bin_to_mzml failed: {e}"))?;
+                    drop(mzml);
+
+                    fs::write(out_path, &xml).map_err(|e| format!("write failed: {e}"))
                 },
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: IonReader::open_file failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-
-            let mzml = match ion.to_mzml() {
-                Ok(v) => v,
-                Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: to_mzml failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-
-            let xml = match bin_to_mzml(&mzml) {
-                Ok(v) => v,
-                Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let name = basename(in_path);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: bin_to_mzml failed: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
-                    return;
-                }
-            };
-            drop(mzml);
-
-            if let Err(e) = fs::write(&out_path, &xml) {
-                had_failed.store(true, Ordering::Relaxed);
-                failed.fetch_add(1, Ordering::Relaxed);
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let name = basename(&out_path);
-                let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                eprintln!(
-                    "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: write failed: {e}",
-                    n, total, name
-                );
-                let _ = stderr().flush();
-                return;
-            }
-            let out_mb = xml.len() as f64 / MB;
-            drop(xml);
-
-            ok.fetch_add(1, Ordering::Relaxed);
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-
-            let elapsed_s = t0.elapsed().as_secs_f64();
-
-            let name = basename(&out_path);
-
-            let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-            println!(
-                "{ANSI_GREEN}[ok]{ANSI_RESET} [{}/{}] output: {}  input={:.2} MB, output={:.2} MB, time={:.3}s",
-                n, total, name, in_mb, out_mb, elapsed_s
             );
-            let _ = stdout().flush();
         };
 
         pool.install(|| match encoding {
-            Encoding::Sequential => files.par_iter().for_each(convert_ion_to_mzml),
-            Encoding::Parallel => files.iter().for_each(convert_ion_to_mzml),
+            Encoding::FileLevelParallel => files.par_iter().for_each(convert_ion_to_mzml),
+            Encoding::WithinFileParallel => files.iter().for_each(convert_ion_to_mzml),
         });
 
-        let ok = ok.load(Ordering::Relaxed);
-        let failed = failed.load(Ordering::Relaxed);
-        let skipped = skipped.load(Ordering::Relaxed);
+        print_convert_totals(&counters, t_all.elapsed());
 
-        let d = t_all.elapsed();
-        let total_secs = d.as_secs();
-        let h = total_secs / 3600;
-        let m = (total_secs % 3600) / 60;
-        let s = total_secs % 60;
-
-        println!(
-            "ok={ok} failed={failed} skipped={skipped} total_time={:02}:{:02}:{:02}",
-            h, m, s
-        );
-
-        if had_failed.load(Ordering::Relaxed) {
+        if counters.had_any_failure() {
             return Err("some files failed".to_string());
         }
         return Ok(());
@@ -1041,7 +1025,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             match IonReader::open_file(
                 in_path,
                 ReadOptions {
-                    parallel: matches!(encoding, Encoding::Parallel),
+                    parallel: matches!(encoding, Encoding::WithinFileParallel),
                     ..ReadOptions::default()
                 },
             ) {
@@ -1049,42 +1033,38 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     let count = ion.spectrum_count() as usize;
                     let mut buf = Vec::new();
                     for i in 0..count {
-                        if let Some(addresses) = ion.spectrum_arrays(i) {
+                        if let Some(addresses) = ion.spectrum_array_addresses(i) {
                             for address in addresses {
-                                let _ = ion.read_array(&address, &mut buf);
+                                let _ = ion.read_spectrum_values(&address, &mut buf);
                             }
                         }
                     }
                     let elapsed_s = t0.elapsed().as_secs_f64();
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let in_mb = fs::metadata(in_path)
-                        .map(|m| m.len() as f64 / MB)
-                        .unwrap_or(0.0);
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    println!(
-                        "{ANSI_GREEN}[ok]{ANSI_RESET} [{}/{}] {}  {:.2} MB  {:.3}s",
-                        n, total, name, in_mb, elapsed_s
+                    let n = counters.next_step();
+                    let in_mb = megabytes_of(in_path);
+                    let green = palette.green;
+                    let reset = palette.reset;
+                    let line = format!(
+                        "{green}[ok]{reset} [{n}/{total}] {name}  {in_mb:.2} MB  {elapsed_s:.3}s"
                     );
-                    let _ = stdout().flush();
+                    print_progress_line(&counters.print_lock, false, &line);
                 }
                 Err(e) => {
-                    had_failed.store(true, Ordering::Relaxed);
-                    failed.fetch_add(1, Ordering::Relaxed);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    let _g = print_lock.lock().unwrap_or_else(|e| e.into_inner());
-                    eprintln!(
-                        "{ANSI_RED}[error]{ANSI_RESET} [{}/{}] {}: {e}",
-                        n, total, name
-                    );
-                    let _ = stderr().flush();
+                    counters.had_failed.store(true, Ordering::Relaxed);
+                    counters.failed.fetch_add(1, Ordering::Relaxed);
+                    let n = counters.next_step();
+                    let red = palette.red;
+                    let reset = palette.reset;
+                    let line = format!("{red}[error]{reset} [{n}/{total}] {name}: {e}");
+                    print_progress_line(&counters.print_lock, true, &line);
                 }
             }
         };
         pool.install(|| match encoding {
-            Encoding::Sequential => files.par_iter().for_each(benchmark_one),
-            Encoding::Parallel => files.iter().for_each(benchmark_one),
+            Encoding::FileLevelParallel => files.par_iter().for_each(benchmark_one),
+            Encoding::WithinFileParallel => files.iter().for_each(benchmark_one),
         });
-        if had_failed.load(Ordering::Relaxed) {
+        if counters.had_any_failure() {
             return Err("some files failed".to_string());
         }
         return Ok(());
@@ -1123,6 +1103,49 @@ fn has_valid_trailer(path: &Path, file_len: u64) -> bool {
     }
 
     tail == FILE_TRAILER
+}
+
+const MZML_CLOSING_TAG: &[u8] = b"</indexedmzML>";
+const MZML_TAIL_SCAN_LEN: u64 = 64;
+
+#[inline]
+fn mzml_output_is_complete(path: &Path, file_len: u64) -> bool {
+    if file_len == 0 {
+        return false;
+    }
+
+    let mut f = match fs::File::open(path) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let read_len = file_len.min(MZML_TAIL_SCAN_LEN) as usize;
+    let back = -(read_len as i64);
+    if f.seek(SeekFrom::End(back)).is_err() {
+        return false;
+    }
+
+    let mut tail = vec![0u8; read_len];
+    if f.read_exact(&mut tail).is_err() {
+        return false;
+    }
+
+    trim_ascii_end(&tail).ends_with(MZML_CLOSING_TAG)
+}
+
+fn trim_ascii_end(bytes: &[u8]) -> &[u8] {
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &bytes[..end]
+}
+
+#[inline]
+fn megabytes_of(path: &Path) -> f64 {
+    fs::metadata(path)
+        .map(|m| m.len() as f64 / MB)
+        .unwrap_or(0.0)
 }
 
 #[inline]
