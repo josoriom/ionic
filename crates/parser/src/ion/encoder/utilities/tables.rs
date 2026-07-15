@@ -1,5 +1,7 @@
-use crate::ion::IonResult;
-use crate::ion::encoder::utilities::output::{WriteBytes, SectionChunk};
+use crate::ion::{
+    IonResult,
+    encoder::utilities::output::{SectionChunk, WriteBytes},
+};
 
 pub(crate) struct SummaryTable {
     chunk: SectionChunk,
@@ -92,7 +94,9 @@ pub(crate) struct WindowDirectory {
 
 impl WindowDirectory {
     pub(crate) fn new() -> Self {
-        Self { windows: Vec::new() }
+        Self {
+            windows: Vec::new(),
+        }
     }
 
     pub(crate) fn push(&mut self, window: u32, entry: WindowEntry) {

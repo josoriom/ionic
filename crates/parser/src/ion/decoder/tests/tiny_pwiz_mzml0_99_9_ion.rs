@@ -1,13 +1,13 @@
+use std::sync::OnceLock;
+
 use crate::{
-    mzml::structs::{NumericArray, MzML},
+    mzml::structs::{MzML, NumericArray},
     utilities::test::{
         CvRefMode, assert_cv, assert_software_param, chromatogram, chromatogram_list,
         parse_ion_as_mzml, spectrum_by_index, spectrum_description, spectrum_precursor_list,
         spectrum_scan_list,
     },
 };
-
-use std::sync::OnceLock;
 
 static MZML_CACHE: OnceLock<MzML> = OnceLock::new();
 

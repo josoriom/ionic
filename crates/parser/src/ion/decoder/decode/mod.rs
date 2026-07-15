@@ -2,49 +2,46 @@ use std::sync::Arc;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::ion::decoder::utilities::byte_source::FileSource;
-
 use crate::{
     accessions::{
         FLOAT_16BIT, FLOAT_32BIT, FLOAT_64BIT, INT_16BIT, INT_32BIT, INT_64BIT, format_accession,
     },
-    encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
     ion::{
-        IonError, IonResult, ByteRange, Range,
+        ByteRange, IonError, IonResult, Range,
         attr_meta::{
             ACC_ATTR_DEFAULT_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_DEFAULT_SOURCE_FILE_REF,
             ACC_ATTR_ID, ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_REF, ACC_ATTR_SAMPLE_REF,
             ACC_ATTR_START_TIME_STAMP, AccessionTail, parse_accession_tail,
         },
-        decoder::utilities::byte_source::{
-            BytesSource, CallbackSource, ReadBytes,
+        decoder::utilities::{
+            byte_source::{BytesSource, ReadBytes},
+            common::decompress_zstd,
         },
-        decoder::utilities::common::decompress_zstd,
         encoder::encode::{
-            FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16, FILE_DTYPE_I32,
-            FILE_DTYPE_I64,
+            CHROM_SUMMARY_SIZE, FILE_DTYPE_F16, FILE_DTYPE_F32, FILE_DTYPE_F64, FILE_DTYPE_I16,
+            FILE_DTYPE_I32, FILE_DTYPE_I64, SPEC_SUMMARY_SIZE,
         },
         filter_summary::{ChromatogramSummary, SpectrumSummary},
-        format::{CODEC_NONE, CODEC_ZSTD},
+        format::{CODEC_NONE, CODEC_ZSTD, FILE_TRAILER},
         meta_groups::MetaTotals,
         packing::PackingId,
         utilities::{
-            MetaGroupReader,
-            children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
-            common::get_attr_text,
+            Header, MetaGroupReader,
             block_reader::{
                 BlockReader, ContainerAccess, DefaultBlockProcessor, container_directory_range,
             },
+            check_section_layout,
+            children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
+            common::get_attr_text,
             decompression_limit::DecompressionLimit,
             parse_chromatogram, parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
-            Header, parse_header,
-            parse_instrument_list, parse_referenceable_param_group_list, parse_sample_list,
-            parse_scan_settings_list, parse_software_list, parse_spectrum, parse_spectrum_list,
+            parse_header, parse_instrument_list, parse_referenceable_param_group_list,
+            parse_sample_list, parse_scan_settings_list, parse_software_list, parse_spectrum,
+            parse_spectrum_list,
+            spectrum_source::{ScanSource, ScanSummary, TimeUnit, f16_bits_to_f64},
             window_directory::WindowDirectory,
-            spectrum_source::{
-                ScanSource, ScanSummary, TimeUnit, f16_bits_to_f64,
-            },
         },
     },
     mzml::{schema::TagId, structs::*},
@@ -76,29 +73,41 @@ fn max_address_index(entries_buf: &[u8]) -> u64 {
 }
 
 fn check_address_table(entries_buf: &[u8], table: &[u8], name: &str) -> IonResult<()> {
-    let expected = max_address_index(entries_buf) as usize * ARRAY_ADDRESS_BYTES;
-    if table.len() != expected {
+    let expected = max_address_index(entries_buf)
+        .checked_mul(ARRAY_ADDRESS_BYTES as u64)
+        .ok_or_else(|| IonError::from(format!("{name}: address count overflows the table size")))?;
+    if table.len() as u64 != expected {
         return Err(IonError::from(format!(
-            "{name}: record size is not {ARRAY_ADDRESS_BYTES} bytes (old format); re-encode with `ionic convert --update`"
+            "{name}: record size is not {ARRAY_ADDRESS_BYTES} bytes (old format); re-encode the file from its mzML source with `ionic convert`"
         )));
     }
     Ok(())
 }
 
+fn check_array_dtypes(address_bytes: &[u8], name: &'static str) -> IonResult<()> {
+    for record in address_bytes.chunks_exact(ARRAY_ADDRESS_BYTES) {
+        crate::ion::packing::Dtype::from_byte(record[24]).map_err(|_| IonError::BadDtype {
+            dtype: record[24],
+            kind: name,
+        })?;
+    }
+    Ok(())
+}
+
 mod arrays;
-mod windows;
 mod spectra;
 mod to_mzml;
+mod windows;
 
-pub use arrays::{ArrayAddress, ArrayGroup};
-pub use windows::{DataXY, Pixel, Select, Window, Target, ItemSlice};
-pub use to_mzml::{Metadatum, MetadatumValue};
-
+pub use arrays::ArrayAddress;
 pub(crate) use arrays::{
-    address_read_params, dtype_stride, group_arrays, parse_array_address,
-    read_array_addresses_from_buffers, read_group_decoded_bytes, read_scan_arrays, unfilter_array_bytes,
+    ArrayGroup, address_read_params, dtype_stride, group_arrays, parse_array_address,
+    read_array_addresses_from_buffers, read_group_decoded_bytes, read_scan_arrays,
+    unfilter_array_bytes,
 };
 pub(crate) use to_mzml::attach_logical_array;
+pub use to_mzml::{Metadatum, MetadatumValue};
+pub use windows::{DataXY, ItemKind, ItemSlice, Pixel, Query, Select, Window};
 
 #[derive(Debug, Clone)]
 pub struct ReadOptions {
@@ -152,11 +161,7 @@ pub struct IonReader {
 
 impl IonReader {
     pub fn open(bytes: &[u8], config: ReadOptions) -> IonResult<Self> {
-        Self::open_bytes(Arc::from(bytes), config)
-    }
-
-    pub fn open_bytes(file_bytes: Arc<[u8]>, config: ReadOptions) -> IonResult<Self> {
-        let source = Arc::new(BytesSource::new(file_bytes)) as Arc<dyn ReadBytes>;
+        let source = Arc::new(BytesSource::new(Arc::from(bytes))) as Arc<dyn ReadBytes>;
         Self::open_source(source, config)
     }
 
@@ -168,39 +173,115 @@ impl IonReader {
         Self::open_source(source, config)
     }
 
-    pub fn open_remote(
-        read: impl Fn(ByteRange) -> IonResult<Vec<u8>> + Send + Sync + 'static,
-        config: ReadOptions,
-    ) -> IonResult<Self> {
-        let source = Arc::new(CallbackSource::new(read)) as Arc<dyn ReadBytes>;
-        Self::open_source(source, config)
-    }
-
     pub fn open_source(source: Arc<dyn ReadBytes>, config: ReadOptions) -> IonResult<Self> {
-        let header_buf = source.read(ByteRange { offset: 0, length: 1024 })?;
+        let header_buf = source.read(ByteRange {
+            offset: 0,
+            length: 1024,
+        })?;
         let header = parse_header(&header_buf)?;
         let block_packing_id = PackingId::from_byte(header.default_array_filter)?;
 
-        let spec_summary_buf = source.read(ByteRange { offset: header.off_spec_summary, length: header.len_spec_summary })?;
-        let chrom_summary_buf = source.read(ByteRange { offset: header.off_chrom_summary, length: header.len_chrom_summary })?;
-        let spec_entries_buf = source.read(ByteRange { offset: header.off_spec_entries, length: header.len_spec_entries })?;
-        let spec_array_addresses = source.read(ByteRange { offset: header.off_spec_array_addresses, length: header.len_spec_array_addresses })?;
-        let chrom_entries_buf = source.read(ByteRange { offset: header.off_chrom_entries, length: header.len_chrom_entries })?;
-        let chrom_array_addresses =
-            source.read(ByteRange { offset: header.off_chrom_array_addresses, length: header.len_chrom_array_addresses })?;
-        let global_meta_buf = source.read(ByteRange { offset: header.off_global_meta, length: header.len_global_meta })?;
-
-        check_address_table(&spec_entries_buf, &spec_array_addresses, "spec_array_addresses")?;
-        check_address_table(&chrom_entries_buf, &chrom_array_addresses, "chrom_array_addresses")?;
+        let spec_summary_buf = source.read(ByteRange {
+            offset: header.off_spec_summary,
+            length: header.len_spec_summary,
+        })?;
+        let chrom_summary_buf = source.read(ByteRange {
+            offset: header.off_chrom_summary,
+            length: header.len_chrom_summary,
+        })?;
+        let spec_entries_buf = source.read(ByteRange {
+            offset: header.off_spec_entries,
+            length: header.len_spec_entries,
+        })?;
+        let spec_array_addresses = source.read(ByteRange {
+            offset: header.off_spec_array_addresses,
+            length: header.len_spec_array_addresses,
+        })?;
+        let chrom_entries_buf = source.read(ByteRange {
+            offset: header.off_chrom_entries,
+            length: header.len_chrom_entries,
+        })?;
+        let chrom_array_addresses = source.read(ByteRange {
+            offset: header.off_chrom_array_addresses,
+            length: header.len_chrom_array_addresses,
+        })?;
+        let global_meta_buf = source.read(ByteRange {
+            offset: header.off_global_meta,
+            length: header.len_global_meta,
+        })?;
+        let spec_meta_buf = source.read(ByteRange {
+            offset: header.off_spec_meta,
+            length: header.len_spec_meta,
+        })?;
+        let chrom_meta_buf = source.read(ByteRange {
+            offset: header.off_chrom_meta,
+            length: header.len_chrom_meta,
+        })?;
 
         if config.verify_checksums {
+            let layout_failures = check_section_layout(&header);
+            if !layout_failures.is_empty() {
+                return Err(IonError::from(format!(
+                    "header: file integrity validation failed ({} check(s)):\n{}",
+                    layout_failures.len(),
+                    layout_failures.join("\n")
+                )));
+            }
+            let trailer = source.read(ByteRange {
+                offset: header.total_file_size.saturating_sub(8),
+                length: 8,
+            })?;
+            if trailer[..] != FILE_TRAILER {
+                return Err(IonError::from("header: missing or invalid file trailer"));
+            }
+            if let Some(actual_len) = source.total_len() {
+                if actual_len != header.total_file_size {
+                    return Err(IonError::from(format!(
+                        "header: total_file_size ({}) does not match source length ({actual_len})",
+                        header.total_file_size
+                    )));
+                }
+            }
             check_crc(&spec_summary_buf, header.spec_summary_crc32, "spec_summary")?;
             check_crc(&spec_entries_buf, header.spec_entries_crc32, "spec_entries")?;
-            check_crc(&spec_array_addresses, header.spec_array_addresses_crc32, "spec_array_addresses")?;
-            check_crc(&chrom_summary_buf, header.chrom_summary_crc32, "chrom_summary")?;
-            check_crc(&chrom_entries_buf, header.chrom_entries_crc32, "chrom_entries")?;
-            check_crc(&chrom_array_addresses, header.chrom_array_addresses_crc32, "chrom_array_addresses")?;
+            check_crc(
+                &spec_array_addresses,
+                header.spec_array_addresses_crc32,
+                "spec_array_addresses",
+            )?;
+            check_crc(
+                &chrom_summary_buf,
+                header.chrom_summary_crc32,
+                "chrom_summary",
+            )?;
+            check_crc(
+                &chrom_entries_buf,
+                header.chrom_entries_crc32,
+                "chrom_entries",
+            )?;
+            check_crc(
+                &chrom_array_addresses,
+                header.chrom_array_addresses_crc32,
+                "chrom_array_addresses",
+            )?;
+            check_crc(&spec_meta_buf, header.spec_meta_crc32, "spec_meta")?;
+            check_crc(&chrom_meta_buf, header.chrom_meta_crc32, "chrom_meta")?;
+            check_crc(&global_meta_buf, header.global_meta_crc32, "global_meta")?;
         }
+
+        check_address_table(
+            &spec_entries_buf,
+            &spec_array_addresses,
+            "spec_array_addresses",
+        )?;
+        check_address_table(
+            &chrom_entries_buf,
+            &chrom_array_addresses,
+            "chrom_array_addresses",
+        )?;
+
+        check_array_dtypes(&spec_array_addresses, "spec array dtype")?;
+        check_array_dtypes(&chrom_array_addresses, "chrom array dtype")?;
 
         let spec_container = BlockReader::new(
             source.clone(),
@@ -237,7 +318,7 @@ impl IonReader {
         };
 
         let spec_meta_reader = MetaGroupReader::new(
-            Arc::from(source.read(ByteRange { offset: header.off_spec_meta, length: header.len_spec_meta })?),
+            spec_meta_buf.into_arc(),
             header.spec_meta_group_count,
             header.meta_group_size,
             header.spectrum_count,
@@ -254,7 +335,7 @@ impl IonReader {
         )?;
 
         let chrom_meta_reader = MetaGroupReader::new(
-            Arc::from(source.read(ByteRange { offset: header.off_chrom_meta, length: header.len_chrom_meta })?),
+            chrom_meta_buf.into_arc(),
             header.chrom_meta_group_count,
             header.meta_group_size,
             header.chrom_count,
@@ -275,13 +356,13 @@ impl IonReader {
             source,
             spec_window_directory: WindowDirectoryCache::Unloaded,
             chrom_window_directory: WindowDirectoryCache::Unloaded,
-            spec_summary_buf: Arc::from(spec_summary_buf),
-            chrom_summary_buf: Arc::from(chrom_summary_buf),
-            spec_entries_buf: Arc::from(spec_entries_buf),
-            spec_array_addresses: Arc::from(spec_array_addresses),
-            chrom_entries_buf: Arc::from(chrom_entries_buf),
-            chrom_array_addresses: Arc::from(chrom_array_addresses),
-            global_meta_buf: Arc::from(global_meta_buf),
+            spec_summary_buf: spec_summary_buf.into_arc(),
+            chrom_summary_buf: chrom_summary_buf.into_arc(),
+            spec_entries_buf: spec_entries_buf.into_arc(),
+            spec_array_addresses: spec_array_addresses.into_arc(),
+            chrom_entries_buf: chrom_entries_buf.into_arc(),
+            chrom_array_addresses: chrom_array_addresses.into_arc(),
+            global_meta_buf: global_meta_buf.into_arc(),
             spec_container,
             chrom_container,
             spec_meta_reader,
@@ -337,8 +418,13 @@ impl IonReader {
             return;
         }
         self.chrom_window_directory = match self.load_chrom_window_directory() {
-            Some(index) => WindowDirectoryCache::Loaded(index),
-            None => WindowDirectoryCache::Missing,
+            Ok(index) => WindowDirectoryCache::Loaded(index),
+            Err(IonError::MissingChromatogramBounds) => WindowDirectoryCache::Missing,
+            Err(IonError::BadChromatogramBoundsChecksum) => WindowDirectoryCache::BadChecksum,
+            Err(IonError::MalformedChromatogramBounds(reason)) => {
+                WindowDirectoryCache::Malformed(reason)
+            }
+            Err(other) => WindowDirectoryCache::Malformed(other.to_string()),
         };
     }
 
@@ -346,7 +432,8 @@ impl IonReader {
         if self.header.len_spec_window_directory == 0 {
             return Err(IonError::MissingSpectrumBounds);
         }
-        let spec_array_address_count = self.spec_array_addresses.len() as u64 / ARRAY_ADDRESS_BYTES as u64;
+        let spec_array_address_count =
+            self.spec_array_addresses.len() as u64 / ARRAY_ADDRESS_BYTES as u64;
         let bytes = self
             .source
             .read(ByteRange {
@@ -358,33 +445,53 @@ impl IonReader {
             return Err(IonError::BadSpectrumBoundsChecksum);
         }
         let decompressed = self
-            .decompress_window_directory(&bytes, self.header.plain_len_spec_window_directory as usize)
+            .decompress_window_directory(
+                &bytes,
+                self.header.plain_len_spec_window_directory as usize,
+            )
             .map_err(|error| {
                 IonError::MalformedSpectrumBounds(format!("decompression failed: {error}"))
             })?;
-        WindowDirectory::from_bytes(&decompressed, spec_array_address_count, self.header.spectrum_count)
-            .map_err(|error| IonError::MalformedSpectrumBounds(error.to_string()))
+        WindowDirectory::from_bytes(
+            &decompressed,
+            spec_array_address_count,
+            self.header.spectrum_count,
+        )
+        .map_err(|error| IonError::MalformedSpectrumBounds(error.to_string()))
     }
 
-    fn load_chrom_window_directory(&self) -> Option<WindowDirectory> {
+    fn load_chrom_window_directory(&self) -> IonResult<WindowDirectory> {
         if self.header.len_chrom_window_directory == 0 {
-            return None;
+            return Err(IonError::MissingChromatogramBounds);
         }
-        let chrom_array_address_count = self.chrom_array_addresses.len() as u64 / ARRAY_ADDRESS_BYTES as u64;
+        let chrom_array_address_count =
+            self.chrom_array_addresses.len() as u64 / ARRAY_ADDRESS_BYTES as u64;
         let bytes = self
             .source
             .read(ByteRange {
                 offset: self.header.off_chrom_window_directory,
                 length: self.header.len_chrom_window_directory,
             })
-            .ok()?;
+            .map_err(|error| {
+                IonError::MalformedChromatogramBounds(format!("read failed: {error}"))
+            })?;
         if crc32fast::hash(&bytes) != self.header.chrom_window_directory_crc32 {
-            return None;
+            return Err(IonError::BadChromatogramBoundsChecksum);
         }
         let decompressed = self
-            .decompress_window_directory(&bytes, self.header.plain_len_chrom_window_directory as usize)
-            .ok()?;
-        WindowDirectory::from_bytes(&decompressed, chrom_array_address_count, self.header.chrom_count).ok()
+            .decompress_window_directory(
+                &bytes,
+                self.header.plain_len_chrom_window_directory as usize,
+            )
+            .map_err(|error| {
+                IonError::MalformedChromatogramBounds(format!("decompression failed: {error}"))
+            })?;
+        WindowDirectory::from_bytes(
+            &decompressed,
+            chrom_array_address_count,
+            self.header.chrom_count,
+        )
+        .map_err(|error| IonError::MalformedChromatogramBounds(error.to_string()))
     }
 
     fn decompress_window_directory(&self, bytes: &[u8], plain_len: usize) -> IonResult<Vec<u8>> {
@@ -411,16 +518,46 @@ pub fn open_ranges(header_bytes: &[u8]) -> IonResult<Vec<ByteRange>> {
 
 pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<ByteRange>> {
     let mut ranges = vec![
-        ByteRange { offset: 0, length: 1024 },
-        ByteRange { offset: header.off_spec_summary, length: header.len_spec_summary },
-        ByteRange { offset: header.off_chrom_summary, length: header.len_chrom_summary },
-        ByteRange { offset: header.off_spec_entries, length: header.len_spec_entries },
-        ByteRange { offset: header.off_spec_array_addresses, length: header.len_spec_array_addresses },
-        ByteRange { offset: header.off_chrom_entries, length: header.len_chrom_entries },
-        ByteRange { offset: header.off_chrom_array_addresses, length: header.len_chrom_array_addresses },
-        ByteRange { offset: header.off_global_meta, length: header.len_global_meta },
-        ByteRange { offset: header.off_spec_meta, length: header.len_spec_meta },
-        ByteRange { offset: header.off_chrom_meta, length: header.len_chrom_meta },
+        ByteRange {
+            offset: 0,
+            length: 1024,
+        },
+        ByteRange {
+            offset: header.off_spec_summary,
+            length: header.len_spec_summary,
+        },
+        ByteRange {
+            offset: header.off_chrom_summary,
+            length: header.len_chrom_summary,
+        },
+        ByteRange {
+            offset: header.off_spec_entries,
+            length: header.len_spec_entries,
+        },
+        ByteRange {
+            offset: header.off_spec_array_addresses,
+            length: header.len_spec_array_addresses,
+        },
+        ByteRange {
+            offset: header.off_chrom_entries,
+            length: header.len_chrom_entries,
+        },
+        ByteRange {
+            offset: header.off_chrom_array_addresses,
+            length: header.len_chrom_array_addresses,
+        },
+        ByteRange {
+            offset: header.off_global_meta,
+            length: header.len_global_meta,
+        },
+        ByteRange {
+            offset: header.off_spec_meta,
+            length: header.len_spec_meta,
+        },
+        ByteRange {
+            offset: header.off_chrom_meta,
+            length: header.len_chrom_meta,
+        },
     ];
 
     if header.len_spec_window_directory > 0 {

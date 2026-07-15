@@ -1,7 +1,7 @@
-use super::*;
-use crate::encoder::utilities::SectionChunk;
-use crate::mzml::structs::CvParam;
 use std::sync::Arc;
+
+use super::*;
+use crate::{ion::encoder::utilities::SectionChunk, mzml::structs::CvParam};
 
 #[test]
 fn value_pool_empty_value_gives_kind_2() {
@@ -144,8 +144,7 @@ fn compress_bytes_if_enabled_level_zero_is_identity() {
 
 #[test]
 fn array_type_accession_from_bda_returns_mz_array() {
-    use crate::accessions::MZ_ARRAY;
-    use crate::mzml::structs::BinaryDataArray;
+    use crate::{accessions::MZ_ARRAY, mzml::structs::BinaryDataArray};
     let bda = BinaryDataArray {
         cv_params: vec![CvParam {
             cv_ref: Some("MS".to_string()),
@@ -182,11 +181,10 @@ fn collector_global_meta_on_empty_mzml_produces_run_buffer() {
 
 #[test]
 fn grouped_metadata_keeps_values_local_to_each_group() {
-    use crate::decoder::decode::MetadatumValue;
-    use crate::ion::DecompressionLimit;
-    use crate::ion::format::CODEC_NONE;
-    use crate::ion::meta_groups::MetaTotals;
-    use crate::ion::utilities::MetaGroupReader;
+    use crate::ion::{
+        DecompressionLimit, decoder::decode::MetadatumValue, format::CODEC_NONE,
+        meta_groups::MetaTotals, utilities::MetaGroupReader,
+    };
 
     let grouped = three_item_grouped();
     assert_eq!(grouped.group_count, 3);
@@ -254,10 +252,9 @@ fn grouped_bytes(grouped: &grouper::GroupedSection) -> &[u8] {
 
 #[test]
 fn metadata_reader_rejects_wrong_uncompressed_total() {
-    use crate::ion::DecompressionLimit;
-    use crate::ion::format::CODEC_NONE;
-    use crate::ion::meta_groups::MetaTotals;
-    use crate::ion::utilities::MetaGroupReader;
+    use crate::ion::{
+        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals, utilities::MetaGroupReader,
+    };
 
     let grouped = three_item_grouped();
     let result = MetaGroupReader::new(
@@ -281,10 +278,9 @@ fn metadata_reader_rejects_wrong_uncompressed_total() {
 
 #[test]
 fn metadata_reader_rejects_wrong_row_total() {
-    use crate::ion::DecompressionLimit;
-    use crate::ion::format::CODEC_NONE;
-    use crate::ion::meta_groups::MetaTotals;
-    use crate::ion::utilities::MetaGroupReader;
+    use crate::ion::{
+        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals, utilities::MetaGroupReader,
+    };
 
     let grouped = three_item_grouped();
     let reader = MetaGroupReader::new(
@@ -309,10 +305,12 @@ fn metadata_reader_rejects_wrong_row_total() {
 
 #[test]
 fn metadata_reader_rejects_payload_into_directory() {
-    use crate::ion::DecompressionLimit;
-    use crate::ion::format::CODEC_NONE;
-    use crate::ion::meta_groups::{META_GROUP_ENTRY_SIZE, MetaTotals};
-    use crate::ion::utilities::MetaGroupReader;
+    use crate::ion::{
+        DecompressionLimit,
+        format::CODEC_NONE,
+        meta_groups::{META_GROUP_ENTRY_SIZE, MetaTotals},
+        utilities::MetaGroupReader,
+    };
 
     let grouped = three_item_grouped();
     let mut bytes = grouped_bytes(&grouped).to_vec();
@@ -367,12 +365,16 @@ fn array_policy_no_force_when_disabled() {
 
 #[test]
 fn group_local_node_ids_across_group_boundaries() {
-    use crate::ion::encoder::encode::{WriteOptions, TARGET_BLOCK_UNCOMPRESSED_BYTES};
-    use crate::ion::encoder::ion_writer::write_mzml_to_ion;
-    use crate::ion::encoder::utilities::SectionStorage;
-    use crate::mzml::structs::{
-        NumericArray, BinaryDataArray, BinaryDataArrayList, CvParam, MzML, Run, Spectrum,
-        SpectrumList,
+    use crate::{
+        ion::encoder::{
+            encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
+            ion_writer::write_mzml_to_ion,
+            utilities::SectionStorage,
+        },
+        mzml::structs::{
+            BinaryDataArray, BinaryDataArrayList, CvParam, MzML, NumericArray, Run, Spectrum,
+            SpectrumList,
+        },
     };
 
     fn make_array(accession: &str, data: Vec<f64>) -> BinaryDataArray {
@@ -438,8 +440,10 @@ fn group_local_node_ids_across_group_boundaries() {
     )
     .unwrap();
 
-    use crate::ion::decoder::decode::{IonReader, ReadOptions, Metadatum};
-    use crate::mzml::schema::TagId;
+    use crate::{
+        ion::decoder::decode::{IonReader, Metadatum, ReadOptions},
+        mzml::schema::TagId,
+    };
 
     fn find_row(rows: &[Metadatum], tag: TagId, id: u32) -> &Metadatum {
         rows.iter()
@@ -497,5 +501,99 @@ fn group_local_node_ids_across_group_boundaries() {
     assert_eq!(
         second_bda_list.parent_id, FIRST_LOCAL_ITEM_NODE_ID,
         "second group BinaryDataArrayList should parent to spectrum id=2"
+    );
+}
+
+#[test]
+fn product_own_cv_params_parent_to_product_list_not_to_the_product_itself() {
+    use crate::{
+        ion::encoder::{
+            encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
+            ion_writer::write_mzml_to_ion,
+            utilities::SectionStorage,
+        },
+        mzml::structs::{CvParam, MzML, Product, ProductList, Run, Spectrum, SpectrumList},
+    };
+
+    let product = Product {
+        cv_params: vec![CvParam {
+            cv_ref: Some("MS".to_string()),
+            accession: Some("MS:1000827".to_string()),
+            name: "selected reaction monitoring transition".to_string(),
+            value: Some("1.0".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let spectrum = Spectrum {
+        id: "spectrum=0".to_string(),
+        index: Some(0),
+        product_list: Some(ProductList {
+            count: Some(1),
+            products: vec![product],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let run = Run {
+        id: "run1".to_string(),
+        spectrum_list: Some(SpectrumList {
+            count: Some(1),
+            spectra: vec![spectrum],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let mzml = MzML {
+        run,
+        ..Default::default()
+    };
+
+    let mut output = Vec::new();
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: false,
+            section_storage: SectionStorage::Memory,
+            mz_window: 0.0,
+        },
+        &mut output,
+    )
+    .unwrap();
+
+    use crate::{
+        ion::decoder::decode::{IonReader, ReadOptions},
+        mzml::schema::TagId,
+    };
+
+    let mut decoder =
+        IonReader::open(&output, ReadOptions::default()).expect("failed to open decoder");
+    let rows = decoder
+        .spectrum_metadata_at(0)
+        .expect("failed to read spectrum metadata");
+
+    let product_row = rows
+        .iter()
+        .find(|row| row.tag_id == TagId::Product)
+        .expect("product touch row not found");
+
+    let product_own_param = rows
+        .iter()
+        .find(|row| row.tag_id == TagId::CvParam && row.id == product_row.id)
+        .expect("product cv_param row not found");
+
+    assert_ne!(
+        product_own_param.parent_id, product_row.id,
+        "product's own cv_param must not be parented to the product's own node id"
+    );
+    assert_eq!(
+        product_own_param.parent_id, product_row.parent_id,
+        "product's own cv_param must share the product's parent node id"
     );
 }

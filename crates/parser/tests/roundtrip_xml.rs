@@ -1,8 +1,7 @@
 #[macro_use]
 mod common;
 
-use common::assertions::*;
-use common::test_files;
+use common::{assertions::*, test_files};
 use ionic::mzml::{bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml};
 
 roundtrip_xml!(tiny_10_semantic, test_files::tiny_pwiz_10);

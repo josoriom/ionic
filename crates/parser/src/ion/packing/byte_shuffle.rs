@@ -1,5 +1,5 @@
 use super::{Dtype, IonResult, Packing, PackingId, PackingInput};
-use crate::ion::byte_transpose;
+use crate::ion::{IonError, byte_transpose};
 
 pub(crate) static BYTE_SHUFFLE: ByteShuffle = ByteShuffle;
 pub(crate) struct ByteShuffle;
@@ -22,6 +22,11 @@ impl Packing for ByteShuffle {
 
     fn decode(&self, input: &[u8], dtype: Dtype, out: &mut Vec<u8>) -> IonResult<()> {
         let stride = dtype.byte_stride();
+        if input.len() % stride != 0 {
+            return Err(IonError::from(
+                "byte shuffle: input length is not a multiple of the stride",
+            ));
+        }
         out.resize(input.len(), 0);
         byte_transpose::unshuffle(input, out, stride);
         Ok(())
@@ -85,5 +90,32 @@ mod tests {
             .encode(PackingInput::F64(&input), &mut enc)
             .unwrap();
         assert_eq!(enc.len(), input.len() * 8);
+    }
+
+    #[test]
+    fn decode_rejects_misaligned_input() {
+        let seven_bytes = [0u8; 7];
+        let mut out = Vec::new();
+        let err = BYTE_SHUFFLE
+            .decode(&seven_bytes, Dtype::F64, &mut out)
+            .expect_err("7 bytes is not a multiple of the f64 stride of 8");
+        assert!(err.contains("not a multiple of the stride"));
+
+        let nine_bytes = [0u8; 9];
+        let mut out = Vec::new();
+        let err = BYTE_SHUFFLE
+            .decode(&nine_bytes, Dtype::F64, &mut out)
+            .expect_err("9 bytes is not a multiple of the f64 stride of 8");
+        assert!(err.contains("not a multiple of the stride"));
+    }
+
+    #[test]
+    fn decode_accepts_stride_multiple_input() {
+        let sixteen_bytes = [0u8; 16];
+        let mut out = Vec::new();
+        BYTE_SHUFFLE
+            .decode(&sixteen_bytes, Dtype::F64, &mut out)
+            .expect("16 bytes is a multiple of the f64 stride of 8");
+        assert_eq!(out.len(), 16);
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{NumericArray, MzML, NumericType},
+    mzml::structs::{MzML, NumericArray, NumericType},
     utilities::test::{CvRefMode, assert_cv, mzml, spectrum_precursor_list, spectrum_scan_list},
 };
 

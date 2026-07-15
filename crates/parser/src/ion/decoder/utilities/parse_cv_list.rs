@@ -1,10 +1,10 @@
 use crate::{
-    decoder::decode::Metadatum,
     ion::{
         attr_meta::{
             ACC_ATTR_CV_FULL_NAME, ACC_ATTR_CV_URI, ACC_ATTR_CV_VERSION, ACC_ATTR_ID,
             ACC_ATTR_LABEL,
         },
+        decoder::decode::Metadatum,
         utilities::{
             children_lookup::{ChildrenLookup, OwnerRows},
             common::get_attr_text,

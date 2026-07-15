@@ -1,7 +1,13 @@
 use super::*;
 
 #[inline]
-pub(crate) fn slice_summary(bytes: &[u8], off: u64, index: usize, size: usize, count: u64) -> Option<&[u8]> {
+pub(crate) fn slice_summary(
+    bytes: &[u8],
+    off: u64,
+    index: usize,
+    size: usize,
+    count: u64,
+) -> Option<&[u8]> {
     if index >= count as usize {
         return None;
     }
@@ -59,9 +65,15 @@ pub(crate) fn build_one_spectrum(rows: &[Metadatum], fallback_index: usize) -> O
     ))
 }
 
-pub(crate) fn build_one_chromatogram(rows: &[Metadatum], fallback_index: usize) -> Option<Chromatogram> {
+pub(crate) fn build_one_chromatogram(
+    rows: &[Metadatum],
+    fallback_index: usize,
+) -> Option<Chromatogram> {
     let children_lookup = ChildrenLookup::new(rows);
-    let chromatogram_id = children_lookup.all_ids(TagId::Chromatogram).first().copied()?;
+    let chromatogram_id = children_lookup
+        .all_ids(TagId::Chromatogram)
+        .first()
+        .copied()?;
     let mut owner_rows = OwnerRows::with_capacity(rows.len());
     for row in rows {
         owner_rows.insert(row.id, row);
@@ -124,10 +136,7 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
             self.summary_chunks.by_ref().zip(self.entry_chunks.by_ref())
         {
             let summary = parse_spec_summary(summary_bytes);
-            if !summary.rt.is_finite()
-                || summary.rt < self.rt_min
-                || summary.rt > self.rt_max
-            {
+            if !summary.rt.is_finite() || summary.rt < self.rt_min || summary.rt > self.rt_max {
                 continue;
             }
             if self.ms_level != 0 && summary.ms_level != self.ms_level {
@@ -165,7 +174,7 @@ impl<'a, 'd> ScanIterator<'a, 'd> {
 }
 
 impl IonReader {
-    pub fn spec_summary(&self, index: usize) -> Option<SpectrumSummary> {
+    pub fn spectrum_summary(&self, index: usize) -> Option<SpectrumSummary> {
         let b = slice_summary(
             &self.spec_summary_buf,
             0,
@@ -176,7 +185,7 @@ impl IonReader {
         Some(parse_spec_summary(b))
     }
 
-    pub fn spec_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
+    pub fn spectrum_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
         let len = usize::try_from(self.header.len_spec_summary)
             .map_err(|_| IonError::from("spec summary: out of bounds"))?;
         let count = usize::try_from(self.header.spectrum_count)
@@ -193,7 +202,7 @@ impl IonReader {
             .collect())
     }
 
-    pub fn chrom_summary(&self, index: usize) -> Option<ChromatogramSummary> {
+    pub fn chromatogram_summary(&self, index: usize) -> Option<ChromatogramSummary> {
         let b = slice_summary(
             &self.chrom_summary_buf,
             0,
@@ -204,7 +213,7 @@ impl IonReader {
         Some(parse_chrom_summary(b))
     }
 
-    pub fn chrom_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
+    pub fn chromatogram_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
         let len = usize::try_from(self.header.len_chrom_summary)
             .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
         let count = usize::try_from(self.header.chrom_count)
@@ -268,9 +277,11 @@ impl IonReader {
             return Ok(None);
         };
 
-        if let Some(array_addresses) =
-            read_array_addresses_from_buffers(&self.spec_entries_buf, &self.spec_array_addresses, index)
-        {
+        if let Some(array_addresses) = read_array_addresses_from_buffers(
+            &self.spec_entries_buf,
+            &self.spec_array_addresses,
+            index,
+        ) {
             let groups = group_arrays(array_addresses.as_slice())?;
             let bd_list = spectrum
                 .binary_data_array_list
@@ -300,7 +311,11 @@ impl IonReader {
         };
 
         if let (Some(array_addresses), Some(container)) = (
-            read_array_addresses_from_buffers(&self.chrom_entries_buf, &self.chrom_array_addresses, index),
+            read_array_addresses_from_buffers(
+                &self.chrom_entries_buf,
+                &self.chrom_array_addresses,
+                index,
+            ),
             self.chrom_container.as_mut(),
         ) {
             let groups = group_arrays(array_addresses.as_slice())?;
@@ -364,7 +379,13 @@ impl ScanSource for IonReader {
         let Some(entry) = all_entries.get(entry_start..entry_start + INDEX_ENTRY_BYTES) else {
             return false;
         };
-        read_scan_arrays(&mut self.spec_container, entry, array_address_bytes, mz, intensity)
+        read_scan_arrays(
+            &mut self.spec_container,
+            entry,
+            array_address_bytes,
+            mz,
+            intensity,
+        )
     }
 
     fn for_each_in_range<F>(&mut self, rt_min: f64, rt_max: f64, ms_level: u8, mut callback: F)

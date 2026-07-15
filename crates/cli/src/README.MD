@@ -25,13 +25,28 @@ Prints JSON to stdout for a **single file**.
 - `-f, --full`
   - Print the full metadata (default prints a summary).
 - `--scan <N>`
-  - Print a single spectrum (1-based position in the spectrum list) as JSON.
+  - Print a single spectrum's metadata (1-based position in the spectrum list) as JSON,
+    without its m/z and intensity arrays.
+- `--scan-full <N>`
+  - Same as `--scan`, but also includes the spectrum's m/z and intensity arrays.
+- `--chrom <N>`
+  - Print a single chromatogram's metadata (1-based position in the chromatogram list)
+    as JSON, without its time and intensity arrays.
+- `--chrom-full <N>`
+  - Same as `--chrom`, but also includes the chromatogram's time and intensity arrays.
+
+`--check`, `--scan`, `--scan-full`, `--chrom`, and `--chrom-full` are mutually exclusive —
+pass at most one.
 
 ### Example:
 
 ```bash
 ionic cat crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 ionic cat --check crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
+ionic cat --scan 1 crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
+ionic cat --scan-full 1 crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
+ionic cat --chrom 1 crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
+ionic cat --chrom-full 1 crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 ```
 
 ---
@@ -79,16 +94,30 @@ Batch converts files under a folder **recursively**, preserving the relative fol
   - Number of worker threads used for conversion (Rayon thread pool). Pass `--cores 1`
     to keep the machine responsive during a large conversion.
 
+- `--many-files`
+  - Switches which axis is parallelized: by default the tool converts files one at a
+    time but parallelizes the work *inside* each file's encode/decode; `--many-files`
+    instead converts many files at once in parallel, sequentially within each file.
+    Use this when you have a large number of small files rather than a few large ones.
+
 ### Conversion mode (optional)
 
-If you don’t pass any mode flag, the default is `--mzml-to-ion`.
+You may pass **at most one** of the following. If you don't pass any, the default is
+`--mzml-to-ion`.
 
 - `--mzml-to-ion`
   - Converts `.mzML` → `.ion` (add `--force-f32` to store f64 arrays as f32; smaller, lossy)
 
 - `--ion-to-mzml`
   - Converts `.ion` → `.mzML`
-  - Uses `decode(...)` into `MzML`, then `bin_to_mzml(&mzml)` to produce mzML XML
+  - Calls `IonReader::open_file` to open the `.ion` file, then `ion.to_mzml()` to decode
+    it into an `MzML` model, then `bin_to_mzml(&mzml)` to render mzML XML, and writes
+    the resulting bytes to the output file.
+
+- `--benchmark-decode`
+  - Doesn't write any output. Instead, times how long it takes to read every spectrum's
+    m/z and intensity arrays out of each `.ion` file — useful for measuring decode
+    speed without the cost of re-encoding as mzML.
 
 ### Filtering flags (optional)
 
@@ -97,20 +126,11 @@ You may pass **at most one** of the following:
 - `--pattern <STR>`
   - Unicode case-insensitive substring match.
 
-- `--pattern-exact <STR>`
-  - Case-sensitive substring match.
+- `--pattern-exact <NAME>`
+  - Case-sensitive exact match against the whole filename (not a substring match).
 
 - `--regex <REGEX>`
   - Regex match against the filename.
-
-### Migration flags (optional)
-
-- `--update`
-  - Re-encode existing `.ion` files in place into the current windowed format, reading
-    each old file through the legacy compatibility decoder and verifying the result
-    round-trips bit-exact before replacing the original (atomic temp + rename).
-- `--dry-run`
-  - With `--update`, report what would change without writing anything.
 
 ---
 
@@ -118,7 +138,7 @@ You may pass **at most one** of the following:
 
 Defaults:
 
-- `--level 22`, `--mz-window 50`, `--block-size 16`
+- `--level 22`, `--mz-window 250`, `--block-size 8`
 
 Run (defaults):
 

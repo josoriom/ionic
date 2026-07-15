@@ -1,28 +1,21 @@
-use crate::mzml::schema::TagId;
-use crate::mzml::utilities::{
-    ParamCollector, ParseError, drain_until_close, read_cv_param, read_ref_group_ref,
-    read_software_param, read_user_param, tag_id_from_bytes,
-};
+use std::io::BufRead;
+
 use quick_xml::{
     Reader,
     events::{BytesStart, Event},
 };
-use std::io::BufRead;
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Default)]
-pub(crate) enum StrictnessPolicy {
-    #[default]
-    Permissive,
-    Warn,
-    Error,
-}
+use crate::mzml::{
+    schema::TagId,
+    utilities::{
+        ParamCollector, ParseError, drain_until_close, read_cv_param, read_ref_group_ref,
+        read_software_param, read_user_param, tag_id_from_bytes,
+    },
+};
 
 pub(crate) struct ParsingWorkspace<R> {
     pub(crate) xml_reader: Reader<R>,
     pool: BufferPool,
-    pub(crate) policy: StrictnessPolicy,
-    pub(crate) warnings: Vec<String>,
 }
 
 impl<R: BufRead> ParsingWorkspace<R> {
@@ -31,8 +24,6 @@ impl<R: BufRead> ParsingWorkspace<R> {
         Self {
             xml_reader,
             pool: BufferPool::new(),
-            policy: StrictnessPolicy::default(),
-            warnings: Vec::new(),
         }
     }
 
@@ -69,20 +60,6 @@ impl<R: BufRead> ParsingWorkspace<R> {
                     let raw_name: Vec<u8> = e.name().as_ref().to_vec();
                     let handled = on_child(self, ChildEvent::Open(tag, e))?;
                     if !handled {
-                        let tag_str = std::str::from_utf8(&raw_name).unwrap_or("<invalid utf-8>");
-                        match self.policy {
-                            StrictnessPolicy::Error => {
-                                return Err(ParseError::UnexpectedTag {
-                                    tag: tag_str.to_string(),
-                                    byte_offset: self.xml_reader.buffer_position(),
-                                });
-                            }
-                            StrictnessPolicy::Warn => self.warnings.push(format!(
-                                "skipping unknown <{tag_str}> at byte {}",
-                                self.xml_reader.buffer_position()
-                            )),
-                            StrictnessPolicy::Permissive => {}
-                        }
                         drain_until_close(self, &raw_name)?;
                     }
                 }

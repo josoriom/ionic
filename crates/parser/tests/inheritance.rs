@@ -1,11 +1,8 @@
 mod common;
 
-use common::BinaryDataExt;
-use common::assertions::*;
-use common::helpers::*;
-use ionic::mzml::structs::*;
-
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use common::{BinaryDataExt, assertions::*, helpers::*};
+use ionic::mzml::structs::*;
 
 #[test]
 fn default_data_processing_refs_roundtrip_semantic() {

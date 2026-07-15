@@ -1,10 +1,9 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
 use common::{
-    BinaryDataExt, find_array_by_accession, find_name_value_indices, find_spot_id_indices,
-    first_array_values_by_accession, spectrum_arrays, spectrum_by_id,
+    BinaryDataExt, assertions::*, find_array_by_accession, find_name_value_indices,
+    find_spot_id_indices, first_array_values_by_accession, spectrum_arrays, spectrum_by_id,
+    test_files,
 };
 
 #[test]

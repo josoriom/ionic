@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::{
-    mzml::structs::{NumericArray, MzML},
+    mzml::structs::{MzML, NumericArray},
     utilities::test::{
         CvRefMode, assert_cv, parse_ion_as_mzml, spectrum_precursor_list, spectrum_scan_list,
     },
@@ -331,7 +331,7 @@ fn anpc_mzml1_1_0_first_spectrum() {
         "base peak intensity",
         "MS:1000505",
         "MS",
-        Some("24998"),
+        Some("24998.0"),
         None,
     );
     assert_cv(
@@ -340,7 +340,7 @@ fn anpc_mzml1_1_0_first_spectrum() {
         "total ion current",
         "MS:1000285",
         "MS",
-        Some("440132"),
+        Some("4.40132e05"),
         None,
     );
     assert_cv(
@@ -380,7 +380,7 @@ fn anpc_mzml1_1_0_first_spectrum() {
         "scan window lower limit",
         "MS:1000501",
         "MS",
-        Some("30"),
+        Some("30.0"),
         Some("m/z"),
     );
     assert_cv(
@@ -389,7 +389,7 @@ fn anpc_mzml1_1_0_first_spectrum() {
         "scan window upper limit",
         "MS:1000500",
         "MS",
-        Some("1000"),
+        Some("1000.0"),
         Some("m/z"),
     );
 
@@ -506,7 +506,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "base peak intensity",
         "MS:1000505",
         "MS",
-        Some("20032"),
+        Some("20032.0"),
         None,
     );
     assert_cv(
@@ -515,7 +515,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "total ion current",
         "MS:1000285",
         "MS",
-        Some("359026"),
+        Some("3.59026e05"),
         None,
     );
     assert_cv(
@@ -555,7 +555,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "scan window lower limit",
         "MS:1000501",
         "MS",
-        Some("30"),
+        Some("30.0"),
         Some("m/z"),
     );
     assert_cv(
@@ -564,7 +564,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "scan window upper limit",
         "MS:1000500",
         "MS",
-        Some("1000"),
+        Some("1000.0"),
         Some("m/z"),
     );
     let pl = spectrum_precursor_list(s_last).expect("precursorList parsed");
@@ -582,7 +582,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "isolation window target m/z",
         "MS:1000827",
         "MS",
-        Some("515"),
+        Some("515.0"),
         Some("m/z"),
     );
     assert_cv(
@@ -591,7 +591,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "isolation window lower offset",
         "MS:1000828",
         "MS",
-        Some("485"),
+        Some("485.0"),
         Some("m/z"),
     );
     assert_cv(
@@ -600,7 +600,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "isolation window upper offset",
         "MS:1000829",
         "MS",
-        Some("485"),
+        Some("485.0"),
         Some("m/z"),
     );
 
@@ -618,7 +618,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "selected ion m/z",
         "MS:1000744",
         "MS",
-        Some("515"),
+        Some("515.0"),
         Some("m/z"),
     );
 
@@ -638,7 +638,7 @@ fn anpc_mzml1_1_0_last_spectrum() {
         "collision energy",
         "MS:1000045",
         "MS",
-        Some("20"),
+        Some("20.0"),
         None,
     );
     let bal = s_last

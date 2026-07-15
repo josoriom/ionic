@@ -1,7 +1,9 @@
-use std::{io::BufRead, str::from_utf8};
+use std::{borrow::Cow, io::BufRead, str::from_utf8};
 
-use quick_xml::XmlVersion;
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::{
+    XmlVersion,
+    events::{BytesStart, Event},
+};
 
 use crate::mzml::{
     schema::TagId,
@@ -113,14 +115,26 @@ pub fn attr_any(element: &BytesStart, candidate_names: &[&[u8]]) -> Option<Strin
 pub fn attr(e: &BytesStart, name: &[u8]) -> Option<String> {
     attr_any(e, &[name])
 }
+
+pub fn attr_str<'a>(element: &'a BytesStart, name: &[u8]) -> Option<Cow<'a, str>> {
+    for a in element.attributes().with_checks(false).flatten() {
+        if a.key.as_ref() == name {
+            return a.normalized_value(XmlVersion::Implicit1_0).ok();
+        }
+    }
+    None
+}
+
 #[inline]
 pub fn attr_u32(e: &BytesStart, name: &[u8]) -> Option<u32> {
-    attr(e, name).and_then(|s| s.parse().ok())
+    attr_str(e, name).and_then(|s| s.parse().ok())
 }
 #[inline]
 pub fn attr_usize(e: &BytesStart, name: &[u8]) -> Option<usize> {
-    attr(e, name).and_then(|s| s.parse().ok())
+    attr_str(e, name).and_then(|s| s.parse().ok())
 }
+
+pub const PREALLOC_CAP: usize = 1 << 16;
 
 #[inline]
 pub fn read_cv_param(e: &BytesStart) -> CvParam {

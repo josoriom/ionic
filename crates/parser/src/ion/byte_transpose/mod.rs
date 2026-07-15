@@ -37,6 +37,11 @@ pub(crate) fn shuffle_with_tail(input: &[u8], output: &mut [u8], stride: usize) 
 
 #[inline]
 pub(crate) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
+    assert_eq!(
+        input.len(),
+        output.len(),
+        "byte transpose requires equal-length input and output"
+    );
     match stride {
         2 => platform::shuffle2(input, output),
         4 => platform::shuffle4(input, output),
@@ -47,6 +52,11 @@ pub(crate) fn shuffle(input: &[u8], output: &mut [u8], stride: usize) {
 
 #[inline]
 pub(crate) fn unshuffle(input: &[u8], output: &mut [u8], stride: usize) {
+    assert_eq!(
+        input.len(),
+        output.len(),
+        "byte transpose requires equal-length input and output"
+    );
     match stride {
         2 => platform::unshuffle2(input, output),
         4 => platform::unshuffle4(input, output),
@@ -171,6 +181,22 @@ mod tests {
         let mut out = vec![0u8; 8];
         unshuffle(&input, &mut out, 2);
         assert_eq!(out, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    #[should_panic(expected = "byte transpose requires equal-length input and output")]
+    fn shuffle_panics_on_length_mismatch() {
+        let input = make_input(8);
+        let mut output = vec![0u8; 4];
+        shuffle(&input, &mut output, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "byte transpose requires equal-length input and output")]
+    fn unshuffle_panics_on_length_mismatch() {
+        let input = make_input(8);
+        let mut output = vec![0u8; 4];
+        unshuffle(&input, &mut output, 2);
     }
 
     #[test]

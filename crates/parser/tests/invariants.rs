@@ -1,9 +1,8 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
 use common::{
-    chromatogram_arrays, chromatograms, decode_ion, encode_to_ion, spectra, spectrum_arrays,
+    assertions::*, chromatogram_arrays, chromatograms, decode_ion, encode_to_ion, spectra,
+    spectrum_arrays, test_files,
 };
 
 #[test]

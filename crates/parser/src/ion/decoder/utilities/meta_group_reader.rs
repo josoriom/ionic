@@ -1,20 +1,22 @@
-use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::{
+    borrow::Cow,
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
-use crate::{
-    decoder::decode::{Metadatum, MetadatumValue},
-    decoder::utilities::{
-        common::decompress_zstd_allow_aligned_padding,
-        decompression_limit::DecompressionLimit,
-        parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
-    },
-    ion::{
-        IonError, IonResult,
-        meta_groups::{
-            META_GROUP_ENTRY_SIZE, META_GROUP_HEADER_SIZE, MetaGroupEntry, MetaTotals,
-            group_count_for, group_of_item, item_range_of_group, read_group_header,
+use crate::ion::{
+    IonError, IonResult,
+    decoder::{
+        decode::{Metadatum, MetadatumValue},
+        utilities::{
+            common::decompress_zstd_allow_aligned_padding,
+            decompression_limit::DecompressionLimit,
+            parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
         },
+    },
+    meta_groups::{
+        META_GROUP_ENTRY_SIZE, META_GROUP_HEADER_SIZE, MetaGroupEntry, MetaTotals, group_count_for,
+        group_of_item, item_range_of_group, read_group_header,
     },
 };
 
@@ -298,11 +300,10 @@ fn read_directory(section: &[u8], group_count: u64) -> IonResult<Vec<MetaGroupEn
 
 #[cfg(test)]
 mod tests {
-    use super::MetaGroupReader;
-    use crate::ion::format::CODEC_NONE;
-    use crate::ion::meta_groups::MetaTotals;
-    use crate::ion::{DecompressionLimit, IonResult};
     use std::sync::Arc;
+
+    use super::MetaGroupReader;
+    use crate::ion::{DecompressionLimit, IonResult, format::CODEC_NONE, meta_groups::MetaTotals};
 
     fn no_totals() -> MetaTotals {
         MetaTotals {

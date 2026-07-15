@@ -1,11 +1,9 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
 use common::{
-    BinaryDataExt, cv_param_by_accession, cv_value_f64, find_array_by_accession,
+    BinaryDataExt, assertions::*, cv_param_by_accession, cv_value_f64, find_array_by_accession,
     parse_scan_number_from_id, precursor_list_of_spectrum, scan_start_time_seconds,
-    spectrum_arrays, spectrum_by_id,
+    spectrum_arrays, spectrum_by_id, test_files,
 };
 
 #[test]

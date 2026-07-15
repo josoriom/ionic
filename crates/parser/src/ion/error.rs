@@ -13,6 +13,9 @@ pub enum IonError {
     MissingSpectrumBounds,
     BadSpectrumBoundsChecksum,
     MalformedSpectrumBounds(String),
+    MissingChromatogramBounds,
+    BadChromatogramBoundsChecksum,
+    MalformedChromatogramBounds(String),
 }
 
 pub type IonResult<T> = Result<T, IonError>;
@@ -40,6 +43,15 @@ impl Display for IonError {
             Self::MalformedSpectrumBounds(reason) => {
                 write!(f, "spectrum bounds (A0) malformed: {reason}")
             }
+            Self::MissingChromatogramBounds => f.write_str(
+                "chromatogram has no window bounds (A0); re-encode the file with the current Ionic",
+            ),
+            Self::BadChromatogramBoundsChecksum => {
+                f.write_str("chromatogram bounds (A0) checksum failed")
+            }
+            Self::MalformedChromatogramBounds(reason) => {
+                write!(f, "chromatogram bounds (A0) malformed: {reason}")
+            }
         }
     }
 }
@@ -61,5 +73,17 @@ impl From<&str> for IonError {
 impl From<std::io::Error> for IonError {
     fn from(err: std::io::Error) -> Self {
         Self::Msg(err.to_string())
+    }
+}
+
+impl From<crate::mzml::ParseError> for IonError {
+    fn from(source: crate::mzml::ParseError) -> Self {
+        Self::Msg(source.to_string())
+    }
+}
+
+impl From<crate::mzml::BinToMzmlError> for IonError {
+    fn from(source: crate::mzml::BinToMzmlError) -> Self {
+        Self::Msg(source.to_string())
     }
 }

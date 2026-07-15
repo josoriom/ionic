@@ -1,7 +1,6 @@
-use std::path::Path;
-use std::time::Instant;
+use std::{path::Path, time::Instant};
 
-use ionic::ion::{ReadOptions, IonReader, Range};
+use ionic::ion::{IonReader, Range, ReadOptions};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -75,9 +74,15 @@ struct Reading {
 }
 
 fn read_full(ion: &mut IonReader, index: usize) -> Result<Vec<f64>, String> {
-    ion.read_window(index, Range { from: 0.0, to: f64::MAX })
-        .map(|window| window.x.to_f64())
-        .map_err(|error| format!("cannot read spectrum {index}: {error}"))
+    ion.read_window(
+        index,
+        Range {
+            from: 0.0,
+            to: f64::MAX,
+        },
+    )
+    .map(|window| window.x.to_f64())
+    .map_err(|error| format!("cannot read spectrum {index}: {error}"))
 }
 
 fn warm_cache(ion: &mut IonReader, sample: usize) -> Result<(), String> {
@@ -92,7 +97,13 @@ fn measure(ion: &mut IonReader, sample: usize, low: f64, high: f64) -> Result<Re
     let mut points = 0usize;
     for index in 0..sample {
         let window = ion
-            .read_window(index, Range { from: low, to: high })
+            .read_window(
+                index,
+                Range {
+                    from: low,
+                    to: high,
+                },
+            )
             .map_err(|error| format!("cannot read spectrum {index}: {error}"))?;
         points += window.x.len();
     }

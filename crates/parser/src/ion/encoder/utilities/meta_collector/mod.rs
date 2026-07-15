@@ -6,19 +6,18 @@ mod tests;
 
 pub(crate) use grouper::{GroupedSection, MetaGrouper, serialize_global_meta_with_counts};
 pub(crate) use schema::MzmlListItem;
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::bulk::compress as zstd_compress;
 
 use crate::{
     accessions::{INTENSITY_ARRAY, MZ_ARRAY, TIME_ARRAY},
-    decoder::decode::MetadatumValue,
     ion::{
         IonResult,
         attr_meta::{
             AccessionTail, CV_CODE_UNKNOWN, CV_REF_ATTR, attr_cv_param, cv_ref_code_from_str,
             parse_accession_tail,
         },
+        decoder::decode::MetadatumValue,
         utilities::assign_attributes_into,
     },
     mzml::{
@@ -215,19 +214,16 @@ impl ValuePool {
                     || text.contains('e')
                     || text.contains('E')
                     || text.starts_with('-') && text[1..].contains('.');
-                if looks_numeric && let Ok(n) = text.parse::<f64>() {
+                if looks_numeric
+                    && let Ok(n) = text.parse::<f64>()
+                    && n.to_string() == text
+                {
                     let index = self.numeric_count;
                     self.numeric_values.push(n);
                     self.numeric_count += 1;
                     return ValueEncoding { kind: 0, index };
                 }
-                let index = self.string_count;
-                let bytes = text.as_bytes();
-                self.string_offsets.push(self.string_bytes.len() as u32);
-                self.string_lengths.push(bytes.len() as u32);
-                self.string_bytes.extend_from_slice(bytes);
-                self.string_count += 1;
-                ValueEncoding { kind: 1, index }
+                self.store_string(text)
             }
         }
     }
@@ -235,16 +231,18 @@ impl ValuePool {
     pub(crate) fn encode_as_string(&mut self, value: Option<&str>) -> ValueEncoding {
         match value {
             None | Some("") => ValueEncoding { kind: 2, index: 0 },
-            Some(text) => {
-                let index = self.string_count;
-                let bytes = text.as_bytes();
-                self.string_offsets.push(self.string_bytes.len() as u32);
-                self.string_lengths.push(bytes.len() as u32);
-                self.string_bytes.extend_from_slice(bytes);
-                self.string_count += 1;
-                ValueEncoding { kind: 1, index }
-            }
+            Some(text) => self.store_string(text),
         }
+    }
+
+    fn store_string(&mut self, text: &str) -> ValueEncoding {
+        let index = self.string_count;
+        let bytes = text.as_bytes();
+        self.string_offsets.push(self.string_bytes.len() as u32);
+        self.string_lengths.push(bytes.len() as u32);
+        self.string_bytes.extend_from_slice(bytes);
+        self.string_count += 1;
+        ValueEncoding { kind: 1, index }
     }
 }
 
@@ -335,22 +333,10 @@ impl<'b> MetaParamWriter<'b> {
     pub(crate) fn push_one(&mut self, tag: TagId, id: u32, parent_id: u32, cv_param: CvParam) {
         self.buffer.push(tag, id, parent_id, cv_param);
     }
-    pub(crate) fn push_many(
-        &mut self,
-        tag: TagId,
-        id: u32,
-        parent_id: u32,
-        cv_params: &[CvParam],
-    ) {
+    pub(crate) fn push_many(&mut self, tag: TagId, id: u32, parent_id: u32, cv_params: &[CvParam]) {
         self.buffer.extend_cv_params(tag, id, parent_id, cv_params);
     }
-    fn push_user_params(
-        &mut self,
-        tag: TagId,
-        id: u32,
-        parent_id: u32,
-        user_params: &[UserParam],
-    ) {
+    fn push_user_params(&mut self, tag: TagId, id: u32, parent_id: u32, user_params: &[UserParam]) {
         self.buffer
             .extend_user_params(tag, id, parent_id, user_params);
     }

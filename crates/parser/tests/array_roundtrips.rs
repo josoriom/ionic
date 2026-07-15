@@ -1,10 +1,15 @@
 mod common;
 
-use common::binary_ext::BinaryDataExt;
-use common::helpers::{build_mzml, make_spectrum_f64, mzml_with_single_array};
-use common::{decode_ion, encode_to_ion, first_spectrum_binary, roundtrip};
-use ionic::ion::{IonReader, ReadOptions, encode};
-use ionic::mzml::structs::*;
+use common::{
+    binary_ext::BinaryDataExt,
+    decode_ion, encode_to_ion, first_spectrum_binary,
+    helpers::{build_mzml, make_spectrum_f64, mzml_with_single_array},
+    roundtrip,
+};
+use ionic::{
+    ion::{IonReader, ReadOptions, WriteOptions, write_mzml_to_ion},
+    mzml::structs::*,
+};
 use proptest::prelude::*;
 
 #[test]
@@ -48,22 +53,26 @@ fn array_filter_label_matches_applied_transform() {
 
     let f32_bytes = encode_to_ion(&f32_mzml, 9, false);
     let f32_decoder = IonReader::open(&f32_bytes, ReadOptions::default()).expect("open f32 ion");
-    let f32_refs = f32_decoder.spectrum_arrays(0).expect("f32 array refs");
+    let f32_refs = f32_decoder
+        .spectrum_array_addresses(0)
+        .expect("f32 array refs");
 
     let f64_bytes = encode_to_ion(&f64_mzml, 9, false);
     let f64_decoder = IonReader::open(&f64_bytes, ReadOptions::default()).expect("open f64 ion");
-    let f64_refs = f64_decoder.spectrum_arrays(0).expect("f64 array refs");
+    let f64_refs = f64_decoder
+        .spectrum_array_addresses(0)
+        .expect("f64 array refs");
 
     assert!(
         f32_refs
             .iter()
-            .any(|a| a.dtype == f32_dtype && a.array_filter == raw_filter),
+            .any(|a| a.dtype() == f32_dtype && a.array_filter() == raw_filter),
         "f32 intensity must be tagged raw"
     );
     assert!(
         f64_refs
             .iter()
-            .any(|a| a.dtype == f64_dtype && a.array_filter == raw_filter),
+            .any(|a| a.dtype() == f64_dtype && a.array_filter() == raw_filter),
         "f64 intensity must be tagged raw (intensity is never delta-shuffled)"
     );
 }
@@ -152,8 +161,16 @@ fn roundtrip_at_compression_levels() {
 
     for level in [0, 3, 10, 22] {
         let mut buf = Vec::new();
-        encode(&mzml, level, false, &mut buf)
-            .unwrap_or_else(|e| panic!("encode at level {level} failed: {e}"));
+        write_mzml_to_ion(
+            &mzml,
+            WriteOptions {
+                compression_level: level,
+                force_f32: false,
+                ..Default::default()
+            },
+            &mut buf,
+        )
+        .unwrap_or_else(|e| panic!("encode at level {level} failed: {e}"));
         let mut decoder = IonReader::open(&buf, ReadOptions::default())
             .unwrap_or_else(|e| panic!("decoder open at level {level} failed: {e}"));
         let decoded = decoder
@@ -174,7 +191,16 @@ fn roundtrip_force_f32_downcasts() {
     let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
 
     let mut buf = Vec::new();
-    encode(&mzml, 0, true, &mut buf).expect("encode with force_f32");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: true,
+            ..Default::default()
+        },
+        &mut buf,
+    )
+    .expect("encode with force_f32");
     let mut decoder = IonReader::open(&buf, ReadOptions::default()).expect("decoder open");
     let decoded = decoder.to_mzml().expect("to_mzml");
 
@@ -233,8 +259,7 @@ fn delta_mz_special_values_are_bit_exact() {
 
 #[test]
 fn delta_mz_via_for_each_scan_is_bit_exact() {
-    use ionic::ScanSource;
-    use ionic::decoder::decode::IonReader;
+    use ionic::{IonReader, ScanSource};
     let input: Vec<f64> = (0..500).map(|i| 100.0 + i as f64 * 0.05).collect();
     let intensity: Vec<f64> = vec![1.0; input.len()];
     let mut spectrum = make_spectrum_f64("scan=1", input.clone(), intensity);
@@ -277,18 +302,25 @@ fn delta_on_mz_raw_on_intensity() {
     );
     let buf = encode_to_ion(&mzml, 3, false);
     let mut decoder = IonDecoder::open(&buf, ReadOptions::default()).unwrap();
-    let refs = decoder.spectrum_arrays(0).unwrap();
-    let mz_address = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
-    let int_ref = refs.iter().find(|r| r.array_type == 1_000_515).unwrap();
-    assert_eq!(mz_address.array_filter, 2, "m/z must use DeltaShuffle filter");
+    let refs = decoder.spectrum_array_addresses(0).unwrap();
+    let mz_address = refs.iter().find(|r| r.array_type() == 1_000_514).unwrap();
+    let int_ref = refs.iter().find(|r| r.array_type() == 1_000_515).unwrap();
     assert_eq!(
-        int_ref.array_filter, 0,
+        mz_address.array_filter(),
+        2,
+        "m/z must use DeltaShuffle filter"
+    );
+    assert_eq!(
+        int_ref.array_filter(),
+        0,
         "intensity must use raw filter (intensity is never delta-shuffled)"
     );
     let mut got_mz = Vec::new();
-    decoder.read_array(mz_address, &mut got_mz).unwrap();
+    decoder
+        .read_spectrum_values(mz_address, &mut got_mz)
+        .unwrap();
     let mut got_int = Vec::new();
-    decoder.read_array(int_ref, &mut got_int).unwrap();
+    decoder.read_spectrum_values(int_ref, &mut got_int).unwrap();
     for (a, b) in got_mz.iter().zip(mz.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -299,7 +331,7 @@ fn delta_on_mz_raw_on_intensity() {
 
 #[test]
 fn format_version_always_matches_current() {
-    use ionic::ion::{HEADER_FORMAT_VERSION_OFFSET, format::CURRENT_VERSION};
+    use ionic::ion::{CURRENT_VERSION, HEADER_FORMAT_VERSION_OFFSET};
     let values = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
     let len = values.len();
     let mzml = mzml_with_single_array(NumericType::Float64, NumericArray::F64(values.clone()), len);
@@ -333,11 +365,11 @@ fn delta_not_applied_without_compression() {
     );
     let buf = encode_to_ion(&mzml, 0, false);
     let mut decoder = IonDecoder::open(&buf, ReadOptions::default()).unwrap();
-    let refs = decoder.spectrum_arrays(0).unwrap();
-    let mz_address = refs.iter().find(|r| r.array_type == 1_000_514).unwrap();
-    assert_eq!(mz_address.array_filter, 0, "no delta without compression");
+    let refs = decoder.spectrum_array_addresses(0).unwrap();
+    let mz_address = refs.iter().find(|r| r.array_type() == 1_000_514).unwrap();
+    assert_eq!(mz_address.array_filter(), 0, "no delta without compression");
     let mut got = Vec::new();
-    decoder.read_array(mz_address, &mut got).unwrap();
+    decoder.read_spectrum_values(mz_address, &mut got).unwrap();
     for (a, b) in got.iter().zip(mz.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -356,16 +388,45 @@ fn delta_shuffle_applied_to_time_array() {
     let buf = encode_to_ion(&mzml, 3, false);
     let mut decoder = IonDecoder::open(&buf, ReadOptions::default()).unwrap();
     let refs = decoder.chromatogram_array_addresses(0).unwrap();
-    let time_ref = refs.iter().find(|r| r.array_type == 1_000_595).unwrap();
+    let time_ref = refs.iter().find(|r| r.array_type() == 1_000_595).unwrap();
     assert_eq!(
-        time_ref.array_filter, 2,
+        time_ref.array_filter(),
+        2,
         "time must use DeltaShuffle filter"
     );
     let mut got = Vec::new();
-    decoder.read_chromatogram_array(time_ref, &mut got).unwrap();
+    decoder
+        .read_chromatogram_values(time_ref, &mut got)
+        .unwrap();
     for (a, b) in got.iter().zip(time.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
+}
+
+#[test]
+fn read_chromatogram_array_keeps_native_f32_width_33() {
+    use common::helpers::make_chromatogram_f64;
+    let time: Vec<f64> = (0..64).map(|i| i as f64 * 0.5).collect();
+    let intensity: Vec<f64> = (0..64).map(|i| i as f64).collect();
+    let mzml = build_mzml(vec![], vec![make_chromatogram_f64("tic", time, intensity)]);
+    let buf = encode_to_ion(&mzml, 3, true);
+    let mut decoder = IonReader::open(&buf, ReadOptions::default()).unwrap();
+    let refs = decoder.chromatogram_array_addresses(0).unwrap();
+    let intensity_ref = refs.iter().find(|r| r.array_type() == 1_000_515).unwrap();
+    let native = decoder.read_chromatogram_array(intensity_ref).unwrap();
+    assert!(
+        matches!(native, NumericArray::F32(_)),
+        "read_chromatogram_array must keep the stored native f32 width"
+    );
+    let mut widened = Vec::new();
+    decoder
+        .read_chromatogram_values(intensity_ref, &mut widened)
+        .unwrap();
+    assert_eq!(
+        widened.len(),
+        64,
+        "read_chromatogram_values must still widen to f64"
+    );
 }
 
 proptest! {

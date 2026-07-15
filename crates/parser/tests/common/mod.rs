@@ -8,12 +8,12 @@ pub mod binary_ext;
 pub mod helpers;
 pub mod test_files;
 
-#[allow(unused_imports)]
-pub(crate) use binary_ext::BinaryDataExt;
 use std::{collections::BTreeSet, fs, path::PathBuf, sync::OnceLock};
 
+#[allow(unused_imports)]
+pub(crate) use binary_ext::BinaryDataExt;
 use ionic::{
-    ion::{IonReader, ReadOptions, IonResult, encode},
+    ion::{IonReader, IonResult, ReadOptions, WriteOptions, write_mzml_to_ion},
     mzml::{
         parse_mzml::{parse_indexed_mzml, parse_mzml},
         structs::*,
@@ -52,7 +52,16 @@ pub(crate) fn parse_indexed(rel: &str) -> IndexedmzML {
 
 pub(crate) fn encode_to_ion(mzml: &MzML, compression_level: u8, force_f32: bool) -> Vec<u8> {
     let mut out = Vec::new();
-    encode(mzml, compression_level, force_f32, &mut out).expect("encode should succeed");
+    write_mzml_to_ion(
+        mzml,
+        WriteOptions {
+            compression_level,
+            force_f32,
+            ..Default::default()
+        },
+        &mut out,
+    )
+    .expect("encode should succeed");
     out
 }
 

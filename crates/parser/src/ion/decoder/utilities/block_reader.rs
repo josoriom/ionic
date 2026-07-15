@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::ion::{
-    IonError, IonResult, ByteRange,
-    decoder::utilities::byte_source::ReadBytes,
+    ByteRange, IonError, IonResult,
+    decoder::utilities::byte_source::{ReadBytes, SourceBytes},
     encoder::utilities::block_writer::{BLOCK_DIRECTORY_ENTRY_SIZE, BlockDirEntry, Stride},
     format::CODEC_NONE,
     packing::PackingId,
@@ -66,7 +66,7 @@ pub(crate) struct BlockReader<P: BlockProcessor> {
     container_offset: u64,
     container_len: u64,
     entries: Vec<BlockDirEntry>,
-    cache: Box<[Option<Vec<u8>>]>,
+    cache: Box<[Option<SourceBytes>]>,
     lru_prev: Box<[usize]>,
     lru_next: Box<[usize]>,
     lru_head: usize,
@@ -134,8 +134,9 @@ impl<P: BlockProcessor> BlockReader<P> {
 
     pub(crate) fn block_byte_range(&self, block_id: u32) -> Option<ByteRange> {
         let entry = self.entries.get(block_id as usize)?;
+        let offset = self.container_offset.checked_add(entry.payload_offset)?;
         Some(ByteRange {
-            offset: self.container_offset + entry.payload_offset,
+            offset,
             length: entry.payload_size,
         })
     }
@@ -144,7 +145,7 @@ impl<P: BlockProcessor> BlockReader<P> {
         &self,
         block_index: usize,
         ctx: &'static str,
-    ) -> IonResult<(BlockDirEntry, Vec<u8>)> {
+    ) -> IonResult<(BlockDirEntry, SourceBytes)> {
         let entry = *self.entries.get(block_index).ok_or_else(|| {
             IonError::from(format!(
                 "{ctx}: block index {block_index} out of range (count={})",
@@ -156,14 +157,24 @@ impl<P: BlockProcessor> BlockReader<P> {
             .container_len
             .saturating_sub((self.entries.len() as u64) * (BLOCK_DIRECTORY_ENTRY_SIZE as u64));
 
-        if entry.payload_offset + entry.payload_size > payload_region_len {
+        let payload_end = entry.payload_offset.checked_add(entry.payload_size);
+        if payload_end.is_none_or(|end| end > payload_region_len) {
             return Err(
                 format!("{ctx}: block {block_index} payload exceeds container bounds").into(),
             );
         }
 
+        let read_offset = self
+            .container_offset
+            .checked_add(entry.payload_offset)
+            .ok_or_else(|| {
+                IonError::from(format!(
+                    "{ctx}: block {block_index} payload offset overflows"
+                ))
+            })?;
+
         let payload = self.source.read(ByteRange {
-            offset: self.container_offset + entry.payload_offset,
+            offset: read_offset,
             length: entry.payload_size,
         })?;
 
@@ -184,17 +195,17 @@ impl<P: BlockProcessor> BlockReader<P> {
 
     fn decode_block(
         &self,
-        payload: Vec<u8>,
+        payload: SourceBytes,
         uncompressed_len: usize,
         stride: Stride,
-    ) -> IonResult<Vec<u8>> {
+    ) -> IonResult<SourceBytes> {
         self.decompression_limit
             .validate(payload.len(), uncompressed_len)?;
 
         let needs_unshuffle =
             self.processor.requires_unshuffle(self.block_packing_id) && stride != Stride::OneByte;
 
-        let mut data = if self.compression_codec == CODEC_NONE {
+        if self.compression_codec == CODEC_NONE {
             if payload.len() != uncompressed_len {
                 return Err(format!(
                     "uncompressed payload size mismatch: got {}, expected {uncompressed_len}",
@@ -202,20 +213,27 @@ impl<P: BlockProcessor> BlockReader<P> {
                 )
                 .into());
             }
-            payload
-        } else {
-            self.processor
-                .decompress(&payload, uncompressed_len, self.decompression_limit)?
-        };
-
-        if needs_unshuffle {
+            if !needs_unshuffle {
+                return Ok(payload);
+            }
             let mut scratch = vec![0u8; uncompressed_len];
             self.processor
-                .unshuffle(&data, &mut scratch, stride.as_usize());
-            data = scratch;
+                .unshuffle(&payload, &mut scratch, stride.as_usize());
+            return Ok(SourceBytes::Owned(scratch));
         }
 
-        Ok(data)
+        let decompressed =
+            self.processor
+                .decompress(&payload, uncompressed_len, self.decompression_limit)?;
+
+        if !needs_unshuffle {
+            return Ok(SourceBytes::Owned(decompressed));
+        }
+
+        let mut scratch = vec![0u8; uncompressed_len];
+        self.processor
+            .unshuffle(&decompressed, &mut scratch, stride.as_usize());
+        Ok(SourceBytes::Owned(scratch))
     }
 
     pub(crate) fn read_block(
@@ -223,11 +241,16 @@ impl<P: BlockProcessor> BlockReader<P> {
         block_id: u32,
         element_stride: usize,
         ctx: &'static str,
-    ) -> IonResult<Vec<u8>> {
+    ) -> IonResult<SourceBytes> {
         let block_index = block_id as usize;
         let stride = Stride::from_size(element_stride);
         let (entry, payload) = self.get_block_payload(block_index, ctx)?;
-        self.decode_block(payload, entry.uncompressed_len_bytes as usize, stride)
+        let uncompressed_len = usize::try_from(entry.uncompressed_len_bytes).map_err(|_| {
+            IonError::from(format!(
+                "{ctx}: uncompressed length too large for this platform"
+            ))
+        })?;
+        self.decode_block(payload, uncompressed_len, stride)
     }
 
     #[inline]
@@ -318,7 +341,12 @@ impl<P: BlockProcessor> BlockReader<P> {
         let stride = Stride::from_size(element_stride);
         self.record_stride_or_fail(block_index, stride, ctx)?;
         let (entry, payload) = self.get_block_payload(block_index, ctx)?;
-        let decoded = self.decode_block(payload, entry.uncompressed_len_bytes as usize, stride)?;
+        let uncompressed_len = usize::try_from(entry.uncompressed_len_bytes).map_err(|_| {
+            IonError::from(format!(
+                "{ctx}: uncompressed length too large for this platform"
+            ))
+        })?;
+        let decoded = self.decode_block(payload, uncompressed_len, stride)?;
 
         let block_heap = decoded.len();
         self.evict_until_room(block_heap);
@@ -410,7 +438,10 @@ pub(crate) fn container_directory_range(
         .checked_add(container_len)
         .and_then(|end| end.checked_sub(directory_byte_count))
         .ok_or_else(|| IonError::from(format!("{ctx}: directory offset overflows")))?;
-    Ok(ByteRange { offset: directory_offset, length: directory_byte_count })
+    Ok(ByteRange {
+        offset: directory_offset,
+        length: directory_byte_count,
+    })
 }
 
 #[inline]

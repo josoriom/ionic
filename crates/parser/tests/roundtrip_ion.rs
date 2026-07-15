@@ -1,9 +1,7 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
-use common::{chromatograms, decode_ion, encode_to_ion, spectra};
-use ionic::ion::format::FILE_SIGNATURE;
+use common::{assertions::*, chromatograms, decode_ion, encode_to_ion, spectra, test_files};
+use ionic::ion::FILE_SIGNATURE;
 
 #[test]
 fn tiny_11_level12_with_header_check() {

@@ -1,5 +1,6 @@
 pub mod parse_mzml;
 pub use parse_mzml::{parse_indexed_mzml, parse_mzml};
+pub use utilities::parse_error::ParseError;
 pub mod stream_reader;
 pub use stream_reader::MzmlReader;
 pub mod bin_to_mzml;

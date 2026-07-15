@@ -1,8 +1,9 @@
 mod common;
 
-use common::assertions::*;
-use common::test_files;
-use common::{chromatogram_arrays, chromatogram_by_id, first_chrom_array_values_by_accession};
+use common::{
+    assertions::*, chromatogram_arrays, chromatogram_by_id, first_chrom_array_values_by_accession,
+    test_files,
+};
 
 #[test]
 fn tiny_11_identity_and_shapes() {

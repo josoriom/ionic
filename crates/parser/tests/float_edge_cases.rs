@@ -1,8 +1,8 @@
 mod common;
 
-use common::binary_ext::BinaryDataExt;
-use common::helpers::mzml_with_single_array;
-use common::{first_spectrum_binary, roundtrip};
+use common::{
+    binary_ext::BinaryDataExt, first_spectrum_binary, helpers::mzml_with_single_array, roundtrip,
+};
 use ionic::mzml::structs::*;
 use proptest::prelude::*;
 

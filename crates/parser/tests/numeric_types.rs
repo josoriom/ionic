@@ -1,8 +1,6 @@
 mod common;
 
-use common::assertions::*;
-use common::helpers;
-use common::helpers::*;
+use common::{assertions::*, helpers, helpers::*};
 use ionic::mzml::structs::*;
 
 #[test]
@@ -85,7 +83,10 @@ fn parser_honors_declared_shorter_array_length() {
             NumericArray::F16(vec![0x0000, 0x3c00, 0x4000]),
         ),
         (NumericType::Int16, NumericArray::I16(vec![-10, 0, 10])),
-        (NumericType::Int32, NumericArray::I32(vec![-1_000, 0, 1_000])),
+        (
+            NumericType::Int32,
+            NumericArray::I32(vec![-1_000, 0, 1_000]),
+        ),
         (
             NumericType::Int64,
             NumericArray::I64(vec![-1_000_000, 0, 1_000_000]),
@@ -172,7 +173,10 @@ fn encoder_preserves_integer_ms_level_arrays() {
                                         name: "ms level array".to_string(),
                                         ..Default::default()
                                     },
-                                    helpers::synthetic_ms_cv(helpers::precision_accession(NumericType::Int64), None),
+                                    helpers::synthetic_ms_cv(
+                                        helpers::precision_accession(NumericType::Int64),
+                                        None,
+                                    ),
                                     helpers::synthetic_ms_cv("MS:1000576", None),
                                 ],
                                 numeric_type: Some(NumericType::Int64),
