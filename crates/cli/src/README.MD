@@ -114,11 +114,6 @@ You may pass **at most one** of the following. If you don't pass any, the defaul
     it into an `MzML` model, then `bin_to_mzml(&mzml)` to render mzML XML, and writes
     the resulting bytes to the output file.
 
-- `--benchmark-decode`
-  - Doesn't write any output. Instead, times how long it takes to read every spectrum's
-    m/z and intensity arrays out of each `.ion` file — useful for measuring decode
-    speed without the cost of re-encoding as mzML.
-
 ### Filtering flags (optional)
 
 You may pass **at most one** of the following:

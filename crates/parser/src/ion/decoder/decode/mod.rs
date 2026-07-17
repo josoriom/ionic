@@ -94,6 +94,17 @@ fn check_array_dtypes(address_bytes: &[u8], name: &'static str) -> IonResult<()>
     Ok(())
 }
 
+fn decompress_fixed_section(
+    stored: &[u8],
+    plain_len: usize,
+    budget: DecompressionLimit,
+    name: &str,
+) -> IonResult<Arc<[u8]>> {
+    let plain = decompress_zstd(stored, plain_len, budget)
+        .map_err(|e| IonError::from(format!("{name}: decompression failed: {e}")))?;
+    Ok(Arc::from(plain))
+}
+
 mod arrays;
 mod spectra;
 mod to_mzml;
@@ -269,19 +280,83 @@ impl IonReader {
             check_crc(&global_meta_buf, header.global_meta_crc32, "global_meta")?;
         }
 
+        let (
+            spec_summary_plain,
+            spec_entries_plain,
+            spec_array_addresses_plain,
+            chrom_summary_plain,
+            chrom_entries_plain,
+            chrom_array_addresses_plain,
+        ): (Arc<[u8]>, Arc<[u8]>, Arc<[u8]>, Arc<[u8]>, Arc<[u8]>, Arc<[u8]>) =
+            if header.compression_codec == CODEC_ZSTD {
+                let spec_summary_plain = decompress_fixed_section(
+                    &spec_summary_buf,
+                    header.spectrum_count as usize * SPEC_SUMMARY_SIZE,
+                    config.decompression_limit,
+                    "spec_summary",
+                )?;
+                let spec_entries_plain = decompress_fixed_section(
+                    &spec_entries_buf,
+                    header.spectrum_count as usize * INDEX_ENTRY_BYTES,
+                    config.decompression_limit,
+                    "spec_entries",
+                )?;
+                let spec_array_addresses_plain = decompress_fixed_section(
+                    &spec_array_addresses,
+                    max_address_index(&spec_entries_plain) as usize * ARRAY_ADDRESS_BYTES,
+                    config.decompression_limit,
+                    "spec_array_addresses",
+                )?;
+                let chrom_summary_plain = decompress_fixed_section(
+                    &chrom_summary_buf,
+                    header.chrom_count as usize * CHROM_SUMMARY_SIZE,
+                    config.decompression_limit,
+                    "chrom_summary",
+                )?;
+                let chrom_entries_plain = decompress_fixed_section(
+                    &chrom_entries_buf,
+                    header.chrom_count as usize * INDEX_ENTRY_BYTES,
+                    config.decompression_limit,
+                    "chrom_entries",
+                )?;
+                let chrom_array_addresses_plain = decompress_fixed_section(
+                    &chrom_array_addresses,
+                    max_address_index(&chrom_entries_plain) as usize * ARRAY_ADDRESS_BYTES,
+                    config.decompression_limit,
+                    "chrom_array_addresses",
+                )?;
+                (
+                    spec_summary_plain,
+                    spec_entries_plain,
+                    spec_array_addresses_plain,
+                    chrom_summary_plain,
+                    chrom_entries_plain,
+                    chrom_array_addresses_plain,
+                )
+            } else {
+                (
+                    spec_summary_buf.into_arc(),
+                    spec_entries_buf.into_arc(),
+                    spec_array_addresses.into_arc(),
+                    chrom_summary_buf.into_arc(),
+                    chrom_entries_buf.into_arc(),
+                    chrom_array_addresses.into_arc(),
+                )
+            };
+
         check_address_table(
-            &spec_entries_buf,
-            &spec_array_addresses,
+            &spec_entries_plain,
+            &spec_array_addresses_plain,
             "spec_array_addresses",
         )?;
         check_address_table(
-            &chrom_entries_buf,
-            &chrom_array_addresses,
+            &chrom_entries_plain,
+            &chrom_array_addresses_plain,
             "chrom_array_addresses",
         )?;
 
-        check_array_dtypes(&spec_array_addresses, "spec array dtype")?;
-        check_array_dtypes(&chrom_array_addresses, "chrom array dtype")?;
+        check_array_dtypes(&spec_array_addresses_plain, "spec array dtype")?;
+        check_array_dtypes(&chrom_array_addresses_plain, "chrom array dtype")?;
 
         let spec_container = BlockReader::new(
             source.clone(),
@@ -356,12 +431,12 @@ impl IonReader {
             source,
             spec_window_directory: WindowDirectoryCache::Unloaded,
             chrom_window_directory: WindowDirectoryCache::Unloaded,
-            spec_summary_buf: spec_summary_buf.into_arc(),
-            chrom_summary_buf: chrom_summary_buf.into_arc(),
-            spec_entries_buf: spec_entries_buf.into_arc(),
-            spec_array_addresses: spec_array_addresses.into_arc(),
-            chrom_entries_buf: chrom_entries_buf.into_arc(),
-            chrom_array_addresses: chrom_array_addresses.into_arc(),
+            spec_summary_buf: spec_summary_plain,
+            chrom_summary_buf: chrom_summary_plain,
+            spec_entries_buf: spec_entries_plain,
+            spec_array_addresses: spec_array_addresses_plain,
+            chrom_entries_buf: chrom_entries_plain,
+            chrom_array_addresses: chrom_array_addresses_plain,
             global_meta_buf: global_meta_buf.into_arc(),
             spec_container,
             chrom_container,

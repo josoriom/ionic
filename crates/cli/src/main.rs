@@ -118,7 +118,7 @@ enum Cmd {
 #[command(
     group(
         ArgGroup::new("convert_mode")
-            .args(["mzml_to_ion", "ion_to_mzml", "benchmark_decode"])
+            .args(["mzml_to_ion", "ion_to_mzml"])
             .multiple(false)
     ),
     group(
@@ -243,12 +243,6 @@ struct ConvertWhich {
 
     #[arg(long = "ion-to-mzml", help = "Convert ion back to mzML")]
     ion_to_mzml: bool,
-
-    #[arg(
-        long = "benchmark-decode",
-        help = "Benchmark decode speed by reading every spectrum's arrays"
-    )]
-    benchmark_decode: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -854,6 +848,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
 
     let input_root = resolve_user_path(&cwd, &cmd.input_path);
+
     let output_root = match &cmd.output_path {
         Some(path) => resolve_user_path(&cwd, path),
         None => return Err("--output-path is required".to_string()),
@@ -889,9 +884,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     let t_all = Instant::now();
 
-    let benchmark_decode = cmd.which.benchmark_decode;
-
-    let default_mzml_to_ion = !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml && !benchmark_decode;
+    let default_mzml_to_ion = !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml;
 
     let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let ion_to_mzml = cmd.which.ion_to_mzml;
@@ -1004,66 +997,6 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
         print_convert_totals(&counters, t_all.elapsed());
 
-        if counters.had_any_failure() {
-            return Err("some files failed".to_string());
-        }
-        return Ok(());
-    }
-
-    if benchmark_decode {
-        let files = collect_files_with_exts(&input_root, &["ion"], filter.as_deref())?;
-        if files.is_empty() {
-            return Err(format!(
-                "no matching .ion files found under {}",
-                input_root.display()
-            ));
-        }
-        let total = files.len();
-        let benchmark_one = |in_path: &PathBuf| {
-            let name = basename(in_path);
-            let t0 = Instant::now();
-            match IonReader::open_file(
-                in_path,
-                ReadOptions {
-                    parallel: matches!(encoding, Encoding::WithinFileParallel),
-                    ..ReadOptions::default()
-                },
-            ) {
-                Ok(mut ion) => {
-                    let count = ion.spectrum_count() as usize;
-                    let mut buf = Vec::new();
-                    for i in 0..count {
-                        if let Some(addresses) = ion.spectrum_array_addresses(i) {
-                            for address in addresses {
-                                let _ = ion.read_spectrum_values(&address, &mut buf);
-                            }
-                        }
-                    }
-                    let elapsed_s = t0.elapsed().as_secs_f64();
-                    let n = counters.next_step();
-                    let in_mb = megabytes_of(in_path);
-                    let green = palette.green;
-                    let reset = palette.reset;
-                    let line = format!(
-                        "{green}[ok]{reset} [{n}/{total}] {name}  {in_mb:.2} MB  {elapsed_s:.3}s"
-                    );
-                    print_progress_line(&counters.print_lock, false, &line);
-                }
-                Err(e) => {
-                    counters.had_failed.store(true, Ordering::Relaxed);
-                    counters.failed.fetch_add(1, Ordering::Relaxed);
-                    let n = counters.next_step();
-                    let red = palette.red;
-                    let reset = palette.reset;
-                    let line = format!("{red}[error]{reset} [{n}/{total}] {name}: {e}");
-                    print_progress_line(&counters.print_lock, true, &line);
-                }
-            }
-        };
-        pool.install(|| match encoding {
-            Encoding::FileLevelParallel => files.par_iter().for_each(benchmark_one),
-            Encoding::WithinFileParallel => files.iter().for_each(benchmark_one),
-        });
         if counters.had_any_failure() {
             return Err("some files failed".to_string());
         }

@@ -85,21 +85,4 @@ pub struct WriteOptions {
 }
 ```
 
-#### extracted_ion_chromatogram
-
-**`extracted_ion_chromatogram(&mut self, mz: Range, rt: Range) -> IonResult<Vec<(f64, f64)>>`** — Sum intensity in the m/z window across every spectrum whose rt is in range; returns `(rt, summed_intensity)` sorted by rt. `mz` must be finite and ordered; `rt` may be infinite.
-
-```rust
-let points = reader.extracted_ion_chromatogram(Query {
-    mz: ionic::Range {
-        from: 0.0,
-        to: 1000.0,
-    },
-    rt: ionic::Range {
-        from: f64::NEG_INFINITY,
-        to: f64::INFINITY,
-    }, // all rt
-})?;
-```
-
 - [Specs](spec/README.MD)
