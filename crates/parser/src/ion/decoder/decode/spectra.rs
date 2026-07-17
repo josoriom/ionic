@@ -186,10 +186,9 @@ impl IonReader {
     }
 
     pub fn spectrum_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
-        let len = usize::try_from(self.header.len_spec_summary)
-            .map_err(|_| IonError::from("spec summary: out of bounds"))?;
         let count = usize::try_from(self.header.spectrum_count)
             .map_err(|_| IonError::from("spec summary: out of bounds"))?;
+        let len = self.spec_summary_buf.len();
         if len != count * SPEC_SUMMARY_SIZE {
             return Err(
                 format!("spec summary: len={len} != count={count} × {SPEC_SUMMARY_SIZE}").into(),
@@ -214,10 +213,9 @@ impl IonReader {
     }
 
     pub fn chromatogram_summaries(&self) -> IonResult<Vec<ChromatogramSummary>> {
-        let len = usize::try_from(self.header.len_chrom_summary)
-            .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
         let count = usize::try_from(self.header.chrom_count)
             .map_err(|_| IonError::from("chrom summary: out of bounds"))?;
+        let len = self.chrom_summary_buf.len();
         if len != count * CHROM_SUMMARY_SIZE {
             return Err(format!(
                 "chrom summary: len={len} != count={count} × {CHROM_SUMMARY_SIZE}"

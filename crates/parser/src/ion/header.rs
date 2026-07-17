@@ -2,7 +2,7 @@ use crate::ion::{
     IonResult,
     decoder::decode::INDEX_ENTRY_BYTES,
     encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
-    format::{FILE_SIGNATURE, HEADER_SIZE, allow_compression, allow_version},
+    format::{CODEC_ZSTD, FILE_SIGNATURE, HEADER_SIZE, allow_compression, allow_version},
 };
 
 const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
@@ -184,8 +184,6 @@ pub(crate) struct Header {
     pub(crate) chrom_entries_crc32: u32,
     pub(crate) chrom_array_addresses_crc32: u32,
     pub(crate) target_mz_window: u32,
-    #[allow(dead_code)]
-    pub(crate) reserved: [u8; RESERVED_BLOCK_SIZE],
     pub(crate) spec_directory_crc32: u32,
     pub(crate) chrom_directory_crc32: u32,
     pub(crate) off_spec_window_directory: u64,
@@ -263,7 +261,6 @@ impl Default for Header {
             chrom_entries_crc32: 0,
             chrom_array_addresses_crc32: 0,
             target_mz_window: 0,
-            reserved: [0u8; RESERVED_BLOCK_SIZE],
             spec_directory_crc32: 0,
             chrom_directory_crc32: 0,
             off_spec_window_directory: 0,
@@ -387,11 +384,10 @@ impl Header {
 
         let target_mz_window = read_u32_at(h, HEADER_TARGET_MZ_WINDOW);
 
-        let reserved = <[u8; RESERVED_BLOCK_SIZE]>::try_from(
-            &h[RESERVED_BLOCK_START..RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE],
-        )
-        .unwrap();
-        if reserved.iter().any(|&b| b != 0) {
+        if h[RESERVED_BLOCK_START..RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE]
+            .iter()
+            .any(|&b| b != 0)
+        {
             return Err("header: reserved block 432..968 must be all zeros".into());
         }
 
@@ -461,7 +457,6 @@ impl Header {
             chrom_entries_crc32,
             chrom_array_addresses_crc32,
             target_mz_window,
-            reserved,
             spec_directory_crc32,
             chrom_directory_crc32,
             off_spec_window_directory,
@@ -834,6 +829,9 @@ pub(crate) fn check_section_layout(h: &Header) -> Vec<String> {
 }
 
 fn enforce_section_element_counts(failures: &mut Vec<String>, h: &Header) {
+    if h.compression_codec == CODEC_ZSTD {
+        return;
+    }
     let checks: &[(&str, u64, u64, u64)] = &[
         (
             "spec_summary",
@@ -947,6 +945,41 @@ mod tests {
         let mut at_end = valid_header_bytes();
         at_end[967] = 1;
         assert!(Header::parse(&at_end).is_err());
+    }
+
+    fn header_bytes_with(build: impl FnOnce(&mut Header)) -> [u8; HEADER_SIZE] {
+        let mut header = Header {
+            file_signature: FILE_SIGNATURE,
+            endianness_flag: 0,
+            format_version: CURRENT_VERSION,
+            ..Header::default()
+        };
+        build(&mut header);
+        let mut buf = [0u8; HEADER_SIZE];
+        header.write(&mut buf);
+        let crc = crc32fast::hash(&buf[0..HEADER_CRC32]);
+        buf[HEADER_CRC32..HEADER_SIZE].copy_from_slice(&crc.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn reserved_block_must_be_zero() {
+        let base = header_bytes_with(|_| {});
+
+        for offset in [
+            RESERVED_BLOCK_START,
+            500,
+            700,
+            RESERVED_BLOCK_START + RESERVED_BLOCK_SIZE - 1,
+        ] {
+            let mut corrupted = base;
+            corrupted[offset] = 1;
+            let error = Header::parse(&corrupted).expect_err("nonzero reserved byte");
+            assert!(
+                error.to_string().contains("reserved block"),
+                "offset {offset}: unexpected error {error}"
+            );
+        }
     }
 
     #[test]
@@ -1115,7 +1148,6 @@ mod tests {
             chrom_entries_crc32: 0xAABB_CC0E,
             chrom_array_addresses_crc32: 0xAABB_CC0F,
             target_mz_window: 0x0041_0031,
-            reserved: [0u8; RESERVED_BLOCK_SIZE],
             spec_directory_crc32: 0xAABB_CC01,
             chrom_directory_crc32: 0xAABB_CC02,
             off_spec_window_directory: 0x003b_0000_0000_002b,
@@ -1252,7 +1284,6 @@ mod tests {
             original.chrom_array_addresses_crc32
         );
         assert_eq!(parsed.target_mz_window, original.target_mz_window);
-        assert_eq!(parsed.reserved, original.reserved);
         assert_eq!(parsed.spec_directory_crc32, original.spec_directory_crc32);
         assert_eq!(parsed.chrom_directory_crc32, original.chrom_directory_crc32);
         assert_eq!(

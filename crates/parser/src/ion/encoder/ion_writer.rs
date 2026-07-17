@@ -376,6 +376,22 @@ fn write_chunk(output: &mut dyn WriteBytes, section: SectionChunk) -> IonResult<
     Ok((offset, bytes.len() as u64, crc32))
 }
 
+fn write_chunk_maybe_compressed(
+    output: &mut dyn WriteBytes,
+    section: SectionChunk,
+    compression_level: u8,
+) -> IonResult<(u64, u64, u32)> {
+    let raw = section.into_vec()?;
+    if raw.is_empty() {
+        let offset = write_aligned(output, &raw)?;
+        return Ok((offset, 0, crc32fast::hash(&raw)));
+    }
+    let stored = compress_bytes_if_enabled(raw, compression_level);
+    let crc32 = crc32fast::hash(&stored);
+    let offset = write_aligned(output, &stored)?;
+    Ok((offset, stored.len() as u64, crc32))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_list<T, L, B, I>(
     output: &mut dyn WriteBytes,
@@ -586,23 +602,26 @@ impl<'out> IonWriter<'out> {
         let chrom_meta_crc32 = chrom.grouped.crc32;
         let global_meta_crc32 = crc32fast::hash(&global_bytes);
 
-        let spec_summary_len = spec.summary.len();
-        let spec_index_len = spec.index.len();
-        let spec_address_len = spec.addresses.len();
-        let chrom_summary_len = chrom.summary.len();
-        let chrom_index_len = chrom.index.len();
-        let chrom_address_len = chrom.addresses.len();
         let spec_meta_len = spec.grouped.byte_len;
         let chrom_meta_len = chrom.grouped.byte_len;
 
-        let (off_spec_summary, _, spec_summary_crc32) = write_chunk(self.output, spec.summary)?;
-        let (off_spec_entries, _, spec_entries_crc32) = write_chunk(self.output, spec.index)?;
-        let (off_spec_array_addresses, _, spec_array_addresses_crc32) =
-            write_chunk(self.output, spec.addresses)?;
-        let (off_chrom_summary, _, chrom_summary_crc32) = write_chunk(self.output, chrom.summary)?;
-        let (off_chrom_entries, _, chrom_entries_crc32) = write_chunk(self.output, chrom.index)?;
-        let (off_chrom_array_addresses, _, chrom_array_addresses_crc32) =
-            write_chunk(self.output, chrom.addresses)?;
+        let compression_level = self.config.compression_level;
+
+        let (off_spec_summary, len_spec_summary_stored, spec_summary_crc32) =
+            write_chunk_maybe_compressed(self.output, spec.summary, compression_level)?;
+        let (off_spec_entries, len_spec_entries_stored, spec_entries_crc32) =
+            write_chunk_maybe_compressed(self.output, spec.index, compression_level)?;
+        let (off_spec_array_addresses, len_spec_array_addresses_stored, spec_array_addresses_crc32) =
+            write_chunk_maybe_compressed(self.output, spec.addresses, compression_level)?;
+        let (off_chrom_summary, len_chrom_summary_stored, chrom_summary_crc32) =
+            write_chunk_maybe_compressed(self.output, chrom.summary, compression_level)?;
+        let (off_chrom_entries, len_chrom_entries_stored, chrom_entries_crc32) =
+            write_chunk_maybe_compressed(self.output, chrom.index, compression_level)?;
+        let (
+            off_chrom_array_addresses,
+            len_chrom_array_addresses_stored,
+            chrom_array_addresses_crc32,
+        ) = write_chunk_maybe_compressed(self.output, chrom.addresses, compression_level)?;
         let off_spec_meta = write_chunk(self.output, spec.grouped.section)?.0;
         let off_chrom_meta = write_chunk(self.output, chrom.grouped.section)?.0;
         let off_global_meta = write_aligned(self.output, &global_bytes)?;
@@ -620,13 +639,13 @@ impl<'out> IonWriter<'out> {
             target_block_uncompressed_bytes: self.config.block_size as u64,
 
             off_spec_entries,
-            len_spec_entries: spec_index_len,
+            len_spec_entries: len_spec_entries_stored,
             off_spec_array_addresses,
-            len_spec_array_addresses: spec_address_len,
+            len_spec_array_addresses: len_spec_array_addresses_stored,
             off_chrom_entries,
-            len_chrom_entries: chrom_index_len,
+            len_chrom_entries: len_chrom_entries_stored,
             off_chrom_array_addresses,
-            len_chrom_array_addresses: chrom_address_len,
+            len_chrom_array_addresses: len_chrom_array_addresses_stored,
             off_spec_meta,
             len_spec_meta: spec_meta_len,
             off_chrom_meta,
@@ -664,9 +683,9 @@ impl<'out> IonWriter<'out> {
             chrom_meta_group_count: chrom.grouped.group_count,
 
             off_spec_summary,
-            len_spec_summary: spec_summary_len,
+            len_spec_summary: len_spec_summary_stored,
             off_chrom_summary,
-            len_chrom_summary: chrom_summary_len,
+            len_chrom_summary: len_chrom_summary_stored,
 
             total_file_size,
 

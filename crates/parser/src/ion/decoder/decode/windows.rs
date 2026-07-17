@@ -258,42 +258,6 @@ pub(crate) fn keep_pairs(
     }
 }
 
-fn first_at_or_after_rt(
-    window_directory: &WindowDirectory,
-    positions: std::ops::Range<usize>,
-    target: f64,
-    rt_of: &dyn Fn(u32) -> f64,
-) -> usize {
-    let (mut low, mut high) = (positions.start, positions.end);
-    while low < high {
-        let middle = low + (high - low) / 2;
-        if rt_of(window_directory.row(middle).spectrum_index) < target {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    low
-}
-
-fn first_after_rt(
-    window_directory: &WindowDirectory,
-    positions: std::ops::Range<usize>,
-    target: f64,
-    rt_of: &dyn Fn(u32) -> f64,
-) -> usize {
-    let (mut low, mut high) = (positions.start, positions.end);
-    while low < high {
-        let middle = low + (high - low) / 2;
-        if rt_of(window_directory.row(middle).spectrum_index) <= target {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    low
-}
-
 impl IonReader {
     pub fn read_spectrum_window(
         &mut self,
@@ -369,105 +333,6 @@ impl IonReader {
         Ok(parse_array_address(bytes))
     }
 
-    fn spec_rt_supports_binary_search(&self) -> bool {
-        if let Some(value) = self.spec_rt_finite_ascending.get() {
-            return value;
-        }
-        let mut previous = f64::NEG_INFINITY;
-        let mut ok = true;
-        for index in 0..self.header.spectrum_count as usize {
-            let rt = self
-                .spectrum_summary(index)
-                .map(|summary| summary.rt)
-                .unwrap_or(f64::NAN);
-            if !rt.is_finite() || rt < previous {
-                ok = false;
-                break;
-            }
-            previous = rt;
-        }
-        self.spec_rt_finite_ascending.set(Some(ok));
-        ok
-    }
-
-    #[deprecated(note = "renamed to `extracted_ion_chromatogram`")]
-    pub fn eic(&mut self, mz: Range, rt: Range) -> IonResult<Vec<(f64, f64)>> {
-        self.extracted_ion_chromatogram(Query { mz, rt })
-    }
-
-    pub fn extracted_ion_chromatogram(&mut self, query: Query) -> IonResult<Vec<(f64, f64)>> {
-        let Query { mz, rt } = query;
-        if !mz.from.is_finite() || !mz.to.is_finite() || mz.from > mz.to {
-            return Err("eic: m/z range must be finite and ordered".into());
-        }
-        self.require_bounds()?;
-
-        let binary_search = self.spec_rt_supports_binary_search();
-        let rows = {
-            let width = self.header.target_mz_window as f64;
-            let window_directory = match &self.spec_window_directory {
-                WindowDirectoryCache::Loaded(index) => index,
-                _ => return Err(IonError::MissingSpectrumBounds),
-            };
-            let Some((window_low, window_high)) =
-                window_span(width, mz.from, mz.to, window_directory.window_count())
-            else {
-                return Ok(Vec::new());
-            };
-            let rt_of = |spectrum_index: u32| {
-                self.spectrum_summary(spectrum_index as usize)
-                    .map(|summary| summary.rt)
-                    .unwrap_or(f64::NAN)
-            };
-            let mut rows = Vec::new();
-            for window in window_low..=window_high {
-                let positions = window_directory.window_range(window);
-                if binary_search {
-                    let start =
-                        first_at_or_after_rt(window_directory, positions.clone(), rt.from, &rt_of);
-                    let end = first_after_rt(window_directory, start..positions.end, rt.to, &rt_of);
-                    for position in start..end {
-                        rows.push(window_directory.row(position));
-                    }
-                } else {
-                    for position in positions {
-                        let row = window_directory.row(position);
-                        let value = rt_of(row.spectrum_index);
-                        if value >= rt.from && value <= rt.to {
-                            rows.push(row);
-                        }
-                    }
-                }
-            }
-            rows
-        };
-
-        let mut totals: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
-        for row in rows {
-            let mz_address = self.array_address_at(row.mz_address)?;
-            let intensity_address = self.array_address_at(row.intensity_address)?;
-            let mz_segment = self.read_spectrum_array(&mz_address)?;
-            let intensity_segment = self.read_spectrum_array(&intensity_address)?;
-            let paired = mz_segment.len().min(intensity_segment.len());
-            let (start, end) = range_in_sorted(&mz_segment, mz.from, mz.to, paired);
-            let mut sum = 0.0;
-            for position in start..end {
-                sum += value_at(&intensity_segment, position);
-            }
-            *totals.entry(row.spectrum_index).or_insert(0.0) += sum;
-        }
-
-        let mut points: Vec<(f64, f64)> = totals
-            .into_iter()
-            .filter_map(|(spectrum, intensity)| {
-                self.spectrum_summary(spectrum as usize)
-                    .map(|summary| (summary.rt, intensity))
-            })
-            .collect();
-        points.sort_by(|left, right| left.0.total_cmp(&right.0));
-        Ok(points)
-    }
-
     pub(crate) fn spec_block_byte_range(&self, block_id: u32) -> IonResult<ByteRange> {
         self.spec_container
             .block_byte_range(block_id)
@@ -540,10 +405,10 @@ impl IonReader {
             let Some(record) = self.spectrum_summary(index) else {
                 continue;
             };
-            if let Some(level) = ms_level {
-                if record.ms_level != level {
-                    continue;
-                }
+            if let Some(level) = ms_level
+                && record.ms_level != level
+            {
+                continue;
             }
             let summary = scan_summary_from_record(&record);
             if !scan_is_selected(&select, &summary) {

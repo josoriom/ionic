@@ -28,8 +28,8 @@ use crate::{
 };
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MZ_WINDOW: f64 = 100.0;
-pub(crate) const SPEC_SUMMARY_SIZE: usize = 128;
-pub(crate) const CHROM_SUMMARY_SIZE: usize = 128;
+pub(crate) const SPEC_SUMMARY_SIZE: usize = 80;
+pub(crate) const CHROM_SUMMARY_SIZE: usize = 80;
 
 pub(crate) const FILE_DTYPE_F64: u8 = Dtype::F64 as u8;
 pub(crate) const FILE_DTYPE_F32: u8 = Dtype::F32 as u8;

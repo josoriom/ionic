@@ -1,11 +1,13 @@
 use super::{arrays::decode_into, *};
 use crate::{
-    ion::{decoder::decode::windows::Query, encoder::utilities::SectionStorage},
+    ion::{
+        encoder::utilities::SectionStorage,
+        format::{CODEC_NONE, CODEC_ZSTD},
+    },
     mzml::structs::{BinaryDataArray, CvParam, NumericArray},
 };
 
 const BYTES: &[u8] = include_bytes!("../../../../data/ion/test.ion");
-const MISSING_RT_BYTES: &[u8] = include_bytes!("../../../../data/ion/tiny.pwiz.1.1.ion");
 
 fn ref_with(array_type: u32, continues_previous_segment: u8, encoded_len: u32) -> ArrayAddress {
     ArrayAddress {
@@ -262,161 +264,10 @@ fn scans_in_ms_level_filter_selects_only_matching_scans() {
 }
 
 #[test]
-fn eic_matches_per_scan_window_sums() {
-    let bytes = reencoded_fixture();
-    let mut reader = IonReader::open(&bytes, ReadOptions::default()).unwrap();
-    let count = reader.spectrum_count() as usize;
-    let mz = Range {
-        from: 210.0,
-        to: 390.0,
-    };
-    let rt = Range {
-        from: f64::MIN,
-        to: f64::MAX,
-    };
-
-    let mut expected: Vec<(f64, f64)> = Vec::new();
-    for index in 0..count {
-        let summary = reader.spectrum_summary(index).unwrap();
-        let has_window = !reader
-            .get_spectrum_mz_windows(index, mz.from, mz.to)
-            .unwrap()
-            .is_empty();
-        if !has_window {
-            continue;
-        }
-        let sum: f64 = reader
-            .read_window(index, mz)
-            .unwrap()
-            .y
-            .to_f64()
-            .iter()
-            .sum();
-        expected.push((summary.rt, sum));
-    }
-    expected.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-
-    let mut got = reader.extracted_ion_chromatogram(Query { mz, rt }).unwrap();
-    got.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-
-    assert_eq!(got.len(), expected.len(), "eic point count");
-    for (point, want) in got.iter().zip(expected.iter()) {
-        assert!(
-            (point.0 - want.0).abs() < 1e-9,
-            "rt {} vs {}",
-            point.0,
-            want.0
-        );
-        assert!(
-            (point.1 - want.1).abs() < 1e-6,
-            "intensity {} vs {}",
-            point.1,
-            want.1
-        );
-    }
-}
-
-#[test]
-fn eic_rt_range_filters_scans() {
-    let bytes = reencoded_fixture();
-    let mut reader = IonReader::open(&bytes, ReadOptions::default()).unwrap();
-    let mz = Range {
-        from: 0.0,
-        to: f64::MAX,
-    };
-    let full = reader
-        .extracted_ion_chromatogram(Query {
-            mz,
-            rt: Range {
-                from: f64::MIN,
-                to: f64::MAX,
-            },
-        })
-        .unwrap();
-    assert!(!full.is_empty());
-
-    let cutoff = full[full.len() / 2].0;
-    let narrowed = reader
-        .extracted_ion_chromatogram(Query {
-            mz,
-            rt: Range {
-                from: f64::MIN,
-                to: cutoff,
-            },
-        })
-        .unwrap();
-    assert!(narrowed.len() <= full.len());
-    assert!(narrowed.iter().all(|(rt, _)| *rt <= cutoff));
-}
-
-#[test]
-fn eic_on_file_with_missing_rt_matches_per_scan_sums() {
-    let mut reader = IonReader::open(MISSING_RT_BYTES, ReadOptions::default()).unwrap();
-    let count = reader.spectrum_count() as usize;
-    let mz = Range {
-        from: 0.0,
-        to: f64::MAX,
-    };
-    let rt = Range {
-        from: f64::MIN,
-        to: f64::MAX,
-    };
-
-    let mut expected: Vec<(f64, f64)> = Vec::new();
-    for index in 0..count {
-        let summary = reader.spectrum_summary(index).unwrap();
-        if !summary.rt.is_finite() {
-            continue;
-        }
-        let has_window = !reader
-            .get_spectrum_mz_windows(index, mz.from, mz.to)
-            .unwrap()
-            .is_empty();
-        if !has_window {
-            continue;
-        }
-        let sum: f64 = reader
-            .read_window(index, mz)
-            .unwrap()
-            .y
-            .to_f64()
-            .iter()
-            .sum();
-        expected.push((summary.rt, sum));
-    }
-    expected.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-
-    let mut got = reader.extracted_ion_chromatogram(Query { mz, rt }).unwrap();
-    got.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-
-    assert_eq!(
-        got.len(),
-        expected.len(),
-        "eic point count on a missing-rt file"
-    );
-    for (point, want) in got.iter().zip(expected.iter()) {
-        assert!(
-            (point.0 - want.0).abs() < 1e-9,
-            "rt {} vs {}",
-            point.0,
-            want.0
-        );
-        assert!(
-            (point.1 - want.1).abs() < 1e-6,
-            "intensity {} vs {}",
-            point.1,
-            want.1
-        );
-    }
-}
-
-#[test]
 fn spec_array_addresses_store_cv_code_in_32_byte_records() {
     let bytes = reencoded_fixture();
-    let header = crate::ion::header::parse_header(&bytes).unwrap();
-    let start = header.off_spec_array_addresses as usize;
-    let end = start + header.len_spec_array_addresses as usize;
-    let table = &bytes[start..end];
+    let reader = IonReader::open(&bytes, ReadOptions::default()).unwrap();
+    let table = &reader.spec_array_addresses;
     assert!(
         !table.is_empty(),
         "fixture must have spectrum array addresses"
@@ -2167,4 +2018,285 @@ fn reader_plans_and_reads_mz_range() {
     let (expected_mz, expected_int) = brute_force_window(&mz, &int, 120.0, 130.0);
     assert_eq!(got.x.to_f64(), expected_mz);
     assert_eq!(got.y.to_f64(), expected_int);
+}
+
+fn make_spectrum_with_arrays(id: String, mz: Vec<f64>, int: Vec<f64>) -> Spectrum {
+    use crate::mzml::structs::BinaryDataArrayList;
+    Spectrum {
+        id,
+        binary_data_array_list: Some(BinaryDataArrayList {
+            count: Some(2),
+            binary_data_arrays: vec![
+                make_split_bda("MS:1000514", "m/z array", mz),
+                make_split_bda("MS:1000515", "intensity array", int),
+            ],
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn roundtrip_compressed_sections_are_smaller_and_lossless() {
+    use crate::{
+        ion::encoder::{encode::WriteOptions, ion_writer::write_mzml_to_ion},
+        mzml::structs::{MzML, Run, SpectrumList},
+    };
+
+    let spectrum_count = 200;
+    let mz: Vec<f64> = (0..40).map(|i| 100.0 + i as f64 * 0.1).collect();
+    let int: Vec<f64> = (0..40).map(|i| (i * 10) as f64).collect();
+
+    let spectra: Vec<Spectrum> = (0..spectrum_count)
+        .map(|i| make_spectrum_with_arrays(format!("scan={i}"), mz.clone(), int.clone()))
+        .collect();
+
+    let mzml_in = MzML {
+        run: Run {
+            spectrum_list: Some(SpectrumList {
+                spectra,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut encoded = Vec::new();
+    write_mzml_to_ion(
+        &mzml_in,
+        WriteOptions {
+            compression_level: 22,
+            ..WriteOptions::default()
+        },
+        &mut encoded,
+    )
+    .unwrap();
+
+    let header = parse_header(&encoded[..1024]).unwrap();
+    assert_eq!(header.compression_codec, CODEC_ZSTD);
+    assert_eq!(header.spectrum_count, spectrum_count as u64);
+
+    let mut reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+
+    let address_count = reader.spec_array_addresses.len() as u64 / ARRAY_ADDRESS_BYTES as u64;
+    assert_eq!(address_count, spectrum_count as u64 * 2);
+
+    assert!(
+        header.len_spec_summary < spectrum_count as u64 * SPEC_SUMMARY_SIZE as u64,
+        "spec summary should shrink under compression: stored={}, raw={}",
+        header.len_spec_summary,
+        spectrum_count as u64 * SPEC_SUMMARY_SIZE as u64
+    );
+    assert!(
+        header.len_spec_entries < spectrum_count as u64 * INDEX_ENTRY_BYTES as u64,
+        "spec entries should shrink under compression: stored={}, raw={}",
+        header.len_spec_entries,
+        spectrum_count as u64 * INDEX_ENTRY_BYTES as u64
+    );
+    assert!(
+        header.len_spec_array_addresses < address_count * ARRAY_ADDRESS_BYTES as u64,
+        "spec array addresses should shrink under compression: stored={}, raw={}",
+        header.len_spec_array_addresses,
+        address_count * ARRAY_ADDRESS_BYTES as u64
+    );
+
+    assert_eq!(
+        reader.spec_summary_buf.len(),
+        spectrum_count * SPEC_SUMMARY_SIZE
+    );
+    assert_eq!(
+        reader.spec_entries_buf.len(),
+        spectrum_count * INDEX_ENTRY_BYTES
+    );
+    assert_eq!(
+        reader.spec_array_addresses.len(),
+        address_count as usize * ARRAY_ADDRESS_BYTES
+    );
+
+    let summaries = reader.spectrum_summaries().unwrap();
+    assert_eq!(summaries.len(), spectrum_count);
+
+    let mzml_out = reader.to_mzml().unwrap();
+    let spectra_out = mzml_out.run.spectrum_list.unwrap().spectra;
+    assert_eq!(spectra_out.len(), spectrum_count);
+    for (index, spectrum) in spectra_out.iter().enumerate() {
+        assert_eq!(spectrum.id, format!("scan={index}"));
+        let arrays = &spectrum
+            .binary_data_array_list
+            .as_ref()
+            .unwrap()
+            .binary_data_arrays;
+        let mz_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000514"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+        let int_out = arrays
+            .iter()
+            .find(|a| {
+                a.cv_params
+                    .iter()
+                    .any(|cv| cv.accession.as_deref() == Some("MS:1000515"))
+            })
+            .and_then(|a| a.binary.as_ref())
+            .unwrap();
+        let NumericArray::F64(mz_vec) = mz_out else {
+            panic!("expected F64 mz array");
+        };
+        let NumericArray::F64(int_vec) = int_out else {
+            panic!("expected F64 intensity array");
+        };
+        assert_eq!(mz_vec, &mz);
+        assert_eq!(int_vec, &int);
+    }
+}
+
+#[test]
+fn compression_disabled_keeps_sections_raw() {
+    use crate::{
+        ion::encoder::{encode::WriteOptions, ion_writer::write_mzml_to_ion},
+        mzml::structs::{MzML, Run, SpectrumList},
+    };
+
+    let spectrum_count = 5;
+    let mz = vec![100.0, 100.5, 101.0];
+    let int = vec![10.0, 20.0, 30.0];
+
+    let spectra: Vec<Spectrum> = (0..spectrum_count)
+        .map(|i| make_spectrum_with_arrays(format!("scan={i}"), mz.clone(), int.clone()))
+        .collect();
+
+    let mzml_in = MzML {
+        run: Run {
+            spectrum_list: Some(SpectrumList {
+                spectra,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut encoded = Vec::new();
+    write_mzml_to_ion(
+        &mzml_in,
+        WriteOptions {
+            compression_level: 0,
+            ..WriteOptions::default()
+        },
+        &mut encoded,
+    )
+    .unwrap();
+
+    let header = parse_header(&encoded[..1024]).unwrap();
+    assert_eq!(header.compression_codec, CODEC_NONE);
+    assert_eq!(
+        header.len_spec_summary,
+        spectrum_count as u64 * SPEC_SUMMARY_SIZE as u64
+    );
+
+    let mut reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+    let mzml_out = reader.to_mzml().unwrap();
+    assert_eq!(
+        mzml_out.run.spectrum_list.unwrap().spectra.len(),
+        spectrum_count
+    );
+}
+
+#[test]
+fn compressed_roundtrip_edge_cases() {
+    use crate::{
+        ion::encoder::{encode::WriteOptions, ion_writer::write_mzml_to_ion},
+        mzml::structs::{BinaryDataArrayList, MzML, Run, SpectrumList},
+    };
+
+    let compressed_options = WriteOptions {
+        compression_level: 22,
+        ..WriteOptions::default()
+    };
+
+    {
+        let spectrum =
+            make_spectrum_with_arrays("scan=1".to_string(), vec![100.0, 100.5], vec![1.0, 2.0]);
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        write_mzml_to_ion(&mzml_in, compressed_options, &mut encoded).unwrap();
+
+        let header = parse_header(&encoded[..1024]).unwrap();
+        assert_eq!(header.compression_codec, CODEC_ZSTD);
+        assert_eq!(header.len_chrom_summary, 0);
+        assert_eq!(header.len_chrom_entries, 0);
+        assert_eq!(header.len_chrom_array_addresses, 0);
+
+        let mut reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+        let mzml_out = reader.to_mzml().unwrap();
+        assert_eq!(mzml_out.run.spectrum_list.unwrap().spectra.len(), 1);
+        assert_eq!(reader.chromatogram_count(), 0);
+    }
+
+    {
+        let mzml_in = MzML::default();
+
+        let mut encoded = Vec::new();
+        write_mzml_to_ion(&mzml_in, compressed_options, &mut encoded).unwrap();
+
+        let header = parse_header(&encoded[..1024]).unwrap();
+        assert_eq!(header.compression_codec, CODEC_ZSTD);
+        assert_eq!(header.len_spec_summary, 0);
+        assert_eq!(header.len_spec_entries, 0);
+        assert_eq!(header.len_spec_array_addresses, 0);
+        assert_eq!(header.len_chrom_summary, 0);
+        assert_eq!(header.len_chrom_entries, 0);
+        assert_eq!(header.len_chrom_array_addresses, 0);
+
+        let reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+        assert_eq!(reader.spectrum_count(), 0);
+        assert_eq!(reader.chromatogram_count(), 0);
+    }
+
+    {
+        let empty_array_spectrum = Spectrum {
+            id: "scan=1".to_string(),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(0),
+                binary_data_arrays: vec![],
+            }),
+            ..Default::default()
+        };
+        let mzml_in = MzML {
+            run: Run {
+                spectrum_list: Some(SpectrumList {
+                    spectra: vec![empty_array_spectrum],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut encoded = Vec::new();
+        write_mzml_to_ion(&mzml_in, compressed_options, &mut encoded).unwrap();
+
+        let header = parse_header(&encoded[..1024]).unwrap();
+        assert_eq!(header.compression_codec, CODEC_ZSTD);
+        assert_eq!(header.len_spec_array_addresses, 0);
+
+        let mut reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+        let mzml_out = reader.to_mzml().unwrap();
+        assert_eq!(mzml_out.run.spectrum_list.unwrap().spectra.len(), 1);
+    }
 }

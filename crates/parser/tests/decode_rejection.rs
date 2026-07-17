@@ -151,7 +151,7 @@ fn rejects_huge_spec_entry_count_4() {
 
 #[test]
 fn rejects_huge_spec_entry_count_with_checksums_off_4() {
-    let mut bytes = encode_to_ion(test_files::tiny_pwiz_11(), 9, false);
+    let mut bytes = encode_to_ion(test_files::tiny_pwiz_11(), 0, false);
     let off = read_header_u64(&bytes, HEADER_OFFSET_SPEC_ENTRIES) as usize;
     let len = read_header_u64(&bytes, HEADER_LEN_SPEC_ENTRIES) as usize;
     assert!(len >= 16, "fixture must have at least one spec entry");

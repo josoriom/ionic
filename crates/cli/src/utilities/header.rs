@@ -39,7 +39,126 @@ fn dim() -> &'static str {
     ansi("\x1b[2m")
 }
 
-const SPEC_SUMMARY_ROW: usize = 128;
+const SPEC_SUMMARY_ROW: usize = 80;
+const INDEX_ENTRY_ROW: usize = 16;
+const ARRAY_ADDRESS_ROW: usize = 32;
+
+struct FixedSections {
+    spec_summary: Result<Vec<u8>, String>,
+    spec_entries: Result<Vec<u8>, String>,
+    spec_addresses: Result<Vec<u8>, String>,
+    chrom_summary: Result<Vec<u8>, String>,
+    chrom_entries: Result<Vec<u8>, String>,
+    chrom_addresses: Result<Vec<u8>, String>,
+}
+
+fn max_address_index(entries: &[u8]) -> u64 {
+    let mut total = 0u64;
+    for entry in entries.chunks_exact(INDEX_ENTRY_ROW) {
+        let first = u64::from_le_bytes(entry[0..8].try_into().unwrap());
+        let count = u64::from_le_bytes(entry[8..16].try_into().unwrap());
+        total = total.max(first.saturating_add(count));
+    }
+    total
+}
+
+fn read_fixed_section(
+    bytes: &[u8],
+    header: &[u8],
+    off_at: usize,
+    len_at: usize,
+    plain_count: u64,
+    record: usize,
+    compressed: bool,
+) -> Result<Vec<u8>, String> {
+    let off = u64_at(header, off_at) as usize;
+    let len = u64_at(header, len_at) as usize;
+    let end = off.checked_add(len).ok_or("offset overflow")?;
+    let stored = bytes.get(off..end).ok_or("section out of bounds")?;
+    if len > 0 && off % 8 != 0 {
+        return Err("offset not 8-byte aligned".into());
+    }
+    if !compressed {
+        return Ok(stored.to_vec());
+    }
+    let plain_len = usize::try_from(plain_count)
+        .ok()
+        .and_then(|count| count.checked_mul(record))
+        .ok_or("section size overflow")?;
+    if plain_len == 0 {
+        return Ok(Vec::new());
+    }
+    zstd::bulk::decompress(stored, plain_len).map_err(|e| format!("decompress failed: {e}"))
+}
+
+fn read_address_section(
+    bytes: &[u8],
+    header: &[u8],
+    off_at: usize,
+    len_at: usize,
+    entries: &Result<Vec<u8>, String>,
+    compressed: bool,
+) -> Result<Vec<u8>, String> {
+    let entries = entries.as_ref().map_err(|why| why.clone())?;
+    let address_count = max_address_index(entries);
+    read_fixed_section(
+        bytes,
+        header,
+        off_at,
+        len_at,
+        address_count,
+        ARRAY_ADDRESS_ROW,
+        compressed,
+    )
+}
+
+fn resolve_fixed_sections(bytes: &[u8], header: &[u8]) -> FixedSections {
+    let compressed = header[11] == CODEC_ZSTD;
+    let spec_count = u64_at(header, 256);
+    let chrom_count = u64_at(header, 264);
+
+    let spec_summary =
+        read_fixed_section(bytes, header, 48, 56, spec_count, SPEC_SUMMARY_ROW, compressed);
+    let spec_entries =
+        read_fixed_section(bytes, header, 64, 72, spec_count, INDEX_ENTRY_ROW, compressed);
+    let spec_addresses = read_address_section(bytes, header, 80, 88, &spec_entries, compressed);
+    let chrom_summary = read_fixed_section(
+        bytes,
+        header,
+        112,
+        120,
+        chrom_count,
+        SPEC_SUMMARY_ROW,
+        compressed,
+    );
+    let chrom_entries =
+        read_fixed_section(bytes, header, 128, 136, chrom_count, INDEX_ENTRY_ROW, compressed);
+    let chrom_addresses = read_address_section(bytes, header, 144, 152, &chrom_entries, compressed);
+
+    FixedSections {
+        spec_summary,
+        spec_entries,
+        spec_addresses,
+        chrom_summary,
+        chrom_entries,
+        chrom_addresses,
+    }
+}
+
+fn check_fixed(section: &Result<Vec<u8>, String>, record: u64, count: Option<u64>) -> Result<(), String> {
+    let plain = section.as_ref().map_err(|why| why.clone())?;
+    let len = plain.len() as u64;
+    if len % record != 0 {
+        return Err(format!("length {len} is not a multiple of {record}"));
+    }
+    if let Some(expected_count) = count {
+        let expected = expected_count.checked_mul(record).ok_or("count overflow")?;
+        if len != expected {
+            return Err(format!("{} records, expected {expected_count}", len / record));
+        }
+    }
+    Ok(())
+}
 
 struct Section {
     name: &'static str,
@@ -87,6 +206,7 @@ struct HeaderView<'a> {
     sections: Vec<Section>,
     spec_window_dir: Result<usize, String>,
     chrom_window_dir: Result<usize, String>,
+    fixed: FixedSections,
 }
 
 impl<'a> HeaderView<'a> {
@@ -95,12 +215,14 @@ impl<'a> HeaderView<'a> {
         let sections = build_sections(header, u64_at(header, 400));
         let spec_window_dir = open_window_directory(bytes, header, 32, 40, 384);
         let chrom_window_dir = open_window_directory(bytes, header, 96, 104, 392);
+        let fixed = resolve_fixed_sections(bytes, header);
         Self {
             bytes,
             header,
             sections,
             spec_window_dir,
             chrom_window_dir,
+            fixed,
         }
     }
 
@@ -201,51 +323,13 @@ impl<'a> HeaderView<'a> {
         .unwrap_or(false)
     }
 
-    fn open_fixed(
-        &self,
-        off_at: usize,
-        len_at: usize,
-        record: u64,
-        count: Option<u64>,
-    ) -> Result<(), String> {
-        let off = self.read_header_u64(off_at);
-        let len = self.read_header_u64(len_at);
-        let end = off.checked_add(len).ok_or("offset overflow")?;
-        if end > self.bytes.len() as u64 {
-            return Err("section out of bounds".into());
-        }
-        if len > 0 && off % 8 != 0 {
-            return Err("offset not 8-byte aligned".into());
-        }
-        if len % record != 0 {
-            return Err(format!("length {len} is not a multiple of {record}"));
-        }
-        if let Some(expected_count) = count {
-            let expected = expected_count.checked_mul(record).ok_or("count overflow")?;
-            if len != expected {
-                return Err(format!(
-                    "{} records, expected {expected_count}",
-                    len / record
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn spec_summary_buf(&self) -> Option<&[u8]> {
-        let off = self.read_header_u64(48) as usize;
-        let len = self.read_header_u64(56) as usize;
-        off.checked_add(len)
-            .and_then(|end| self.bytes.get(off..end))
-    }
-
     fn axis_maxes(&self) -> AxisMaxes {
         let mut max_rt: f64 = 0.0;
         let mut max_x: u32 = 0;
         let mut max_y: u32 = 0;
         let mut max_z: u32 = 0;
 
-        if let Some(buf) = self.spec_summary_buf() {
+        if let Ok(buf) = &self.fixed.spec_summary {
             for row in buf.chunks_exact(SPEC_SUMMARY_ROW) {
                 let rt = f64::from_le_bytes(row[0..8].try_into().unwrap());
                 let x = u32::from_le_bytes(row[42..46].try_into().unwrap());
@@ -485,13 +569,13 @@ fn print_sections(view: &HeaderView<'_>) {
     let chrom_count = view.read_header_u64(264);
     let checks: [Result<(), String>; 8] = [
         view.spec_window_dir.clone().map(|_| ()),
-        view.open_fixed(48, 56, 128, Some(spec_count)),
-        view.open_fixed(64, 72, 16, Some(spec_count)),
-        view.open_fixed(80, 88, 32, None),
+        check_fixed(&view.fixed.spec_summary, SPEC_SUMMARY_ROW as u64, Some(spec_count)),
+        check_fixed(&view.fixed.spec_entries, 16, Some(spec_count)),
+        check_fixed(&view.fixed.spec_addresses, 32, None),
         view.chrom_window_dir.clone().map(|_| ()),
-        view.open_fixed(112, 120, 128, Some(chrom_count)),
-        view.open_fixed(128, 136, 16, Some(chrom_count)),
-        view.open_fixed(144, 152, 32, None),
+        check_fixed(&view.fixed.chrom_summary, SPEC_SUMMARY_ROW as u64, Some(chrom_count)),
+        check_fixed(&view.fixed.chrom_entries, 16, Some(chrom_count)),
+        check_fixed(&view.fixed.chrom_addresses, 32, None),
     ];
 
     let mut failed = 0;
