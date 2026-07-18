@@ -239,6 +239,7 @@ impl IonReader {
             self.header.compression_codec,
             self.header.global_meta_uncompressed_bytes,
             self.decompression_limit,
+            MetaColumnLayout::from_version(self.header.format_version).without_ids_reset(),
         )
     }
 

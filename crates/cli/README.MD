@@ -16,28 +16,28 @@ mkdir -p "$INSTALL_DIR"
 ### macOS — arm64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.0/aarch64-apple-darwin/ionic" -o "$INSTALL_DIR/ionic"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.1/aarch64-apple-darwin/ionic" -o "$INSTALL_DIR/ionic"
 chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ### macOS — x86_64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.0/x86_64-apple-darwin/ionic" -o "$INSTALL_DIR/ionic"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.1/x86_64-apple-darwin/ionic" -o "$INSTALL_DIR/ionic"
 chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ### Linux — x86_64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.0/x86_64-unknown-linux-gnu/ionic" -o "$INSTALL_DIR/ionic"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.1/x86_64-unknown-linux-gnu/ionic" -o "$INSTALL_DIR/ionic"
 chmod +x "$INSTALL_DIR/ionic"
 ```
 
 ### Linux — arm64
 
 ```bash
-curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.0/aarch64-unknown-linux-gnu/ionic" -o "$INSTALL_DIR/ionic"
+curl -fL "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.1/aarch64-unknown-linux-gnu/ionic" -o "$INSTALL_DIR/ionic"
 chmod +x "$INSTALL_DIR/ionic"
 ```
 
@@ -46,7 +46,7 @@ chmod +x "$INSTALL_DIR/ionic"
 ```powershell
 $INSTALL_DIR = "C:\path\to\your\directory"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR
-Invoke-WebRequest "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.0/x86_64-pc-windows-gnu/ionic.exe" -OutFile "$INSTALL_DIR\ionic.exe"
+Invoke-WebRequest "https://raw.githubusercontent.com/josoriom/ionic/main/artifacts/0.1.1/x86_64-pc-windows-gnu/ionic.exe" -OutFile "$INSTALL_DIR\ionic.exe"
 ```
 
 ---

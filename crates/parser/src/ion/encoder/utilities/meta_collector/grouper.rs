@@ -169,9 +169,7 @@ pub(super) fn serialize_group(meta: &PackedMeta, item_start: usize, item_end: us
     out.extend_from_slice(&meta.unit_ref_codes[row_start..row_end]);
     write_u32_slice_le(&mut out, &meta.unit_accession_numbers[row_start..row_end]);
     out.extend_from_slice(&meta.value_kinds[row_start..row_end]);
-    write_u32_slice_le(&mut out, &value_indices);
     write_f64_slice_le(&mut out, &numeric_values);
-    write_u32_slice_le(&mut out, &string_offsets);
     write_u32_slice_le(&mut out, &string_lengths);
     out.extend_from_slice(&string_bytes);
     out
@@ -216,9 +214,7 @@ fn packed_meta_byte_size(m: &PackedMeta) -> usize {
         + m.unit_ref_codes.len()
         + m.unit_accession_numbers.len() * 4
         + m.value_kinds.len()
-        + m.value_indices.len() * 4
         + m.numeric_values.len() * 8
-        + m.string_offsets.len() * 4
         + m.string_lengths.len() * 4
         + m.string_bytes.len()
 }
@@ -233,9 +229,7 @@ fn write_packed_meta(buf: &mut Vec<u8>, m: &PackedMeta) {
     buf.extend_from_slice(&m.unit_ref_codes);
     write_u32_slice_le(buf, &m.unit_accession_numbers);
     buf.extend_from_slice(&m.value_kinds);
-    write_u32_slice_le(buf, &m.value_indices);
     write_f64_slice_le(buf, &m.numeric_values);
-    write_u32_slice_le(buf, &m.string_offsets);
     write_u32_slice_le(buf, &m.string_lengths);
     buf.extend_from_slice(&m.string_bytes);
 }

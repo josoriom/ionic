@@ -34,6 +34,7 @@ use crate::{
             children_lookup::{ChildrenLookup, DefaultMetadataPolicy, OwnerRows},
             common::get_attr_text,
             decompression_limit::DecompressionLimit,
+            meta_column_layout::MetaColumnLayout,
             parse_chromatogram, parse_chromatogram_list, parse_cv_and_user_params, parse_cv_list,
             parse_data_processing_list, parse_file_description,
             parse_global_metadata::parse_global_metadata,
@@ -392,6 +393,8 @@ impl IonReader {
             None
         };
 
+        let meta_column_layout = MetaColumnLayout::from_version(header.format_version);
+
         let spec_meta_reader = MetaGroupReader::new(
             spec_meta_buf.into_arc(),
             header.spec_meta_group_count,
@@ -407,6 +410,7 @@ impl IonReader {
             config.verify_checksums,
             config.decompression_limit,
             config.max_cached_bytes,
+            meta_column_layout,
         )?;
 
         let chrom_meta_reader = MetaGroupReader::new(
@@ -424,6 +428,7 @@ impl IonReader {
             config.verify_checksums,
             config.decompression_limit,
             config.max_cached_bytes,
+            meta_column_layout,
         )?;
 
         Ok(Self {

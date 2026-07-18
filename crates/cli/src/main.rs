@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{IsTerminal, Read, Seek, SeekFrom, Write, stderr, stdout},
+    io::{IsTerminal, Write, stderr, stdout},
     path::{Path, PathBuf},
     sync::{
         Mutex, OnceLock,
@@ -15,9 +15,7 @@ use clap::{
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
 use ionic::{
-    ion::{
-        FILE_TRAILER, FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage, WriteOptions,
-    },
+    ion::{FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage, WriteOptions},
     mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 use mimalloc::MiMalloc;
@@ -27,7 +25,7 @@ use serde::Serialize;
 
 mod utilities;
 
-use utilities::{TempOutput, check_ion_file, sweep_orphans};
+use utilities::{TempOutput, check_ion_file, ion_file_is_valid, sweep_orphans};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -118,7 +116,7 @@ enum Cmd {
 #[command(
     group(
         ArgGroup::new("convert_mode")
-            .args(["mzml_to_ion", "ion_to_mzml"])
+            .args(["mzml_to_ion", "ion_to_mzml", "update"])
             .multiple(false)
     ),
     group(
@@ -139,7 +137,7 @@ struct ConvertArgs {
     #[arg(
         short = 'o',
         long = "output-path",
-        help = "Folder to write results into"
+        help = "Folder to write results into (with --update, omit to upgrade files in place)"
     )]
     output_path: Option<PathBuf>,
 
@@ -243,6 +241,12 @@ struct ConvertWhich {
 
     #[arg(long = "ion-to-mzml", help = "Convert ion back to mzML")]
     ion_to_mzml: bool,
+
+    #[arg(
+        long = "update",
+        help = "Upgrade old .ion files to the latest format version"
+    )]
+    update: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -436,6 +440,24 @@ fn out_name_for_bin_file_as_mzml(path: &Path) -> Option<String> {
     Some(format!("{stem}.mzML"))
 }
 
+fn out_name_for_ion_file_as_updated_ion(path: &Path) -> Option<String> {
+    if file_ext_lower(path) != "ion" {
+        return None;
+    }
+    path.file_name().map(|s| s.to_string_lossy().into_owned())
+}
+
+fn in_place_output_root(input_root: &Path) -> PathBuf {
+    if input_root.is_dir() {
+        input_root.to_path_buf()
+    } else {
+        input_root
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    }
+}
+
 fn read_mzml_or_ion(file_path: &Path) -> Result<MzML, String> {
     let ext = file_ext_lower(file_path);
 
@@ -469,6 +491,38 @@ fn write_mzml_as_ion(
             IonWriter::create(&mut output_file, config).map_err(|error| error.to_string())?;
         ion_writer
             .write_stream(&mut input_reader)
+            .map_err(|error| error.to_string())?;
+        drop(ion_writer);
+        output_file.flush().map_err(|error| error.to_string())?;
+    }
+    temp_output.move_to(output_path)
+}
+
+fn write_ion_as_updated_ion(
+    input_path: &Path,
+    output_path: &Path,
+    config: WriteOptions,
+    parallel: bool,
+) -> Result<(), String> {
+    sweep_orphans(output_path)?;
+    let temp_output = TempOutput::new(output_path)?;
+    let mut ion_reader = IonReader::open_file(
+        input_path,
+        ReadOptions {
+            parallel,
+            ..ReadOptions::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let model = ion_reader.to_mzml().map_err(|error| error.to_string())?;
+    drop(ion_reader);
+    {
+        let mut output_file =
+            FileWriter::open_path(temp_output.path()).map_err(|error| error.to_string())?;
+        let mut ion_writer =
+            IonWriter::create(&mut output_file, config).map_err(|error| error.to_string())?;
+        ion_writer
+            .write_mzml(&model)
             .map_err(|error| error.to_string())?;
         drop(ion_writer);
         output_file.flush().map_err(|error| error.to_string())?;
@@ -734,7 +788,7 @@ impl<'a> ConversionJob<'a> {
         &self,
         in_path: &Path,
         derive_out_name: impl Fn(&Path) -> Option<String>,
-        output_is_valid: impl Fn(&Path, u64) -> bool,
+        output_is_valid: impl Fn(&Path, &Path, u64) -> bool,
         perform: impl FnOnce(&Path, &Path) -> Result<(), String>,
     ) {
         let rel = match in_path.strip_prefix(self.input_root) {
@@ -763,7 +817,7 @@ impl<'a> ConversionJob<'a> {
             && m.is_file()
         {
             let out_len = m.len();
-            if out_len > 0 && output_is_valid(&out_path, out_len) {
+            if out_len > 0 && output_is_valid(in_path, &out_path, out_len) {
                 self.report_skipped_existing(in_path, &out_path, out_len);
                 return;
             }
@@ -848,13 +902,17 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("get current dir failed: {e}"))?;
 
     let input_root = resolve_user_path(&cwd, &cmd.input_path);
+    let update_in_place = cmd.which.update && cmd.output_path.is_none();
 
     let output_root = match &cmd.output_path {
         Some(path) => resolve_user_path(&cwd, path),
+        None if update_in_place => in_place_output_root(&input_root),
         None => return Err("--output-path is required".to_string()),
     };
 
-    fs::create_dir_all(&output_root).map_err(|e| format!("create output dir failed: {e}"))?;
+    if !update_in_place {
+        fs::create_dir_all(&output_root).map_err(|e| format!("create output dir failed: {e}"))?;
+    }
 
     let filter = build_name_filter(
         cmd.pattern.as_deref(),
@@ -884,10 +942,12 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
 
     let t_all = Instant::now();
 
-    let default_mzml_to_ion = !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml;
+    let default_mzml_to_ion =
+        !cmd.which.mzml_to_ion && !cmd.which.ion_to_mzml && !cmd.which.update;
 
     let mzml_to_ion = cmd.which.mzml_to_ion || default_mzml_to_ion;
     let ion_to_mzml = cmd.which.ion_to_mzml;
+    let update = cmd.which.update;
 
     let palette = Palette::current();
     let counters = ConvertCounters::new();
@@ -926,7 +986,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             job.run(
                 in_path,
                 |p| out_name_for_mzml_file(p, out_ext),
-                has_valid_trailer,
+                |_in_path, out_path, _file_len| ion_file_is_valid(out_path),
                 |in_path, out_path| {
                     write_mzml_as_ion(in_path, out_path, config)
                         .map_err(|e| format!("encode failed: {e}"))
@@ -969,7 +1029,14 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             job.run(
                 in_path,
                 out_name_for_bin_file_as_mzml,
-                mzml_output_is_complete,
+                |in_path, out_path, file_len| {
+                    mzml_output_matches_source(
+                        in_path,
+                        out_path,
+                        file_len,
+                        matches!(encoding, Encoding::WithinFileParallel),
+                    )
+                },
                 |in_path, out_path| {
                     let mut ion = IonReader::open_file(
                         in_path,
@@ -1003,6 +1070,63 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
         return Ok(());
     }
 
+    if update {
+        let files = collect_files_with_exts(&input_root, &["ion"], filter.as_deref())?;
+        if files.is_empty() {
+            return Err(format!(
+                "no matching .ion files found under {}",
+                input_root.display()
+            ));
+        }
+
+        let job = ConversionJob {
+            counters: &counters,
+            palette: &palette,
+            input_root: &input_root,
+            output_root: &output_root,
+            overwrite: cmd.overwrite || update_in_place,
+            total: files.len(),
+        };
+
+        let config = WriteOptions {
+            compression_level: cmd.compression_level,
+            force_f32: cmd.force_f32,
+            block_size,
+            parallel: matches!(encoding, Encoding::WithinFileParallel),
+            section_storage: cmd.section_storage.storage(),
+            mz_window: cmd.mz_window,
+        };
+
+        let update_ion_file = |in_path: &PathBuf| {
+            job.run(
+                in_path,
+                out_name_for_ion_file_as_updated_ion,
+                |_in_path, out_path, _file_len| ion_file_is_valid(out_path),
+                |in_path, out_path| {
+                    write_ion_as_updated_ion(
+                        in_path,
+                        out_path,
+                        config,
+                        matches!(encoding, Encoding::WithinFileParallel),
+                    )
+                    .map_err(|e| format!("update failed: {e}"))
+                },
+            );
+        };
+
+        pool.install(|| match encoding {
+            Encoding::FileLevelParallel => files.par_iter().for_each(update_ion_file),
+            Encoding::WithinFileParallel => files.iter().for_each(update_ion_file),
+        });
+
+        print_convert_totals(&counters, t_all.elapsed());
+
+        if counters.had_any_failure() {
+            return Err("some files failed".to_string());
+        }
+        return Ok(());
+    }
+
     Err("no convert mode selected".to_string())
 }
 
@@ -1015,63 +1139,40 @@ fn resolve_user_path(cwd: &Path, p: &Path) -> PathBuf {
 }
 
 #[inline]
-fn has_valid_trailer(path: &Path, file_len: u64) -> bool {
-    if file_len < FILE_TRAILER.len() as u64 {
+fn mzml_output_matches_source(
+    source_path: &Path,
+    output_path: &Path,
+    output_len: u64,
+    parallel: bool,
+) -> bool {
+    if output_len == 0 {
         return false;
     }
-
-    let mut f = match fs::File::open(path) {
-        Ok(v) => v,
-        Err(_) => return false,
+    let Ok(source) = IonReader::open_file(
+        source_path,
+        ReadOptions {
+            parallel,
+            ..ReadOptions::default()
+        },
+    ) else {
+        return false;
     };
-
-    let back = -(FILE_TRAILER.len() as i64);
-    if f.seek(SeekFrom::End(back)).is_err() {
+    let Ok(output_bytes) = fs::read(output_path) else {
         return false;
-    }
-
-    let mut tail = [0u8; 8];
-    if f.read_exact(&mut tail).is_err() {
-        return false;
-    }
-
-    tail == FILE_TRAILER
-}
-
-const MZML_CLOSING_TAG: &[u8] = b"</indexedmzML>";
-const MZML_TAIL_SCAN_LEN: u64 = 64;
-
-#[inline]
-fn mzml_output_is_complete(path: &Path, file_len: u64) -> bool {
-    if file_len == 0 {
-        return false;
-    }
-
-    let mut f = match fs::File::open(path) {
-        Ok(v) => v,
-        Err(_) => return false,
     };
-
-    let read_len = file_len.min(MZML_TAIL_SCAN_LEN) as usize;
-    let back = -(read_len as i64);
-    if f.seek(SeekFrom::End(back)).is_err() {
+    let Ok(output_mzml) = parse_mzml(&output_bytes) else {
         return false;
-    }
-
-    let mut tail = vec![0u8; read_len];
-    if f.read_exact(&mut tail).is_err() {
-        return false;
-    }
-
-    trim_ascii_end(&tail).ends_with(MZML_CLOSING_TAG)
-}
-
-fn trim_ascii_end(bytes: &[u8]) -> &[u8] {
-    let mut end = bytes.len();
-    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    &bytes[..end]
+    };
+    let output_spectrum_count = output_mzml
+        .run
+        .spectrum_list
+        .map_or(0, |list| list.spectra.len() as u64);
+    let output_chromatogram_count = output_mzml
+        .run
+        .chromatogram_list
+        .map_or(0, |list| list.chromatograms.len() as u64);
+    output_spectrum_count == source.spectrum_count()
+        && output_chromatogram_count == source.chromatogram_count()
 }
 
 #[inline]

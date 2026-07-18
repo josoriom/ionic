@@ -11,6 +11,7 @@ use crate::ion::{
         utilities::{
             common::decompress_zstd_allow_aligned_padding,
             decompression_limit::DecompressionLimit,
+            meta_column_layout::MetaColumnLayout,
             parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
         },
     },
@@ -31,6 +32,7 @@ pub(crate) struct MetaGroupReader {
     verify_checksums: bool,
     budget: DecompressionLimit,
     cache: GroupCache,
+    layout: MetaColumnLayout,
 }
 
 #[derive(Default)]
@@ -72,6 +74,7 @@ impl MetaGroupReader {
         verify_checksums: bool,
         budget: DecompressionLimit,
         max_cached_bytes: usize,
+        layout: MetaColumnLayout,
     ) -> IonResult<Self> {
         if item_count > 0 && group_size == 0 {
             return Err(IonError::from("metadata groups: group size is zero"));
@@ -110,6 +113,7 @@ impl MetaGroupReader {
                 used_bytes: 0,
                 max_bytes: max_cached_bytes,
             },
+            layout,
         })
     }
 
@@ -229,6 +233,7 @@ impl MetaGroupReader {
             CODEC_NONE,
             0,
             self.budget,
+            self.layout,
         )?;
         let item_base = item_start as u32;
         for row in &mut rows {
@@ -303,7 +308,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::MetaGroupReader;
-    use crate::ion::{DecompressionLimit, IonResult, format::CODEC_NONE, meta_groups::MetaTotals};
+    use crate::ion::{
+        DecompressionLimit, IonResult, decoder::utilities::meta_column_layout::MetaColumnLayout,
+        format::CODEC_NONE, meta_groups::MetaTotals,
+    };
 
     fn no_totals() -> MetaTotals {
         MetaTotals {
@@ -325,6 +333,7 @@ mod tests {
             false,
             DecompressionLimit::default(),
             1024,
+            MetaColumnLayout::from_version(1),
         )
         .map(|_| ())
     }

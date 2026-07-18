@@ -7,6 +7,7 @@ use crate::ion::{
     decoder::decode::Metadatum,
     utilities::{
         children_lookup::{ChildrenLookup, DefaultMetadataPolicy},
+        meta_column_layout::MetaColumnLayout,
         parse_file_description::parse_file_description,
         parse_global_metadata::parse_global_metadata,
         parse_header,
@@ -47,6 +48,7 @@ fn parse_global_metadata_from_test_file() -> Vec<Metadatum> {
         header.compression_codec,
         header.global_meta_uncompressed_bytes,
         DecompressionLimit::default(),
+        MetaColumnLayout::from_version(header.format_version),
     )
     .expect("parse_global_metadata failed")
 }

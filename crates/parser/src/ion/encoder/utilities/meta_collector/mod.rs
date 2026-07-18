@@ -58,9 +58,7 @@ impl MetaCollector {
         T: MzmlListItem,
         L: crate::ion::utilities::EmitAttributes,
     {
-        if metadata_writer.is_first_item_in_group() {
-            self.context.reset_for_item_group();
-        }
+        self.context.reset_for_item();
         let mut buffer = MetaParamBuffer::new();
         {
             let mut writer = buffer.as_writer();
@@ -174,7 +172,7 @@ impl TraversalContext {
     pub(crate) fn alloc(&mut self) -> u32 {
         self.nodes.next()
     }
-    pub(crate) fn reset_for_item_group(&mut self) {
+    pub(crate) fn reset_for_item(&mut self) {
         self.nodes.reset_to(FIRST_LOCAL_ITEM_NODE_ID);
     }
 }

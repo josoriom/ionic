@@ -10,10 +10,6 @@ pub use crate::ion::version_generated::{
 
 const _VERSION_POLICY_INVARIANTS: () = {
     assert!(
-        MIN_SUPPORTED_VERSION > 0,
-        "version 0 is reserved and must never be supported"
-    );
-    assert!(
         MIN_SUPPORTED_VERSION <= CURRENT_VERSION,
         "CURRENT_VERSION must be supported"
     );
