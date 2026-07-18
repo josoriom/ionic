@@ -76,12 +76,6 @@ fn validate_releases(releases: &[Release]) -> Result<(), String> {
 
 fn validate_release(release: &Release) -> Result<(), String> {
     let format = &release.format;
-    if format.min_supported == 0 {
-        return Err(format!(
-            "release {}: min_supported must be at least 1",
-            release.package
-        ));
-    }
     if format.min_supported > format.current {
         return Err(format!(
             "release {}: min_supported must not exceed current",
@@ -431,11 +425,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_min_supported_zero() {
+    fn allows_min_supported_zero() {
         let text =
             r#"[{"package":"0.1.0","format":{"current":1,"min_supported":0,"max_supported":1}}]"#;
         let releases = parse_config(text).unwrap();
-        assert!(validate_releases(&releases).is_err());
+        assert!(validate_releases(&releases).is_ok());
     }
 
     #[test]

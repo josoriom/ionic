@@ -1,6 +1,20 @@
 [
   {
+    "package": "0.1.1",
+    "format": {
+      "current": 0,
+      "min_supported": 0,
+      "max_supported": 1
+    },
+    "allow_max_above_current": true
+  },
+  {
     "package": "0.1.0",
-    "format": { "current": 1, "min_supported": 1, "max_supported": 1 }
+    "format": {
+      "current": 0,
+      "min_supported": 0,
+      "max_supported": 1
+    },
+    "allow_max_above_current": true
   }
 ]

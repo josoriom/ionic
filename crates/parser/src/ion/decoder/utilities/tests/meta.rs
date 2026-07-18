@@ -4,7 +4,7 @@ use crate::ion::{
     DecompressionLimit,
     decoder::decode::Metadatum,
     meta_groups::MetaTotals,
-    utilities::{MetaGroupReader, parse_header},
+    utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout, parse_header},
 };
 
 fn read_file(path: &str) -> Vec<u8> {
@@ -32,6 +32,7 @@ pub(super) fn spectra_metadata(path: &str) -> Vec<Metadatum> {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
+        MetaColumnLayout::from_version(header.format_version),
     )
     .expect("build spectra metadata reader")
     .read_all()
@@ -58,6 +59,7 @@ pub(super) fn chromatograms_metadata(path: &str) -> Vec<Metadatum> {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
+        MetaColumnLayout::from_version(header.format_version),
     )
     .expect("build chromatograms metadata reader")
     .read_all()

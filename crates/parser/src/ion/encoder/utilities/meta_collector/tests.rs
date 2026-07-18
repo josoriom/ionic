@@ -183,7 +183,8 @@ fn collector_global_meta_on_empty_mzml_produces_run_buffer() {
 fn grouped_metadata_keeps_values_local_to_each_group() {
     use crate::ion::{
         DecompressionLimit, decoder::decode::MetadatumValue, format::CODEC_NONE,
-        meta_groups::MetaTotals, utilities::MetaGroupReader,
+        meta_groups::MetaTotals,
+        utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
 
     let grouped = three_item_grouped();
@@ -204,6 +205,7 @@ fn grouped_metadata_keeps_values_local_to_each_group() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
+        MetaColumnLayout::from_version(0),
     )
     .unwrap();
 
@@ -253,7 +255,8 @@ fn grouped_bytes(grouped: &grouper::GroupedSection) -> &[u8] {
 #[test]
 fn metadata_reader_rejects_wrong_uncompressed_total() {
     use crate::ion::{
-        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals, utilities::MetaGroupReader,
+        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals,
+        utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
 
     let grouped = three_item_grouped();
@@ -272,6 +275,7 @@ fn metadata_reader_rejects_wrong_uncompressed_total() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
+        MetaColumnLayout::from_version(0),
     );
     assert!(result.is_err());
 }
@@ -279,7 +283,8 @@ fn metadata_reader_rejects_wrong_uncompressed_total() {
 #[test]
 fn metadata_reader_rejects_wrong_row_total() {
     use crate::ion::{
-        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals, utilities::MetaGroupReader,
+        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals,
+        utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
 
     let grouped = three_item_grouped();
@@ -298,6 +303,7 @@ fn metadata_reader_rejects_wrong_row_total() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
+        MetaColumnLayout::from_version(0),
     )
     .unwrap();
     assert!(reader.read_all().is_err());
@@ -309,7 +315,7 @@ fn metadata_reader_rejects_payload_into_directory() {
         DecompressionLimit,
         format::CODEC_NONE,
         meta_groups::{META_GROUP_ENTRY_SIZE, MetaTotals},
-        utilities::MetaGroupReader,
+        utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
 
     let grouped = three_item_grouped();
@@ -333,6 +339,7 @@ fn metadata_reader_rejects_payload_into_directory() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
+        MetaColumnLayout::from_version(0),
     )
     .unwrap();
     assert!(reader.read_item(0).is_err());

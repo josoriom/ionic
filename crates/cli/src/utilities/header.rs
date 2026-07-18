@@ -191,13 +191,32 @@ pub(crate) fn check_ion_file(path: &Path) -> Result<(), String> {
     let view = HeaderView::new(bytes);
     print_summary(&view);
     println!();
-    print_sections(&view);
+    let (sections_failed, sections_total) = print_sections(&view);
     println!();
-    let (failed, total) = print_integrity(&view);
-    if failed > 0 {
-        return Err(format!("{failed} of {total} integrity checks failed"));
+    let (integrity_failed, integrity_total) = print_integrity(&view);
+    if sections_failed > 0 || integrity_failed > 0 {
+        return Err(format!(
+            "{sections_failed} of {sections_total} section check(s) failed, \
+             {integrity_failed} of {integrity_total} integrity check(s) failed"
+        ));
     }
     Ok(())
+}
+
+pub(crate) fn ion_file_is_valid(path: &Path) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let Ok(map) = (unsafe { memmap2::Mmap::map(&file) }) else {
+        return false;
+    };
+    let bytes: &[u8] = &map;
+    if bytes.len() < HEADER_SIZE {
+        return false;
+    }
+    let view = HeaderView::new(bytes);
+    section_check_results(&view).iter().all(Result::is_ok)
+        && integrity_check_results(&view).iter().all(|(_, ok)| *ok)
 }
 
 struct HeaderView<'a> {
@@ -562,12 +581,10 @@ fn print_summary(view: &HeaderView<'_>) {
     }
 }
 
-fn print_sections(view: &HeaderView<'_>) {
-    let (bold, reset, red, dim, green) = (bold(), reset(), red(), dim(), green());
-    println!("{bold}Sections{reset}");
+fn section_check_results(view: &HeaderView<'_>) -> [Result<(), String>; 8] {
     let spec_count = view.read_header_u64(256);
     let chrom_count = view.read_header_u64(264);
-    let checks: [Result<(), String>; 8] = [
+    [
         view.spec_window_dir.clone().map(|_| ()),
         check_fixed(&view.fixed.spec_summary, SPEC_SUMMARY_ROW as u64, Some(spec_count)),
         check_fixed(&view.fixed.spec_entries, 16, Some(spec_count)),
@@ -576,7 +593,13 @@ fn print_sections(view: &HeaderView<'_>) {
         check_fixed(&view.fixed.chrom_summary, SPEC_SUMMARY_ROW as u64, Some(chrom_count)),
         check_fixed(&view.fixed.chrom_entries, 16, Some(chrom_count)),
         check_fixed(&view.fixed.chrom_addresses, 32, None),
-    ];
+    ]
+}
+
+fn print_sections(view: &HeaderView<'_>) -> (usize, usize) {
+    let (bold, reset, red, dim, green) = (bold(), reset(), red(), dim(), green());
+    println!("{bold}Sections{reset}");
+    let checks = section_check_results(view);
 
     let mut failed = 0;
     for (section, result) in view.sections[..checks.len()].iter().zip(checks.iter()) {
@@ -589,12 +612,11 @@ fn print_sections(view: &HeaderView<'_>) {
     if failed == 0 {
         println!("  {green}✓{reset}  all {} sections opened", checks.len());
     }
+    (failed, checks.len())
 }
 
-fn print_integrity(view: &HeaderView<'_>) -> (usize, usize) {
-    let (bold, reset, red, green) = (bold(), reset(), red(), green());
-    println!("{bold}Integrity Checks{reset}");
-    let checks: &[(&str, bool)] = &[
+fn integrity_check_results(view: &HeaderView<'_>) -> [(&'static str, bool); 22] {
+    [
         ("1   file signature", view.signature_ok()),
         ("2   header CRC-32", view.header_crc_ok()),
         ("3   file trailer", view.trailer_ok()),
@@ -635,10 +657,16 @@ fn print_integrity(view: &HeaderView<'_>) -> (usize, usize) {
         ("20  C spec_meta CRC-32", view.crc_ok(160, 168, 1008)),
         ("21  D chrom_meta CRC-32", view.crc_ok(176, 184, 1012)),
         ("22  E global_meta CRC-32", view.crc_ok(192, 200, 1016)),
-    ];
+    ]
+}
+
+fn print_integrity(view: &HeaderView<'_>) -> (usize, usize) {
+    let (bold, reset, red, green) = (bold(), reset(), red(), green());
+    println!("{bold}Integrity Checks{reset}");
+    let checks = integrity_check_results(view);
     let mut failed = 0;
     for (label, ok) in checks {
-        if !*ok {
+        if !ok {
             println!("  {red}✗{reset}  {label}");
             failed += 1;
         }

@@ -4,6 +4,7 @@ use crate::ion::{
     utilities::{
         common::{decompress_zstd_allow_aligned_padding, read_u16_le_at, read_u32_le_at},
         decompression_limit::DecompressionLimit,
+        meta_column_layout::MetaColumnLayout,
         parse_metadata::{CODEC_NONE, CODEC_ZSTD, parse_metadata},
     },
 };
@@ -20,6 +21,7 @@ pub(crate) fn parse_global_metadata(
     compression_codec: u8,
     expected_uncompressed: u64,
     decompression_limit: DecompressionLimit,
+    layout: MetaColumnLayout,
 ) -> IonResult<Vec<Metadatum>> {
     let expected_byte_count = usize::try_from(expected_uncompressed)
         .map_err(|_| IonError::from("global metadata: expected_uncompressed overflow"))?;
@@ -113,6 +115,7 @@ pub(crate) fn parse_global_metadata(
         CODEC_NONE,
         0,
         decompression_limit,
+        layout,
     )
 }
 
@@ -149,6 +152,7 @@ mod tests {
             CODEC_NONE,
             0,
             DecompressionLimit::default(),
+            MetaColumnLayout::from_version(1),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("too small"));
@@ -169,6 +173,7 @@ mod tests {
             CODEC_NONE,
             0,
             DecompressionLimit::default(),
+            MetaColumnLayout::from_version(1),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("counts are zero"));
@@ -189,6 +194,7 @@ mod tests {
             CODEC_NONE,
             0,
             DecompressionLimit::default(),
+            MetaColumnLayout::from_version(1),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("mismatch"));
@@ -197,8 +203,17 @@ mod tests {
     #[test]
     fn parse_global_metadata_rejects_unsupported_codec() {
         let bytes = vec![0u8; GLOBAL_SECTION_HEADER_BYTE_SIZE + 4];
-        let result =
-            parse_global_metadata(&bytes, 0, 0, 0, 0, 99, 0, DecompressionLimit::default());
+        let result = parse_global_metadata(
+            &bytes,
+            0,
+            0,
+            0,
+            0,
+            99,
+            0,
+            DecompressionLimit::default(),
+            MetaColumnLayout::from_version(1),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unsupported"));
     }
@@ -218,6 +233,7 @@ mod tests {
             CODEC_NONE,
             expected as u64,
             DecompressionLimit::default(),
+            MetaColumnLayout::from_version(1),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("trailing bytes"));
@@ -238,6 +254,7 @@ mod tests {
             CODEC_NONE,
             expected as u64,
             DecompressionLimit::default(),
+            MetaColumnLayout::from_version(1),
         );
         assert!(result.is_err());
         assert!(!result.unwrap_err().contains("trailing bytes"));

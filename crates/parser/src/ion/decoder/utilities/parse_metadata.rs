@@ -6,8 +6,12 @@ use crate::{
         decoder::{
             decode::{Metadatum, MetadatumValue},
             utilities::{
-                common::{decompress_zstd_allow_aligned_padding, read_u32_vec, take, vs_len_bytes},
+                common::{
+                    decompress_zstd_allow_aligned_padding, read_u32_vec, sum_string_lengths, take,
+                    vs_len_bytes,
+                },
                 decompression_limit::DecompressionLimit,
+                meta_column_layout::MetaColumnLayout,
             },
         },
         utilities::common::*,
@@ -25,6 +29,7 @@ pub(crate) fn parse_metadata(
     compression_codec: u8,
     expected_uncompressed_bytes: usize,
     decompression_limit: DecompressionLimit,
+    layout: MetaColumnLayout,
 ) -> IonResult<Vec<Metadatum>> {
     let owned;
     let bytes = match compression_codec {
@@ -52,30 +57,55 @@ pub(crate) fn parse_metadata(
         .checked_add(1)
         .ok_or_else(|| crate::ion::IonError::from("metadata item_count+1 overflows usize"))?;
     let children_index = read_u32_vec(bytes, &mut pos, children_index_len)?;
-    let metadatum_owner_ids = read_u32_vec(bytes, &mut pos, meta_count)?;
-    let metadatum_parent_ids = read_u32_vec(bytes, &mut pos, meta_count)?;
+    let mut metadatum_owner_ids = read_u32_vec(bytes, &mut pos, meta_count)?;
+    let mut metadatum_parent_ids = read_u32_vec(bytes, &mut pos, meta_count)?;
     let metadatum_tag_ids = take(bytes, &mut pos, meta_count, "metadatum tag id")?;
     let metadatum_ref_ids = take(bytes, &mut pos, meta_count, "metadatum ref id")?;
     let metadatum_accessions = read_u32_vec(bytes, &mut pos, meta_count)?;
     let metadatum_unit_refs = take(bytes, &mut pos, meta_count, "metadatum unit ref id")?;
     let metadatum_unit_accs = read_u32_vec(bytes, &mut pos, meta_count)?;
     let value_kinds = take(bytes, &mut pos, meta_count, "metadatum value kind")?;
-    let value_indices = read_u32_vec(bytes, &mut pos, meta_count)?;
+    let value_indices = if layout.vi_present {
+        read_u32_vec(bytes, &mut pos, meta_count)?
+    } else {
+        rebuild_value_indices(value_kinds)?
+    };
 
     let numeric_values = read_f64_vec(bytes, &mut pos, num_count)?;
-    let string_offsets = read_u32_vec(bytes, &mut pos, str_count)?;
-    let string_lengths = read_u32_vec(bytes, &mut pos, str_count)?;
 
-    let string_bytes_needed = vs_len_bytes(
-        value_kinds,
-        &value_indices,
-        &string_offsets,
-        &string_lengths,
-    )?;
+    let (string_offsets, string_lengths) = if layout.voff_present {
+        let string_offsets = read_u32_vec(bytes, &mut pos, str_count)?;
+        let string_lengths = read_u32_vec(bytes, &mut pos, str_count)?;
+        (string_offsets, string_lengths)
+    } else {
+        let string_lengths = read_u32_vec(bytes, &mut pos, str_count)?;
+        let string_offsets = rebuild_string_offsets(&string_lengths)?;
+        (string_offsets, string_lengths)
+    };
+
+    let string_bytes_needed = if layout.voff_present {
+        vs_len_bytes(
+            value_kinds,
+            &value_indices,
+            &string_offsets,
+            &string_lengths,
+        )?
+    } else {
+        sum_string_lengths(&string_lengths)?
+    };
     let string_data = take(bytes, &mut pos, string_bytes_needed, "string values")?;
 
     validate_trailing_bytes(bytes, pos, compression_codec, expected_uncompressed_bytes)?;
     validate_children_index(&children_index, item_count, meta_count)?;
+
+    if layout.ids_reset {
+        restore_group_unique_ids(
+            &children_index,
+            item_count,
+            &mut metadatum_owner_ids,
+            &mut metadatum_parent_ids,
+        )?;
+    }
 
     let mut out = Vec::with_capacity(meta_count);
 
@@ -161,6 +191,49 @@ fn validate_children_index(
     Ok(())
 }
 
+const SHARED_LIST_NODE_ID: u32 = 1;
+
+#[inline]
+fn restore_group_unique_ids(
+    children_index: &[u32],
+    item_count: usize,
+    owner_ids: &mut [u32],
+    parent_ids: &mut [u32],
+) -> IonResult<()> {
+    let largest_local_id = owner_ids
+        .iter()
+        .chain(parent_ids.iter())
+        .copied()
+        .max()
+        .unwrap_or(0);
+    let stride = largest_local_id
+        .checked_add(1)
+        .ok_or_else(|| crate::ion::IonError::from("metadata id remap: stride overflows u32"))?;
+
+    for item_index in 0..item_count {
+        let meta_start = children_index[item_index] as usize;
+        let meta_end = children_index[item_index + 1] as usize;
+        let item_base = (item_index as u32).checked_mul(stride).ok_or_else(|| {
+            crate::ion::IonError::from("metadata id remap: item base overflows u32")
+        })?;
+        for meta_index in meta_start..meta_end {
+            owner_ids[meta_index] = restore_one_id(owner_ids[meta_index], item_base)?;
+            parent_ids[meta_index] = restore_one_id(parent_ids[meta_index], item_base)?;
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn restore_one_id(local_id: u32, item_base: u32) -> IonResult<u32> {
+    if local_id == SHARED_LIST_NODE_ID {
+        return Ok(local_id);
+    }
+    item_base.checked_add(local_id).ok_or_else(|| {
+        crate::ion::IonError::from("metadata id remap: group-unique id overflows u32")
+    })
+}
+
 #[inline]
 fn parse_value(
     value_kind: u8,
@@ -203,6 +276,44 @@ fn parse_value(
         2 => Ok(MetadatumValue::Empty),
         other => Err(format!("invalid value kind VK={other}").into()),
     }
+}
+
+#[inline]
+fn rebuild_value_indices(value_kinds: &[u8]) -> IonResult<Vec<u32>> {
+    let mut next_numeric_ordinal = 0u32;
+    let mut next_string_ordinal = 0u32;
+    let mut value_indices = Vec::with_capacity(value_kinds.len());
+    for &kind in value_kinds {
+        match kind {
+            0 => {
+                value_indices.push(next_numeric_ordinal);
+                next_numeric_ordinal = next_numeric_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| crate::ion::IonError::from("numeric value ordinal overflows u32"))?;
+            }
+            1 => {
+                value_indices.push(next_string_ordinal);
+                next_string_ordinal = next_string_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| crate::ion::IonError::from("string value ordinal overflows u32"))?;
+            }
+            _ => value_indices.push(0),
+        }
+    }
+    Ok(value_indices)
+}
+
+#[inline]
+fn rebuild_string_offsets(string_lengths: &[u32]) -> IonResult<Vec<u32>> {
+    let mut string_offsets = Vec::with_capacity(string_lengths.len());
+    let mut running_offset = 0u32;
+    for &length in string_lengths {
+        string_offsets.push(running_offset);
+        running_offset = running_offset
+            .checked_add(length)
+            .ok_or_else(|| crate::ion::IonError::from("string offset prefix sum overflows u32"))?;
+    }
+    Ok(string_offsets)
 }
 
 #[inline]

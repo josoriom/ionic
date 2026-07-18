@@ -235,6 +235,17 @@ pub(crate) fn get_attr_text(rows: &[&Metadatum], tail: AccessionTail) -> Option<
 }
 
 #[inline]
+pub(crate) fn sum_string_lengths(string_lengths: &[u32]) -> IonResult<usize> {
+    let mut total: usize = 0;
+    for &length in string_lengths {
+        total = total
+            .checked_add(length as usize)
+            .ok_or_else(|| IonError::from("string_lengths sum overflows usize"))?;
+    }
+    Ok(total)
+}
+
+#[inline]
 pub(crate) fn vs_len_bytes(vk: &[u8], vi: &[u32], voff: &[u32], vlen: &[u32]) -> IonResult<usize> {
     let mut max_end = 0usize;
     for (j, &kind) in vk.iter().enumerate() {
