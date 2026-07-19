@@ -137,7 +137,7 @@ struct ConvertArgs {
     #[arg(
         short = 'o',
         long = "output-path",
-        help = "Folder to write results into (with --update, omit to upgrade files in place)"
+        help = "Folder to write results into (with --update, omit to re-encode files in place)"
     )]
     output_path: Option<PathBuf>,
 
@@ -244,7 +244,7 @@ struct ConvertWhich {
 
     #[arg(
         long = "update",
-        help = "Upgrade old .ion files to the latest format version"
+        help = "Re-encode .ion files to the current format version"
     )]
     update: bool,
 }

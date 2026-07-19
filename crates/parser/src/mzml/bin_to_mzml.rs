@@ -1412,8 +1412,9 @@ fn write_cv_param(writer: &mut Writer<Vec<u8>>, cv: &CvParam) -> Result<(), BinT
     }
     tag.push_attribute(("name", cv.name.as_str()));
 
-    let value_s = cv.value.as_deref().unwrap_or("");
-    tag.push_attribute(("value", value_s));
+    if let Some(v) = cv.value.as_deref() {
+        tag.push_attribute(("value", v));
+    }
 
     if let Some(v) = cv.unit_cv_ref.as_deref().and_then(|s| nonempty(Some(s))) {
         tag.push_attribute(("unitCvRef", v));
@@ -1446,8 +1447,9 @@ fn write_user_param(writer: &mut Writer<Vec<u8>>, up: &UserParam) -> Result<(), 
         tag.push_attribute(("type", v));
     }
 
-    let value_s = up.value.as_deref().unwrap_or("");
-    tag.push_attribute(("value", value_s));
+    if let Some(v) = up.value.as_deref() {
+        tag.push_attribute(("value", v));
+    }
 
     if let Some(v) = up.unit_cv_ref.as_deref().and_then(|s| nonempty(Some(s))) {
         tag.push_attribute(("unitCvRef", v));
@@ -1472,6 +1474,43 @@ fn write_user_params(
         write_user_param(writer, up)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render_cv_param(cv: &CvParam) -> String {
+        let mut writer = Writer::new(Vec::new());
+        write_cv_param(&mut writer, cv).unwrap();
+        String::from_utf8(writer.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn valueless_cvparam_omits_value_attribute_7() {
+        let valueless = CvParam {
+            cv_ref: Some("MS".to_string()),
+            accession: Some("MS:1000511".to_string()),
+            name: "ms level".to_string(),
+            value: None,
+            ..Default::default()
+        };
+        let xml = render_cv_param(&valueless);
+        assert!(
+            !xml.contains("value="),
+            "a valueless cvParam must not emit a value attribute, got: {xml}"
+        );
+
+        let with_value = CvParam {
+            value: Some("x".to_string()),
+            ..valueless
+        };
+        let xml = render_cv_param(&with_value);
+        assert!(
+            xml.contains(r#"value="x""#),
+            "a cvParam with a value must emit it verbatim, got: {xml}"
+        );
+    }
 }
 
 fn write_cv_container(

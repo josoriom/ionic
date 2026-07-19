@@ -8,6 +8,7 @@ pub use crate::ion::version_generated::{
     CURRENT_VERSION, MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION,
 };
 
+#[allow(clippy::absurd_extreme_comparisons)]
 const _VERSION_POLICY_INVARIANTS: () = {
     assert!(
         MIN_SUPPORTED_VERSION <= CURRENT_VERSION,
@@ -21,7 +22,7 @@ const _VERSION_POLICY_INVARIANTS: () = {
 
 #[inline]
 pub fn is_supported(version: u16) -> bool {
-    version >= MIN_SUPPORTED_VERSION && version <= MAX_SUPPORTED_VERSION
+    (MIN_SUPPORTED_VERSION..=MAX_SUPPORTED_VERSION).contains(&version)
 }
 
 #[inline]

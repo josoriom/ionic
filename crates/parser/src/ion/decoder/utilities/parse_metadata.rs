@@ -8,7 +8,6 @@ use crate::{
             utilities::{
                 common::{
                     decompress_zstd_allow_aligned_padding, read_u32_vec, sum_string_lengths, take,
-                    vs_len_bytes,
                 },
                 decompression_limit::DecompressionLimit,
                 meta_column_layout::MetaColumnLayout,
@@ -65,34 +64,14 @@ pub(crate) fn parse_metadata(
     let metadatum_unit_refs = take(bytes, &mut pos, meta_count, "metadatum unit ref id")?;
     let metadatum_unit_accs = read_u32_vec(bytes, &mut pos, meta_count)?;
     let value_kinds = take(bytes, &mut pos, meta_count, "metadatum value kind")?;
-    let value_indices = if layout.vi_present {
-        read_u32_vec(bytes, &mut pos, meta_count)?
-    } else {
-        rebuild_value_indices(value_kinds)?
-    };
+    let value_indices = rebuild_value_indices(value_kinds)?;
 
     let numeric_values = read_f64_vec(bytes, &mut pos, num_count)?;
 
-    let (string_offsets, string_lengths) = if layout.voff_present {
-        let string_offsets = read_u32_vec(bytes, &mut pos, str_count)?;
-        let string_lengths = read_u32_vec(bytes, &mut pos, str_count)?;
-        (string_offsets, string_lengths)
-    } else {
-        let string_lengths = read_u32_vec(bytes, &mut pos, str_count)?;
-        let string_offsets = rebuild_string_offsets(&string_lengths)?;
-        (string_offsets, string_lengths)
-    };
+    let string_lengths = read_u32_vec(bytes, &mut pos, str_count)?;
+    let string_offsets = rebuild_string_offsets(&string_lengths)?;
 
-    let string_bytes_needed = if layout.voff_present {
-        vs_len_bytes(
-            value_kinds,
-            &value_indices,
-            &string_offsets,
-            &string_lengths,
-        )?
-    } else {
-        sum_string_lengths(&string_lengths)?
-    };
+    let string_bytes_needed = sum_string_lengths(&string_lengths)?;
     let string_data = take(bytes, &mut pos, string_bytes_needed, "string values")?;
 
     validate_trailing_bytes(bytes, pos, compression_codec, expected_uncompressed_bytes)?;

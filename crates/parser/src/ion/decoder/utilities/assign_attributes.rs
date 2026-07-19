@@ -1,12 +1,13 @@
 use crate::{
+    accessions::ACC_MS_LEVEL,
     ion::{
         attr_meta::{
             ACC_ATTR_ARRAY_LENGTH, ACC_ATTR_COUNT, ACC_ATTR_DATA_PROCESSING_REF,
             ACC_ATTR_DEFAULT_ARRAY_LENGTH, ACC_ATTR_DEFAULT_DATA_PROCESSING_REF,
             ACC_ATTR_ENCODED_LENGTH, ACC_ATTR_EXTERNAL_SPECTRUM_ID, ACC_ATTR_ID, ACC_ATTR_INDEX,
-            ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_NATIVE_ID, ACC_ATTR_SCAN_NUMBER,
-            ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF, ACC_ATTR_SPOT_ID, AccessionTail,
-            CV_REF_ATTR,
+            ACC_ATTR_INSTRUMENT_CONFIGURATION_REF, ACC_ATTR_MS_LEVEL, ACC_ATTR_NATIVE_ID,
+            ACC_ATTR_SCAN_NUMBER, ACC_ATTR_SOURCE_FILE_REF, ACC_ATTR_SPECTRUM_REF,
+            ACC_ATTR_SPOT_ID, AccessionTail, CV_REF_ATTR,
         },
         decoder::decode::{Metadatum, MetadatumValue},
     },
@@ -137,6 +138,13 @@ impl EmitAttributes for SpectrumList {
     }
 }
 
+fn spectrum_has_ms_level_cv_param(spectrum: &Spectrum) -> bool {
+    spectrum
+        .cv_params
+        .iter()
+        .any(|param| param.accession.as_deref() == Some(ACC_MS_LEVEL))
+}
+
 impl EmitAttributes for Spectrum {
     fn emit_attributes(&self, collector: &mut AttributeCollector<'_>) {
         collector.push_required_str(ACC_ATTR_ID, &self.id);
@@ -150,6 +158,9 @@ impl EmitAttributes for Spectrum {
         );
         collector.push_opt_str(ACC_ATTR_SOURCE_FILE_REF, self.source_file_ref.as_deref());
         collector.push_opt_str(ACC_ATTR_SPOT_ID, self.spot_id.as_deref());
+        if !spectrum_has_ms_level_cv_param(self) {
+            collector.push_opt_u32(ACC_ATTR_MS_LEVEL, self.ms_level);
+        }
     }
 }
 

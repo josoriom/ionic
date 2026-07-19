@@ -2300,3 +2300,50 @@ fn compressed_roundtrip_edge_cases() {
         assert_eq!(mzml_out.run.spectrum_list.unwrap().spectra.len(), 1);
     }
 }
+
+#[test]
+fn ms_level_round_trips_without_cvparam_3() {
+    use crate::{
+        ion::encoder::{encode::WriteOptions, ion_writer::write_mzml_to_ion},
+        mzml::structs::{MzML, Run, SpectrumList},
+    };
+
+    let spectrum = Spectrum {
+        ms_level: Some(2),
+        ..make_spectrum_with_arrays("scan=1".to_string(), vec![100.0, 100.5], vec![1.0, 2.0])
+    };
+    assert!(
+        spectrum
+            .cv_params
+            .iter()
+            .all(|cv| cv.accession.as_deref() != Some("MS:1000511")),
+        "test setup must not already carry an ms-level cvParam"
+    );
+
+    let mzml_in = MzML {
+        run: Run {
+            spectrum_list: Some(SpectrumList {
+                spectra: vec![spectrum],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut encoded = Vec::new();
+    write_mzml_to_ion(&mzml_in, WriteOptions::default(), &mut encoded).unwrap();
+
+    let mut reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+    let mzml_out = reader.to_mzml().unwrap();
+    let decoded_spectrum = mzml_out
+        .run
+        .spectrum_list
+        .unwrap()
+        .spectra
+        .into_iter()
+        .next()
+        .unwrap();
+
+    assert_eq!(decoded_spectrum.ms_level, Some(2));
+}

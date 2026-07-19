@@ -205,7 +205,7 @@ fn grouped_metadata_keeps_values_local_to_each_group() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     )
     .unwrap();
 
@@ -275,7 +275,7 @@ fn metadata_reader_rejects_wrong_uncompressed_total() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     );
     assert!(result.is_err());
 }
@@ -303,7 +303,7 @@ fn metadata_reader_rejects_wrong_row_total() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     )
     .unwrap();
     assert!(reader.read_all().is_err());
@@ -339,7 +339,7 @@ fn metadata_reader_rejects_payload_into_directory() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     )
     .unwrap();
     assert!(reader.read_item(0).is_err());

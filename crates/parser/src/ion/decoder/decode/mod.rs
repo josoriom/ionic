@@ -393,7 +393,7 @@ impl IonReader {
             None
         };
 
-        let meta_column_layout = MetaColumnLayout::from_version(header.format_version);
+        let meta_column_layout = MetaColumnLayout::new();
 
         let spec_meta_reader = MetaGroupReader::new(
             spec_meta_buf.into_arc(),

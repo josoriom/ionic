@@ -333,7 +333,7 @@ mod tests {
             false,
             DecompressionLimit::default(),
             1024,
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         )
         .map(|_| ())
     }
