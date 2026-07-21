@@ -709,6 +709,17 @@ pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes(buf))
 }
 
+#[inline]
+pub fn get_total_file_size_from_header(bytes: &[u8]) -> Option<u64> {
+    let end = HEADER_TOTAL_FILE_SIZE + 8;
+    if bytes.len() < end {
+        return None;
+    }
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&bytes[HEADER_TOTAL_FILE_SIZE..end]);
+    Some(u64::from_le_bytes(buf))
+}
+
 pub(crate) fn check_section_layout(h: &Header) -> Vec<String> {
     let mut failures = Vec::new();
 

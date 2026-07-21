@@ -239,9 +239,10 @@ impl IonReader {
                     layout_failures.join("\n")
                 )));
             }
+            let trailer_length = FILE_TRAILER.len() as u64;
             let trailer = source.read(ByteRange {
-                offset: header.total_file_size.saturating_sub(8),
-                length: 8,
+                offset: header.total_file_size.saturating_sub(trailer_length),
+                length: trailer_length,
             })?;
             if trailer[..] != FILE_TRAILER {
                 return Err(IonError::from("header: missing or invalid file trailer"));
@@ -671,6 +672,14 @@ pub(crate) fn open_byte_ranges(header: &Header) -> IonResult<Vec<ByteRange>> {
             chrom_blocks,
             "chrom",
         )?);
+    }
+
+    let trailer_length = FILE_TRAILER.len() as u64;
+    if header.total_file_size > trailer_length {
+        ranges.push(ByteRange {
+            offset: header.total_file_size - trailer_length,
+            length: trailer_length,
+        });
     }
 
     Ok(ranges)
