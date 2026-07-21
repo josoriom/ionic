@@ -334,12 +334,14 @@ impl<P: BlockProcessor> BlockReader<P> {
             )
             .into());
         }
+
+        let stride = Stride::from_size(element_stride);
+        self.record_stride_or_fail(block_index, stride, ctx)?;
+
         if self.cache[block_index].is_some() {
             return Ok(());
         }
 
-        let stride = Stride::from_size(element_stride);
-        self.record_stride_or_fail(block_index, stride, ctx)?;
         let (entry, payload) = self.get_block_payload(block_index, ctx)?;
         let uncompressed_len = usize::try_from(entry.uncompressed_len_bytes).map_err(|_| {
             IonError::from(format!(
@@ -494,4 +496,59 @@ fn read_entries(
         });
     }
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ion::decoder::utilities::byte_source::BytesSource;
+
+    fn single_block_container(payload: &[u8]) -> (Arc<dyn ReadBytes>, u64, u64) {
+        let mut container_bytes = payload.to_vec();
+        let uncompressed_len = payload.len() as u64;
+        container_bytes.extend_from_slice(&0u64.to_le_bytes());
+        container_bytes.extend_from_slice(&uncompressed_len.to_le_bytes());
+        container_bytes.extend_from_slice(&uncompressed_len.to_le_bytes());
+        container_bytes.extend_from_slice(&0u32.to_le_bytes());
+        container_bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        let container_len = container_bytes.len() as u64;
+        let source: Arc<dyn ReadBytes> = Arc::new(BytesSource::new(Arc::from(
+            container_bytes.into_boxed_slice(),
+        )));
+        (source, 0, container_len)
+    }
+
+    #[test]
+    fn cached_block_reread_at_new_stride_is_rejected_5() {
+        let payload: Vec<u8> = (0u8..16).collect();
+        let (source, container_offset, container_len) = single_block_container(&payload);
+
+        let mut reader = BlockReader::new(
+            source,
+            container_offset,
+            container_len,
+            1,
+            0,
+            CODEC_NONE,
+            PackingId::ByteShuffle,
+            false,
+            "test",
+            DefaultBlockProcessor,
+            4096,
+            DecompressionLimit::default(),
+        )
+        .unwrap();
+
+        reader
+            .ensure_block_loaded(0, 8, "test")
+            .expect("first read at an 8-byte stride must load the block");
+
+        let result = reader.ensure_block_loaded(0, 4, "test");
+
+        assert!(
+            result.is_err(),
+            "rereading a cached block at a different stride must be rejected, not silently reused"
+        );
+    }
 }

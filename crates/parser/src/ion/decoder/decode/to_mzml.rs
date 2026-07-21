@@ -485,8 +485,10 @@ fn sync_numeric_meta(binary_array: &mut BinaryDataArray, numeric_type: NumericTy
         cv_ref: Some("MS".into()),
         accession: Some(format_accession(target)),
         name: match target {
+            1_000_520 => "16-bit float",
             1_000_521 => "32-bit float",
             1_000_523 => "64-bit float",
+            1_000_518 => "16-bit integer",
             1_000_519 => "32-bit integer",
             1_000_522 => "64-bit integer",
             _ => "numeric",
@@ -570,5 +572,31 @@ impl IonReader {
 
     pub fn to_mzml(&mut self) -> IonResult<MzML> {
         MzmlConverter::new(self).full()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f16_i16_arrays_get_real_cvparam_name_6() {
+        let mut float16_array = BinaryDataArray::default();
+        sync_numeric_meta(&mut float16_array, NumericType::Float16);
+        let float16_param = float16_array
+            .cv_params
+            .iter()
+            .find(|p| p.accession.as_deref() == Some("MS:1000520"))
+            .expect("sync_numeric_meta must add the 16-bit float precision cvParam");
+        assert_eq!(float16_param.name, "16-bit float");
+
+        let mut int16_array = BinaryDataArray::default();
+        sync_numeric_meta(&mut int16_array, NumericType::Int16);
+        let int16_param = int16_array
+            .cv_params
+            .iter()
+            .find(|p| p.accession.as_deref() == Some("MS:1000518"))
+            .expect("sync_numeric_meta must add the 16-bit integer precision cvParam");
+        assert_eq!(int16_param.name, "16-bit integer");
     }
 }

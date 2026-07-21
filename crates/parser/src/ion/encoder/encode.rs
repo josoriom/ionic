@@ -188,7 +188,7 @@ impl Default for WriteOptions {
             force_f32: false,
             block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
-            section_storage: SectionStorage::Memory,
+            section_storage: SectionStorage::Disk,
             mz_window: DEFAULT_MZ_WINDOW,
         }
     }

@@ -48,7 +48,7 @@ fn parse_global_metadata_from_test_file() -> Vec<Metadatum> {
         header.compression_codec,
         header.global_meta_uncompressed_bytes,
         DecompressionLimit::default(),
-        MetaColumnLayout::from_version(header.format_version),
+        MetaColumnLayout::new(),
     )
     .expect("parse_global_metadata failed")
 }

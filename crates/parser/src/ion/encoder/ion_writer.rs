@@ -20,13 +20,13 @@ use crate::{
             },
             scan_stream::ScanStream,
             utilities::{
-                BlockWriter, DefaultCompressor, SectionChunk, make_chunk,
+                BlockWriter, DefaultCompressor, SectionChunk,
                 meta_collector::{
                     ArrayPolicy, GroupedSection, LOCAL_LIST_NODE_ID, MetaCollector, MetaGrouper,
                     MzmlListItem, array_type_accession_from_binary_data_array,
                     compress_bytes_if_enabled, serialize_global_meta_with_counts,
                 },
-                output::WriteBytes,
+                output::{SectionStorage, WriteBytes},
                 tables::{
                     ArrayAddressTable, IndexTable, SummaryTable, WindowDirectory, WindowEntry,
                     write_aligned,
@@ -270,30 +270,27 @@ struct StreamParts {
 
 impl ItemStream {
     fn new(
-        tag: &str,
         summary_hint: usize,
         summary_size: usize,
         table_hint: usize,
         config: WriteOptions,
         windowable: bool,
     ) -> IonResult<Self> {
-        let mode = config.section_storage;
+        let table = |capacity: usize| -> IonResult<SectionChunk> {
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            if config.section_storage == SectionStorage::Disk && config.compression_level > 0 {
+                return SectionChunk::spilled(config.compression_level);
+            }
+            Ok(SectionChunk::memory(capacity))
+        };
         Ok(Self {
-            summary: SummaryTable::new(make_chunk(
-                mode,
-                &format!("{tag}-summary"),
-                summary_hint * summary_size,
-            )?),
-            index: IndexTable::new(make_chunk(mode, &format!("{tag}-index"), table_hint * 16)?),
-            addresses: ArrayAddressTable::new(make_chunk(
-                mode,
-                &format!("{tag}-array_addresses"),
-                table_hint * 64,
-            )?),
+            summary: SummaryTable::new(table(summary_hint * summary_size)?),
+            index: IndexTable::new(table(table_hint * 16)?),
+            addresses: ArrayAddressTable::new(table(table_hint * 64)?),
             grouper: MetaGrouper::new(
                 METADATA_GROUP_SIZE,
                 config.compression_level,
-                make_chunk(mode, &format!("{tag}-meta"), 0)?,
+                SectionChunk::memory(0),
             ),
             window_directory: WindowDirectory::new(),
             windowable,
@@ -381,6 +378,10 @@ fn write_chunk_maybe_compressed(
     section: SectionChunk,
     compression_level: u8,
 ) -> IonResult<(u64, u64, u32)> {
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    if section.is_spilled() {
+        return section.copy_into(output);
+    }
     let raw = section.into_vec()?;
     if raw.is_empty() {
         let offset = write_aligned(output, &raw)?;
@@ -480,8 +481,8 @@ impl<'out> IonWriter<'out> {
             collector,
             spec_list_id,
             chrom_list_id,
-            spec_stream: ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, config, true)?,
-            chrom_stream: ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, config, false)?,
+            spec_stream: ItemStream::new(256, SPEC_SUMMARY_SIZE, 256, config, true)?,
+            chrom_stream: ItemStream::new(32, CHROM_SUMMARY_SIZE, 32, config, false)?,
         })
     }
 
@@ -589,12 +590,12 @@ impl<'out> IonWriter<'out> {
 
         let spec = std::mem::replace(
             &mut self.spec_stream,
-            ItemStream::new("spec", 256, SPEC_SUMMARY_SIZE, 256, self.config, true)?,
+            ItemStream::new(256, SPEC_SUMMARY_SIZE, 256, self.config, true)?,
         )
         .finish()?;
         let chrom = std::mem::replace(
             &mut self.chrom_stream,
-            ItemStream::new("chrom", 32, CHROM_SUMMARY_SIZE, 32, self.config, false)?,
+            ItemStream::new(32, CHROM_SUMMARY_SIZE, 32, self.config, false)?,
         )
         .finish()?;
 

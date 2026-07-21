@@ -284,7 +284,7 @@ pub(crate) fn unfilter_array_bytes(
                     .decode(raw, dtype_enum, &mut out)?;
                 Ok(std::borrow::Cow::Owned(out))
             }
-            _ => Ok(std::borrow::Cow::Borrowed(raw)),
+            _ => Err(format!("array filter {array_filter} is not valid for dtype {dtype}").into()),
         },
         PackingId::DeltaShuffle => match crate::ion::packing::Dtype::from_byte(dtype) {
             Ok(
@@ -295,7 +295,7 @@ pub(crate) fn unfilter_array_bytes(
                     .decode(raw, dtype_enum, &mut out)?;
                 Ok(std::borrow::Cow::Owned(out))
             }
-            _ => Ok(std::borrow::Cow::Borrowed(raw)),
+            _ => Err(format!("array filter {array_filter} is not valid for dtype {dtype}").into()),
         },
     }
 }
@@ -649,10 +649,23 @@ mod tests {
     }
 
     #[test]
-    fn unfilter_array_bytes_delta_shuffle_passes_through_unsupported_dtype() {
+    fn unfilter_array_bytes_delta_shuffle_rejects_unsupported_dtype() {
         let raw = [1u8, 2, 3, 4];
-        let unfiltered =
-            unfilter_array_bytes(&raw, FILE_DTYPE_I16, PackingId::DeltaShuffle as u8).unwrap();
-        assert_eq!(unfiltered.as_ref(), raw.as_slice());
+        let err = unfilter_array_bytes(&raw, FILE_DTYPE_I16, PackingId::DeltaShuffle as u8)
+            .expect_err("delta shuffle is only valid for f32/f64");
+        assert!(err.contains("is not valid for dtype"));
+    }
+
+    #[test]
+    fn shuffle_filter_on_integer_dtype_is_rejected_4() {
+        let raw = [0u8; 8];
+
+        let err = unfilter_array_bytes(&raw, FILE_DTYPE_I32, PackingId::ByteShuffle as u8)
+            .expect_err("byte shuffle is only valid for f32/f64, not i32");
+        assert!(err.contains("is not valid for dtype"));
+
+        let ok = unfilter_array_bytes(&raw, FILE_DTYPE_F64, PackingId::Raw as u8)
+            .expect("raw filter must still work for any dtype");
+        assert_eq!(ok.as_ref(), raw.as_slice());
     }
 }

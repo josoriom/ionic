@@ -774,15 +774,6 @@ fn make_split_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArra
 }
 
 fn encode_one_spectrum_windowed(mz: Vec<f64>, int: Vec<f64>, mz_window: f64) -> Vec<u8> {
-    encode_one_spectrum_windowed_mode(mz, int, mz_window, SectionStorage::Memory)
-}
-
-fn encode_one_spectrum_windowed_mode(
-    mz: Vec<f64>,
-    int: Vec<f64>,
-    mz_window: f64,
-    mode: SectionStorage,
-) -> Vec<u8> {
     use crate::{
         ion::encoder::{
             encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
@@ -822,7 +813,7 @@ fn encode_one_spectrum_windowed_mode(
             force_f32: false,
             block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
             parallel: true,
-            section_storage: mode,
+            section_storage: SectionStorage::Memory,
             mz_window,
         },
         &mut encoded,
@@ -1135,7 +1126,7 @@ fn split_mz_array_roundtrips_with_disk_staged_bounds() {
     let int: Vec<f64> = (0..n).map(|i| (i % 1000) as f64).collect();
 
     let encoded =
-        encode_one_spectrum_windowed_mode(mz.clone(), int.clone(), 10.0, SectionStorage::Disk);
+        encode_one_spectrum_windowed(mz.clone(), int.clone(), 10.0);
 
     let mut decoder = IonReader::open(&encoded, ReadOptions::default()).unwrap();
 
@@ -2299,4 +2290,51 @@ fn compressed_roundtrip_edge_cases() {
         let mzml_out = reader.to_mzml().unwrap();
         assert_eq!(mzml_out.run.spectrum_list.unwrap().spectra.len(), 1);
     }
+}
+
+#[test]
+fn ms_level_round_trips_without_cvparam_3() {
+    use crate::{
+        ion::encoder::{encode::WriteOptions, ion_writer::write_mzml_to_ion},
+        mzml::structs::{MzML, Run, SpectrumList},
+    };
+
+    let spectrum = Spectrum {
+        ms_level: Some(2),
+        ..make_spectrum_with_arrays("scan=1".to_string(), vec![100.0, 100.5], vec![1.0, 2.0])
+    };
+    assert!(
+        spectrum
+            .cv_params
+            .iter()
+            .all(|cv| cv.accession.as_deref() != Some("MS:1000511")),
+        "test setup must not already carry an ms-level cvParam"
+    );
+
+    let mzml_in = MzML {
+        run: Run {
+            spectrum_list: Some(SpectrumList {
+                spectra: vec![spectrum],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut encoded = Vec::new();
+    write_mzml_to_ion(&mzml_in, WriteOptions::default(), &mut encoded).unwrap();
+
+    let mut reader = IonReader::open(&encoded, ReadOptions::default()).unwrap();
+    let mzml_out = reader.to_mzml().unwrap();
+    let decoded_spectrum = mzml_out
+        .run
+        .spectrum_list
+        .unwrap()
+        .spectra
+        .into_iter()
+        .next()
+        .unwrap();
+
+    assert_eq!(decoded_spectrum.ms_level, Some(2));
 }

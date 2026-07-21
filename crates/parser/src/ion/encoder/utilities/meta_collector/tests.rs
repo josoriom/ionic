@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::{ion::encoder::utilities::SectionChunk, mzml::structs::CvParam};
+use crate::{
+    ion::encoder::utilities::{SectionChunk, SectionStorage},
+    mzml::structs::CvParam,
+};
 
 #[test]
 fn value_pool_empty_value_gives_kind_2() {
@@ -205,7 +208,7 @@ fn grouped_metadata_keeps_values_local_to_each_group() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     )
     .unwrap();
 
@@ -249,7 +252,7 @@ fn three_item_grouped() -> grouper::GroupedSection {
 }
 
 fn grouped_bytes(grouped: &grouper::GroupedSection) -> &[u8] {
-    grouped.section.as_slice().unwrap()
+    grouped.section.as_slice()
 }
 
 #[test]
@@ -275,7 +278,7 @@ fn metadata_reader_rejects_wrong_uncompressed_total() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     );
     assert!(result.is_err());
 }
@@ -303,7 +306,7 @@ fn metadata_reader_rejects_wrong_row_total() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     )
     .unwrap();
     assert!(reader.read_all().is_err());
@@ -339,7 +342,7 @@ fn metadata_reader_rejects_payload_into_directory() {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(0),
+        MetaColumnLayout::new(),
     )
     .unwrap();
     assert!(reader.read_item(0).is_err());
@@ -376,7 +379,6 @@ fn group_local_node_ids_across_group_boundaries() {
         ion::encoder::{
             encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
             ion_writer::write_mzml_to_ion,
-            utilities::SectionStorage,
         },
         mzml::structs::{
             BinaryDataArray, BinaryDataArrayList, CvParam, MzML, NumericArray, Run, Spectrum,
@@ -517,7 +519,6 @@ fn product_own_cv_params_parent_to_product_list_not_to_the_product_itself() {
         ion::encoder::{
             encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
             ion_writer::write_mzml_to_ion,
-            utilities::SectionStorage,
         },
         mzml::structs::{CvParam, MzML, Product, ProductList, Run, Spectrum, SpectrumList},
     };
