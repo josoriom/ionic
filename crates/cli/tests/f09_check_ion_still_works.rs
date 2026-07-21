@@ -12,7 +12,7 @@ fn check_valid_ion_reports_all_passed() {
 
     assert!(output.status.success());
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("22/22 checks passed"), "got: {stdout}");
+    assert!(stdout.contains("23/23 checks passed"), "got: {stdout}");
 }
 
 #[test]

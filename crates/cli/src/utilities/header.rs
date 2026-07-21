@@ -615,7 +615,7 @@ fn print_sections(view: &HeaderView<'_>) -> (usize, usize) {
     (failed, checks.len())
 }
 
-fn integrity_check_results(view: &HeaderView<'_>) -> [(&'static str, bool); 22] {
+fn integrity_check_results(view: &HeaderView<'_>) -> [(&'static str, bool); 23] {
     [
         ("1   file signature", view.signature_ok()),
         ("2   header CRC-32", view.header_crc_ok()),
@@ -657,6 +657,12 @@ fn integrity_check_results(view: &HeaderView<'_>) -> [(&'static str, bool); 22] 
         ("20  C spec_meta CRC-32", view.crc_ok(160, 168, 1008)),
         ("21  D chrom_meta CRC-32", view.crc_ok(176, 184, 1012)),
         ("22  E global_meta CRC-32", view.crc_ok(192, 200, 1016)),
+        (
+            "23  format version supported",
+            get_version_from_header(view.bytes)
+                .map(is_supported)
+                .unwrap_or(false),
+        ),
     ]
 }
 

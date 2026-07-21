@@ -9,8 +9,8 @@ use common::{
 use ionic::{
     ByteRange, BytesSource, CallbackSource, Range, ScanSource,
     ion::{
-        IonError, IonReader, IonWriter, MemoryReader, ReadOptions, SectionStorage,
-        TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions, open_ranges,
+        IonError, IonReader, IonWriter, MemoryReader, ReadOptions, SectionStorage, TARGET_BLOCK_UNCOMPRESSED_BYTES,
+        WriteOptions, open_ranges,
     },
 };
 
@@ -595,14 +595,6 @@ fn public_api_surface_is_frozen() {
             ionic::NumericArray::I64(values) => values.len(),
         }
     }
-
-    fn section_storage_is_frozen(storage: ionic::SectionStorage) -> u8 {
-        match storage {
-            ionic::SectionStorage::Memory => 0,
-            ionic::SectionStorage::Disk => 1,
-        }
-    }
-    let _ = section_storage_is_frozen(ionic::SectionStorage::Memory);
 
     let data = ionic::DataXY {
         x: ionic::NumericArray::F64(vec![1.0]),

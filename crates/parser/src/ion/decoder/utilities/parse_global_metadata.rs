@@ -152,7 +152,7 @@ mod tests {
             CODEC_NONE,
             0,
             DecompressionLimit::default(),
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("too small"));
@@ -173,7 +173,7 @@ mod tests {
             CODEC_NONE,
             0,
             DecompressionLimit::default(),
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("counts are zero"));
@@ -194,7 +194,7 @@ mod tests {
             CODEC_NONE,
             0,
             DecompressionLimit::default(),
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("mismatch"));
@@ -212,7 +212,7 @@ mod tests {
             99,
             0,
             DecompressionLimit::default(),
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unsupported"));
@@ -233,7 +233,7 @@ mod tests {
             CODEC_NONE,
             expected as u64,
             DecompressionLimit::default(),
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("trailing bytes"));
@@ -254,7 +254,7 @@ mod tests {
             CODEC_NONE,
             expected as u64,
             DecompressionLimit::default(),
-            MetaColumnLayout::from_version(1),
+            MetaColumnLayout::new(),
         );
         assert!(result.is_err());
         assert!(!result.unwrap_err().contains("trailing bytes"));

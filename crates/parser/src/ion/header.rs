@@ -709,9 +709,19 @@ pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes(buf))
 }
 
+#[inline]
+pub fn get_total_file_size_from_header(bytes: &[u8]) -> Option<u64> {
+    let end = HEADER_TOTAL_FILE_SIZE + 8;
+    if bytes.len() < end {
+        return None;
+    }
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&bytes[HEADER_TOTAL_FILE_SIZE..end]);
+    Some(u64::from_le_bytes(buf))
+}
+
 pub(crate) fn check_section_layout(h: &Header) -> Vec<String> {
     let mut failures = Vec::new();
-    let size_limit = h.total_file_size;
 
     match h.spec_block_count.checked_mul(BLOCK_DIRECTORY_ENTRY_SIZE_U64) {
         None => failures.push(format!(
@@ -822,7 +832,7 @@ pub(crate) fn check_section_layout(h: &Header) -> Vec<String> {
         }
     }
 
-    enforce_count_bounds(&mut failures, h, size_limit);
+    enforce_count_bounds(&mut failures, h);
     enforce_section_element_counts(&mut failures, h);
 
     failures
@@ -869,25 +879,57 @@ fn enforce_section_element_counts(failures: &mut Vec<String>, h: &Header) {
     }
 }
 
-fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header, size_limit: u64) {
-    let checks: &[(&str, u64)] = &[
-        ("spec_block_count", h.spec_block_count),
-        ("chrom_block_count", h.chrom_block_count),
-        ("spectrum_count", h.spectrum_count),
-        ("chrom_count", h.chrom_count),
-        ("spec_meta_count", h.spec_meta_count),
-        ("spec_meta_numeric_count", h.spec_meta_numeric_count),
-        ("spec_meta_string_count", h.spec_meta_string_count),
-        ("chrom_meta_count", h.chrom_meta_count),
-        ("chrom_meta_numeric_count", h.chrom_meta_numeric_count),
-        ("chrom_meta_string_count", h.chrom_meta_string_count),
-        ("spec_array_type_count", h.spec_array_type_count),
-        ("chrom_array_type_count", h.chrom_array_type_count),
+fn enforce_count_bounds(failures: &mut Vec<String>, h: &Header) {
+    let checks: &[(&str, u64, u64)] = &[
+        ("spec_block_count", h.spec_block_count, h.total_file_size),
+        ("chrom_block_count", h.chrom_block_count, h.total_file_size),
+        ("spectrum_count", h.spectrum_count, h.total_file_size),
+        ("chrom_count", h.chrom_count, h.total_file_size),
+        (
+            "spec_meta_count",
+            h.spec_meta_count,
+            h.spec_meta_uncompressed_bytes,
+        ),
+        (
+            "spec_meta_numeric_count",
+            h.spec_meta_numeric_count,
+            h.spec_meta_uncompressed_bytes,
+        ),
+        (
+            "spec_meta_string_count",
+            h.spec_meta_string_count,
+            h.spec_meta_uncompressed_bytes,
+        ),
+        (
+            "chrom_meta_count",
+            h.chrom_meta_count,
+            h.chrom_meta_uncompressed_bytes,
+        ),
+        (
+            "chrom_meta_numeric_count",
+            h.chrom_meta_numeric_count,
+            h.chrom_meta_uncompressed_bytes,
+        ),
+        (
+            "chrom_meta_string_count",
+            h.chrom_meta_string_count,
+            h.chrom_meta_uncompressed_bytes,
+        ),
+        (
+            "spec_array_type_count",
+            h.spec_array_type_count,
+            h.total_file_size,
+        ),
+        (
+            "chrom_array_type_count",
+            h.chrom_array_type_count,
+            h.total_file_size,
+        ),
     ];
-    for &(name, count) in checks {
-        if count > size_limit {
+    for &(name, count, limit) in checks {
+        if count > limit {
             failures.push(format!(
-                "condition 13: {name} ({count}) exceeds file size ({size_limit})"
+                "condition 13: {name} ({count}) exceeds allowed bound ({limit})"
             ));
         }
     }
@@ -1377,6 +1419,31 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("chrom_window_directory")),
             "expected a chrom_window_directory overlap failure, got: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn condition_13_bounds_meta_by_uncompressed_size_1() {
+        let mut header = Header {
+            total_file_size: 100,
+            spec_meta_uncompressed_bytes: 100_000,
+            spec_meta_count: 50_000,
+            ..Header::default()
+        };
+
+        let mut failures = Vec::new();
+        enforce_count_bounds(&mut failures, &header);
+        assert!(
+            failures.iter().all(|f| !f.contains("spec_meta_count")),
+            "spec_meta_count under the uncompressed-size limit must not fail: {failures:?}"
+        );
+
+        header.spec_meta_count = 200_000;
+        let mut failures = Vec::new();
+        enforce_count_bounds(&mut failures, &header);
+        assert!(
+            failures.iter().any(|f| f.contains("spec_meta_count")),
+            "spec_meta_count over the uncompressed-size limit must fail: {failures:?}"
         );
     }
 }

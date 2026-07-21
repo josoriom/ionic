@@ -2,7 +2,7 @@
 
 IONIC stores one mass-spectrometry run in one binary file: spectra, chromatograms, and their metadata. It is built to open fast and to read very large files without loading them whole.
 
-This page explains the idea. For the exact byte layout, read the spec for the current version: [`v1.md`](v1.md). Every version keeps its own file in `spec/`; this link always points to the latest one.
+This page explains the idea. For the exact byte layout, read the spec for the current version: [`v0.md`](v0.md). Every version keeps its own file in `spec/`; this link always points to the latest one.
 
 ## One file, found through the header
 
@@ -27,14 +27,14 @@ The file starts with the signature `IONIC\0\0\0` and ends with the trailer `\0\0
 3. **Decode** — decompress only those blocks and read the arrays.
 4. **Resolve metadata** — read the item's parameters from the columns in C/D. This is the columnar model, explained next.
 
-A spectrum's arrays are cut into ordered **segments by m/z window**. Segments in the same window are routed to shared blocks across spectra, so an extracted-ion read opens only the blocks whose window overlaps the requested m/z range. The **A1** index holds the lower and upper m/z of every window, so a reader decodes only the windows that touch the range and skips the rest. The m/z window read is a convenience wrapper over a generic accession-based window read. Small arrays are left whole. The exact bytes are in [`v1.md`](v1.md).
+A spectrum's arrays are cut into ordered **segments by m/z window**. Segments in the same window are routed to shared blocks across spectra, so an extracted-ion read opens only the blocks whose window overlaps the requested m/z range. The **A1** index holds the lower and upper m/z of every window, so a reader decodes only the windows that touch the range and skips the rest. The m/z window read is a convenience wrapper over a generic accession-based window read. Small arrays are left whole. The exact bytes are in [`v0.md`](v0.md).
 
 ## Metadata is columnar
 
 Instead of keeping each parameter as its own small object, IONIC lays every field down its own column — one long array per field — and stores the columns side by side. Columns hold one kind of value, so they pack and compress far better than mixed objects, and a reader can load only the columns it needs.
 
-Every CV parameter becomes one **row**. All rows share the same columns: find the rows for an item, read across those columns, and you have everything the item carries. The exact column names, types, and order are in [`v1.md`](v1.md). C holds these columns for spectra, D for chromatograms, E for global metadata.
+Every CV parameter becomes one **row**. All rows share the same columns: find the rows for an item, read across those columns, and you have everything the item carries. The exact column names, types, and order are in [`v0.md`](v0.md). C holds these columns for spectra, D for chromatograms, E for global metadata.
 
 ## A0/B0 are only a cache
 
-Every value in A0/B0 also lives in C/D under its accession, so A0/B0 can be rebuilt from C/D at any time. They exist only to make filtering fast. This is why they carry no CRC and may grow new fields safely — the rules for that growth are in [`v1.md`](v1.md).
+Every value in A0/B0 also lives in C/D under its accession, so A0/B0 can be rebuilt from C/D at any time. They exist only to make filtering fast. This is why they carry no CRC and may grow new fields safely — the rules for that growth are in [`v0.md`](v0.md).

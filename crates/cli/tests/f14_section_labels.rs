@@ -23,7 +23,7 @@ fn check_output_structure_stable() {
         "Sections",
         "all 8 sections opened",
         "Integrity Checks",
-        "22/22 checks passed",
+        "23/23 checks passed",
     ] {
         assert!(
             stdout.contains(expected),

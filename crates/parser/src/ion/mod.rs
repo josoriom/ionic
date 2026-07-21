@@ -26,7 +26,9 @@ pub use decoder::{
         decompression_limit::{DEFAULT_MAX_UNCOMPRESSED_SIZE, DecompressionLimit},
     },
 };
-pub use header::{HEADER_FORMAT_VERSION_OFFSET, get_version_from_header};
+pub use header::{
+    HEADER_FORMAT_VERSION_OFFSET, get_total_file_size_from_header, get_version_from_header,
+};
 pub(crate) mod encoder;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub use encoder::utilities::FileWriter;

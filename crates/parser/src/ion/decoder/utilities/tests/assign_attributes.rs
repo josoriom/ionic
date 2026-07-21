@@ -88,7 +88,8 @@ fn assign_attrs_spectrum_emits_all_fields() {
     assert_text(&out, ACC_ATTR_SPOT_ID, "spotA");
 
     assert_missing_attr_tail(&out, ACC_ATTR_SCAN_NUMBER);
-    assert_missing_attr_tail(&out, ACC_ATTR_MS_LEVEL);
+    assert_has_attr_tail(&out, ACC_ATTR_MS_LEVEL);
+    assert_num(&out, ACC_ATTR_MS_LEVEL, 2.0);
 }
 
 #[test]

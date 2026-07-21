@@ -246,27 +246,6 @@ pub(crate) fn sum_string_lengths(string_lengths: &[u32]) -> IonResult<usize> {
 }
 
 #[inline]
-pub(crate) fn vs_len_bytes(vk: &[u8], vi: &[u32], voff: &[u32], vlen: &[u32]) -> IonResult<usize> {
-    let mut max_end = 0usize;
-    for (j, &kind) in vk.iter().enumerate() {
-        if kind != 1 {
-            continue;
-        }
-        let idx = vi[j] as usize;
-        if idx >= voff.len() || idx >= vlen.len() {
-            return Err("string value index out of range".into());
-        }
-        let end = (voff[idx] as usize)
-            .checked_add(vlen[idx] as usize)
-            .ok_or_else(|| IonError::from("string offset+length overflow"))?;
-        if end > max_end {
-            max_end = end;
-        }
-    }
-    Ok(max_end)
-}
-
-#[inline]
 pub(crate) fn parse_accession_tail(accession: Option<&str>) -> AccessionTail {
     let s = accession.unwrap_or("");
     let tail = s.rsplit_once(':').map(|(_, t)| t).unwrap_or(s);

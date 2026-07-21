@@ -137,7 +137,7 @@ struct ConvertArgs {
     #[arg(
         short = 'o',
         long = "output-path",
-        help = "Folder to write results into (with --update, omit to upgrade files in place)"
+        help = "Folder to write results into (with --update, omit to re-encode files in place)"
     )]
     output_path: Option<PathBuf>,
 
@@ -200,7 +200,7 @@ struct ConvertArgs {
         default_value_t = SectionStorageArg::Disk,
         hide_default_value = true,
         hide_possible_values = true,
-        help = "Stage sections [options: memory, disk (default)]"
+        help = "Where section tables are built [options: memory, disk (default)]"
     )]
     section_storage: SectionStorageArg,
 
@@ -219,6 +219,22 @@ struct ConvertArgs {
     which: ConvertWhich,
 }
 
+
+#[derive(Args)]
+struct ConvertWhich {
+    #[arg(long = "mzml-to-ion", help = "Convert mzML to ion (default)")]
+    mzml_to_ion: bool,
+
+    #[arg(long = "ion-to-mzml", help = "Convert ion back to mzML")]
+    ion_to_mzml: bool,
+
+    #[arg(
+        long = "update",
+        help = "Re-encode .ion files to the current format version"
+    )]
+    update: bool,
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum SectionStorageArg {
     Memory,
@@ -232,21 +248,6 @@ impl SectionStorageArg {
             Self::Disk => SectionStorage::Disk,
         }
     }
-}
-
-#[derive(Args)]
-struct ConvertWhich {
-    #[arg(long = "mzml-to-ion", help = "Convert mzML to ion (default)")]
-    mzml_to_ion: bool,
-
-    #[arg(long = "ion-to-mzml", help = "Convert ion back to mzML")]
-    ion_to_mzml: bool,
-
-    #[arg(
-        long = "update",
-        help = "Upgrade old .ion files to the latest format version"
-    )]
-    update: bool,
 }
 
 #[derive(Clone, Copy)]

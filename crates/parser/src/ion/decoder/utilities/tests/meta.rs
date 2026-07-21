@@ -32,7 +32,7 @@ pub(super) fn spectra_metadata(path: &str) -> Vec<Metadatum> {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(header.format_version),
+        MetaColumnLayout::new(),
     )
     .expect("build spectra metadata reader")
     .read_all()
@@ -59,7 +59,7 @@ pub(super) fn chromatograms_metadata(path: &str) -> Vec<Metadatum> {
         true,
         DecompressionLimit::default(),
         64 * 1024 * 1024,
-        MetaColumnLayout::from_version(header.format_version),
+        MetaColumnLayout::new(),
     )
     .expect("build chromatograms metadata reader")
     .read_all()
