@@ -1,6 +1,6 @@
-<img src="assets/ion-file-glyph.svg" alt="ionic" width="110" align="right">
-
 # Ionic
+
+<img src="assets/ion-file-glyph.svg" alt="ionic" width="110" align="right">
 
 [![CI](https://github.com/phenological/ionic/actions/workflows/rust-tests.yml/badge.svg)](https://github.com/phenological/ionic/actions/workflows/rust-tests.yml)
 
