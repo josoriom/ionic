@@ -103,6 +103,70 @@ impl Drop for SpilledSection {
     }
 }
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub(crate) struct RawSpill {
+    file: File,
+    path: PathBuf,
+    len: u64,
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+impl Drop for RawSpill {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+impl RawSpill {
+    pub(crate) fn create() -> IonResult<Self> {
+        let path = std::env::temp_dir().join(format!(
+            ".ionic-blocks.{}.{}",
+            std::process::id(),
+            NEXT_SECTION_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|err| IonError::from(format!("cannot create '{}': {err}", path.display())))?;
+        Ok(Self { file, path, len: 0 })
+    }
+
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> IonResult<u64> {
+        let start = self.len;
+        std::io::Write::write_all(&mut self.file, bytes).map_err(|err| {
+            IonError::from(format!(
+                "cannot stage blocks in '{}': {err}",
+                self.path.display()
+            ))
+        })?;
+        self.len += bytes.len() as u64;
+        Ok(start)
+    }
+
+    pub(crate) fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> IonResult<()> {
+        self.file.seek(SeekFrom::Start(offset)).map_err(|err| {
+            IonError::from(format!(
+                "cannot seek staged blocks in '{}': {err}",
+                self.path.display()
+            ))
+        })?;
+        self.file.read_exact(buffer).map_err(|err| {
+            IonError::from(format!(
+                "cannot read staged blocks from '{}': {err}",
+                self.path.display()
+            ))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionStorage {
     Memory,
@@ -255,6 +319,39 @@ mod tests {
             part.copy_from_slice(&(seed + slot as u64).to_le_bytes());
         }
         record
+    }
+
+    #[test]
+    fn raw_spill_roundtrips_appended_blocks() {
+        let mut spill = RawSpill::create().unwrap();
+        let staged_path = spill.path().to_path_buf();
+        assert!(staged_path.exists());
+
+        let blocks: Vec<Vec<u8>> = (0..8u8)
+            .map(|seed| vec![seed; 100 + seed as usize * 37])
+            .collect();
+        let mut offsets = Vec::new();
+        for block in &blocks {
+            offsets.push(spill.append(block).unwrap());
+        }
+
+        let mut running = 0u64;
+        for (block, offset) in blocks.iter().zip(&offsets) {
+            assert_eq!(*offset, running);
+            running += block.len() as u64;
+        }
+
+        for (block, offset) in blocks.iter().zip(&offsets).rev() {
+            let mut read_back = vec![0u8; block.len()];
+            spill.read_at(*offset, &mut read_back).unwrap();
+            assert_eq!(&read_back, block);
+        }
+
+        drop(spill);
+        assert!(
+            !staged_path.exists(),
+            "the temp file must be deleted on drop"
+        );
     }
 
     #[test]

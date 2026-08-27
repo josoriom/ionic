@@ -1965,6 +1965,503 @@ fn plan_open_ranges_includes_spec_a1() {
 }
 
 #[test]
+fn candidate_items_carries_intensity_address() {
+    use crate::accessions::INTENSITY_ARRAY;
+
+    let rts: Vec<f64> = (0..20).map(|step| step as f64).collect();
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+
+    let address_at = |reader: &IonReader, index: u64| -> ArrayAddress {
+        let start = index as usize * ARRAY_ADDRESS_BYTES;
+        parse_array_address(&reader.spec_array_addresses[start..start + ARRAY_ADDRESS_BYTES])
+    };
+
+    let slices = reader
+        .candidate_items(ItemKind::Spectrum, ACC_MZ, 150.0, 260.0)
+        .unwrap();
+    assert!(!slices.is_empty());
+
+    for slice in &slices {
+        let mz_address = address_at(&reader, slice.array_address_index);
+        let intensity_address = address_at(&reader, slice.intensity_address_index);
+        assert_eq!(mz_address.array_type, ACC_MZ);
+        assert_eq!(intensity_address.array_type, INTENSITY_ARRAY);
+
+        let windows = reader
+            .get_spectrum_mz_windows(slice.item_index as usize, 150.0, 260.0)
+            .unwrap();
+        let paired = windows.iter().any(|window| {
+            window.mz_address.block_id == mz_address.block_id
+                && window.mz_address.element_offset == mz_address.element_offset
+                && window.intensity_address.block_id == intensity_address.block_id
+                && window.intensity_address.element_offset == intensity_address.element_offset
+        });
+        assert!(
+            paired,
+            "slice {slice:?} does not match any read_window pair"
+        );
+    }
+}
+
+fn make_spectrum_with_rt(id: String, rt: f64, mz: Vec<f64>, int: Vec<f64>) -> Spectrum {
+    use crate::mzml::structs::{Scan, ScanList};
+
+    let mut spectrum = make_spectrum_with_arrays(id, mz, int);
+    spectrum.scan_list = Some(ScanList {
+        count: Some(1),
+        scans: vec![Scan {
+            cv_params: vec![CvParam {
+                cv_ref: Some("MS".to_string()),
+                accession: Some("MS:1000016".to_string()),
+                name: "scan start time".to_string(),
+                value: Some(rt.to_string()),
+                unit_cv_ref: Some("UO".to_string()),
+                unit_name: Some("minute".to_string()),
+                unit_accession: Some("UO:0000031".to_string()),
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    spectrum
+}
+
+fn encode_spectra_over_windows(rts: &[f64], mz_window: f64) -> Vec<u8> {
+    use crate::{
+        ion::encoder::{
+            encode::{TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions},
+            ion_writer::write_mzml_to_ion,
+        },
+        mzml::structs::{MzML, Run, SpectrumList},
+    };
+
+    let point_count = 600;
+    let mz: Vec<f64> = (0..point_count)
+        .map(|step| 100.0 + step as f64 * 0.5)
+        .collect();
+    let int: Vec<f64> = (0..point_count).map(|step| step as f64).collect();
+
+    let spectra: Vec<Spectrum> = rts
+        .iter()
+        .enumerate()
+        .map(|(index, rt)| {
+            make_spectrum_with_rt(format!("scan={index}"), *rt, mz.clone(), int.clone())
+        })
+        .collect();
+
+    let mzml_in = MzML {
+        run: Run {
+            spectrum_list: Some(SpectrumList {
+                spectra,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut encoded = Vec::new();
+    write_mzml_to_ion(
+        &mzml_in,
+        WriteOptions {
+            compression_level: 3,
+            force_f32: false,
+            block_size: TARGET_BLOCK_UNCOMPRESSED_BYTES,
+            parallel: true,
+            section_storage: SectionStorage::Memory,
+            mz_window,
+        },
+        &mut encoded,
+    )
+    .unwrap();
+    encoded
+}
+
+fn open_reader(encoded: &[u8]) -> IonReader {
+    IonReader::open(encoded, ReadOptions::default()).unwrap()
+}
+
+#[test]
+fn eic_plan_covers_per_spectrum_plans() {
+    let rts: Vec<f64> = (0..40).map(|step| step as f64).collect();
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+
+    let mz = Range {
+        from: 150.0,
+        to: 260.0,
+    };
+    let planned = reader.eic_byte_ranges(mz, None, 0).unwrap();
+    assert!(!planned.is_empty());
+
+    for scan_index in 0..rts.len() {
+        for range in reader.byte_ranges(scan_index, mz).unwrap() {
+            let range_end = range.offset + range.length;
+            let covered = planned
+                .iter()
+                .any(|plan| plan.offset <= range.offset && range_end <= plan.offset + plan.length);
+            assert!(
+                covered,
+                "scan {scan_index} range {range:?} missing from {planned:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn eic_plan_respects_rt_bounds() {
+    let rts: Vec<f64> = (0..40).map(|step| step as f64).collect();
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+
+    let mz = Range {
+        from: 150.0,
+        to: 160.0,
+    };
+    let everything = reader.eic_byte_ranges(mz, None, 0).unwrap();
+    let narrow = reader
+        .eic_byte_ranges(mz, Some(Range { from: 0.0, to: 2.0 }), 0)
+        .unwrap();
+
+    assert!(!narrow.is_empty());
+    assert!(narrow.len() <= everything.len());
+    for range in &narrow {
+        let range_end = range.offset + range.length;
+        let covered = everything
+            .iter()
+            .any(|plan| plan.offset <= range.offset && range_end <= plan.offset + plan.length);
+        assert!(covered, "range {range:?} is outside the unbounded plan");
+    }
+
+    let outside = reader
+        .eic_byte_ranges(
+            mz,
+            Some(Range {
+                from: 900.0,
+                to: 1000.0,
+            }),
+            0,
+        )
+        .unwrap();
+    assert!(outside.is_empty());
+}
+
+#[test]
+fn eic_plan_straddles_window_boundary() {
+    let rts: Vec<f64> = (0..20).map(|step| step as f64).collect();
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+
+    let low_window = reader
+        .eic_byte_ranges(
+            Range {
+                from: 150.0,
+                to: 160.0,
+            },
+            None,
+            0,
+        )
+        .unwrap();
+    let high_window = reader
+        .eic_byte_ranges(
+            Range {
+                from: 250.0,
+                to: 260.0,
+            },
+            None,
+            0,
+        )
+        .unwrap();
+    let straddling = reader
+        .eic_byte_ranges(
+            Range {
+                from: 150.0,
+                to: 260.0,
+            },
+            None,
+            0,
+        )
+        .unwrap();
+
+    let total_length = |ranges: &[ByteRange]| -> u64 { ranges.iter().map(|r| r.length).sum() };
+    assert!(total_length(&straddling) >= total_length(&low_window));
+    assert!(total_length(&straddling) >= total_length(&high_window));
+
+    for side in [low_window, high_window] {
+        for range in side {
+            let range_end = range.offset + range.length;
+            let covered = straddling
+                .iter()
+                .any(|plan| plan.offset <= range.offset && range_end <= plan.offset + plan.length);
+            assert!(covered, "range {range:?} missing from the straddling plan");
+        }
+    }
+}
+
+#[test]
+fn eic_plan_linear_fallback_for_nonfinite_rt() {
+    let rts = vec![f64::NAN; 20];
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+    assert!(!reader.spec_rt_is_finite_ascending());
+
+    let mz = Range {
+        from: 150.0,
+        to: 260.0,
+    };
+    let unbounded = reader.eic_byte_ranges(mz, None, 0).unwrap();
+    let filtered = reader
+        .eic_byte_ranges(mz, Some(Range { from: 0.0, to: 5.0 }), 0)
+        .unwrap();
+
+    assert!(!unbounded.is_empty());
+    assert_eq!(unbounded, filtered);
+}
+
+#[test]
+fn window_major_roundtrip_decodes_correctly() {
+    let rts: Vec<f64> = (0..60).map(|step| step as f64).collect();
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+
+    let point_count = 600;
+    let expected_mz: Vec<f64> = (0..point_count)
+        .map(|step| 100.0 + step as f64 * 0.5)
+        .collect();
+    let expected_int: Vec<f64> = (0..point_count).map(|step| step as f64).collect();
+
+    let everything = Range {
+        from: 0.0,
+        to: f64::MAX,
+    };
+    for scan_index in 0..rts.len() {
+        let read = reader.read_window(scan_index, everything).unwrap();
+        let NumericArray::F64(mz) = read.x else {
+            panic!("expected an f64 mz array");
+        };
+        let NumericArray::F64(int) = read.y else {
+            panic!("expected an f64 intensity array");
+        };
+        assert_eq!(mz, expected_mz, "scan {scan_index} mz mismatch");
+        assert_eq!(int, expected_int, "scan {scan_index} intensity mismatch");
+    }
+
+    for (index, rt) in rts.iter().enumerate() {
+        assert_eq!(reader.spectrum_rt(index), *rt);
+    }
+
+    let full_window = reader
+        .eic_byte_ranges(
+            Range {
+                from: 200.0,
+                to: 299.0,
+            },
+            None,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        full_window.len(),
+        1,
+        "a full window must resolve to one contiguous range"
+    );
+}
+
+#[test]
+fn eic_plan_full_window_is_single_range() {
+    let rts: Vec<f64> = (0..200).map(|step| step as f64).collect();
+    let encoded = encode_spectra_over_windows(&rts, 100.0);
+    let mut reader = open_reader(&encoded);
+
+    let full_window = reader
+        .eic_byte_ranges(
+            Range {
+                from: 200.0,
+                to: 299.0,
+            },
+            None,
+            0,
+        )
+        .unwrap();
+    assert_eq!(full_window.len(), 1);
+}
+
+#[test]
+fn coalesce_merges_adjacent_and_respects_gap() {
+    let mut overlapping = vec![
+        ByteRange {
+            offset: 0,
+            length: 100,
+        },
+        ByteRange {
+            offset: 50,
+            length: 100,
+        },
+    ];
+    coalesce_byte_ranges(&mut overlapping, 0);
+    assert_eq!(
+        overlapping,
+        vec![ByteRange {
+            offset: 0,
+            length: 150
+        }]
+    );
+
+    let mut touching = vec![
+        ByteRange {
+            offset: 0,
+            length: 100,
+        },
+        ByteRange {
+            offset: 100,
+            length: 100,
+        },
+    ];
+    coalesce_byte_ranges(&mut touching, 0);
+    assert_eq!(
+        touching,
+        vec![ByteRange {
+            offset: 0,
+            length: 200
+        }]
+    );
+
+    let mut inside_gap = vec![
+        ByteRange {
+            offset: 0,
+            length: 100,
+        },
+        ByteRange {
+            offset: 140,
+            length: 60,
+        },
+    ];
+    coalesce_byte_ranges(&mut inside_gap, 40);
+    assert_eq!(
+        inside_gap,
+        vec![ByteRange {
+            offset: 0,
+            length: 200
+        }]
+    );
+
+    let mut beyond_gap = vec![
+        ByteRange {
+            offset: 0,
+            length: 100,
+        },
+        ByteRange {
+            offset: 141,
+            length: 60,
+        },
+    ];
+    coalesce_byte_ranges(&mut beyond_gap, 40);
+    assert_eq!(beyond_gap.len(), 2);
+
+    let mut contained = vec![
+        ByteRange {
+            offset: 0,
+            length: 500,
+        },
+        ByteRange {
+            offset: 100,
+            length: 50,
+        },
+    ];
+    coalesce_byte_ranges(&mut contained, 0);
+    assert_eq!(
+        contained,
+        vec![ByteRange {
+            offset: 0,
+            length: 500
+        }]
+    );
+
+    let mut with_empty = vec![
+        ByteRange {
+            offset: 10,
+            length: 0,
+        },
+        ByteRange {
+            offset: 400,
+            length: 10,
+        },
+    ];
+    coalesce_byte_ranges(&mut with_empty, 0);
+    assert_eq!(
+        with_empty,
+        vec![ByteRange {
+            offset: 400,
+            length: 10
+        }]
+    );
+
+    let mut unsorted = vec![
+        ByteRange {
+            offset: 300,
+            length: 50,
+        },
+        ByteRange {
+            offset: 0,
+            length: 100,
+        },
+        ByteRange {
+            offset: 100,
+            length: 50,
+        },
+    ];
+    coalesce_byte_ranges(&mut unsorted, 0);
+    assert_eq!(
+        unsorted,
+        vec![
+            ByteRange {
+                offset: 0,
+                length: 150
+            },
+            ByteRange {
+                offset: 300,
+                length: 50
+            },
+        ]
+    );
+
+    let mut nothing: Vec<ByteRange> = Vec::new();
+    coalesce_byte_ranges(&mut nothing, 16);
+    assert!(nothing.is_empty());
+}
+
+#[test]
+fn coalesced_open_ranges_cover_every_open_range() {
+    let (_, _, encoded) = split_file_with_a1();
+    let header = parse_header(&encoded[..1024]).unwrap();
+    let planned = open_ranges(&encoded[..1024]).unwrap();
+
+    let alignment_gap = 8;
+    let mut coalesced = planned.clone();
+    coalesce_byte_ranges(&mut coalesced, alignment_gap);
+
+    for range in &planned {
+        let range_end = range.offset + range.length;
+        let covered = coalesced.iter().any(|merged| {
+            merged.offset <= range.offset && range_end <= merged.offset + merged.length
+        });
+        assert!(covered, "range {range:?} is not covered by {coalesced:?}");
+    }
+
+    assert_eq!(coalesced.len(), 2);
+    assert_eq!(coalesced[0].offset, 0);
+    assert_eq!(coalesced[0].length, 1024);
+
+    let (spec_directory_start, _) = spec_directory_range(&header);
+    assert_eq!(coalesced[1].offset, spec_directory_start as u64);
+    assert_eq!(
+        coalesced[1].offset + coalesced[1].length,
+        header.total_file_size
+    );
+}
+
+#[test]
 fn plan_open_ranges_includes_container_directories() {
     let (_, _, encoded) = split_file_with_a1();
     let header = parse_header(&encoded[..1024]).unwrap();

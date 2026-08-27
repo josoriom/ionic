@@ -419,6 +419,8 @@ where
         compressor,
         config.block_packing_id(),
     );
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let builder = builder.window_major()?;
     let mut container = if config.parallel {
         builder
     } else {

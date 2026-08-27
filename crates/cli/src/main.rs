@@ -15,7 +15,10 @@ use clap::{
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
 use ionic::{
-    ion::{FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage, WriteOptions},
+    ion::{
+        DEFAULT_MZ_WINDOW, FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage,
+        WriteOptions,
+    },
     mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
 };
 use mimalloc::MiMalloc;
@@ -206,7 +209,7 @@ struct ConvertArgs {
 
     #[arg(
         long = "mz-window",
-        default_value_t = 250.0,
+        default_value_t = DEFAULT_MZ_WINDOW,
         value_name = "DA",
         help = "m/z split width in Da (smaller = read less)"
     )]

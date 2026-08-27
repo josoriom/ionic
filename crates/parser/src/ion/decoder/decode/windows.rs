@@ -131,6 +131,7 @@ pub enum ItemKind {
 pub struct ItemSlice {
     pub item_index: u64,
     pub array_address_index: u64,
+    pub intensity_address_index: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,6 +338,67 @@ impl IonReader {
         self.spec_container
             .block_byte_range(block_id)
             .ok_or_else(|| IonError::from("spectrum block id out of range"))
+    }
+
+    pub fn eic_byte_ranges(
+        &mut self,
+        mz: Range,
+        rt: Option<Range>,
+        gap: u64,
+    ) -> IonResult<Vec<ByteRange>> {
+        if !mz.from.is_finite() || !mz.to.is_finite() {
+            return Err("eic byte ranges: mz bounds must be finite".into());
+        }
+        if mz.from > mz.to {
+            return Err("eic byte ranges: mz from is greater than to".into());
+        }
+        self.ensure_spec_window_directory()?;
+
+        let width = self.header.target_mz_window as f64;
+        let rt_is_searchable = self.spec_rt_is_finite_ascending();
+
+        let address_indices = {
+            let WindowDirectoryCache::Loaded(window_directory) = &self.spec_window_directory else {
+                return Err(IonError::MissingSpectrumBounds);
+            };
+            let Some((window_low, window_high)) =
+                window_span(width, mz.from, mz.to, window_directory.window_count())
+            else {
+                return Ok(Vec::new());
+            };
+            let mut address_indices = Vec::new();
+            for window in window_low..=window_high {
+                for position in window_directory.window_range(window) {
+                    let row = window_directory.row(position);
+                    if let Some(wanted) = rt {
+                        let found = self.spectrum_rt(row.spectrum_index as usize);
+                        if found < wanted.from || found > wanted.to {
+                            if rt_is_searchable && found > wanted.to {
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                    address_indices.push(row.mz_address);
+                    address_indices.push(row.intensity_address);
+                }
+            }
+            address_indices
+        };
+
+        let mut block_ids = Vec::with_capacity(address_indices.len());
+        for index in address_indices {
+            block_ids.push(self.array_address_at(index)?.block_id);
+        }
+        block_ids.sort_unstable();
+        block_ids.dedup();
+
+        let mut ranges = Vec::with_capacity(block_ids.len());
+        for block_id in block_ids {
+            ranges.push(self.spec_block_byte_range(block_id)?);
+        }
+        coalesce_byte_ranges(&mut ranges, gap);
+        Ok(ranges)
     }
 
     pub fn byte_ranges(&mut self, scan_index: usize, mz: Range) -> IonResult<Vec<ByteRange>> {
@@ -566,6 +628,7 @@ impl IonReader {
                 result.push(ItemSlice {
                     item_index: row.spectrum_index as u64,
                     array_address_index: row.mz_address as u64,
+                    intensity_address_index: row.intensity_address as u64,
                 });
             }
         }

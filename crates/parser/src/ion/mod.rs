@@ -19,7 +19,7 @@ pub use decoder::utilities::byte_source::FileSource;
 pub use decoder::{
     decode::{
         ArrayAddress, DataXY, IonReader, ItemKind, ItemSlice, Pixel, Query, ReadOptions, Select,
-        Window, open_ranges,
+        Window, coalesce_byte_ranges, open_ranges,
     },
     utilities::{
         byte_source::{BytesSource, CallbackSource, ReadBytes, SourceBytes},
