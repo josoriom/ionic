@@ -70,9 +70,9 @@ const AFTER_HELP: &str = "
 \x1b[1;33mQUICK REFERENCE\x1b[0m (full flags are in `ionic convert --help` / `ionic cat --help`)
 
 \x1b[1;32mUSAGE:\x1b[0m
-  \x1b[96mionic convert\x1b[0m [--mzml-to-ion | --ion-to-mzml]
-               -i, --input-path DIR
-               -o, --output-path DIR
+  \x1b[96mionic convert\x1b[0m [--mzml-to-ion | --ion-to-mzml | --update]
+               -i, --input-path FILE|DIR
+               -o, --output-path DIR   (optional with --update: rewrites in place)
 
   \x1b[96mionic cat\x1b[0m [--check] PATH
 
@@ -83,6 +83,7 @@ const AFTER_HELP: &str = "
 \x1b[1;32mEXAMPLES:\x1b[0m
   \x1b[96mionic convert\x1b[0m -i crates/parser/data/mzml -o crates/parser/data/ion
   \x1b[96mionic convert\x1b[0m --ion-to-mzml -i crates/parser/data/ion -o crates/parser/data/mzml_out
+  \x1b[96mionic convert\x1b[0m --update -i crates/parser/data/ion --mz-window 50
   \x1b[96mionic cat\x1b[0m crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 ";
 
