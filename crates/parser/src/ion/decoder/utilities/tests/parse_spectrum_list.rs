@@ -52,7 +52,7 @@ fn assert_f64_close(got: f64, expected: f64) {
 fn assert_cv_param_strict(p: &CvParam, e: ExpectedCv<'_>) {
     assert_eq!(p.cv_ref.as_deref(), e.cv_ref, "cv_ref mismatch");
     assert_eq!(p.accession.as_deref(), e.accession, "accession mismatch");
-    assert_eq!(p.name.as_str(), e.name, "name mismatch");
+    assert_eq!(p.name.as_ref(), e.name, "name mismatch");
     assert_eq!(
         p.unit_cv_ref.as_deref(),
         e.unit_cv_ref,
@@ -179,7 +179,7 @@ fn assert_cv_params_exact(actual: &[CvParam], expected: &[ExpectedCv<'_>]) {
     for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
         if a.cv_ref.as_deref() != e.cv_ref
             || a.accession.as_deref() != e.accession
-            || a.name.as_str() != e.name
+            || a.name.as_ref() != e.name
             || a.unit_cv_ref.as_deref() != e.unit_cv_ref
             || a.unit_name.as_deref() != e.unit_name
             || a.unit_accession.as_deref() != e.unit_accession

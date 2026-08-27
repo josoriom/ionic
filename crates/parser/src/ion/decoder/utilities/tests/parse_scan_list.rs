@@ -21,7 +21,7 @@ fn assert_cv_param(
 ) {
     assert_eq!(p.cv_ref.as_deref(), cv_ref);
     assert_eq!(p.accession.as_deref(), accession);
-    assert_eq!(p.name.as_str(), name);
+    assert_eq!(p.name.as_ref(), name);
     assert_eq!(p.value.as_deref(), value);
     assert_eq!(p.unit_cv_ref.as_deref(), unit_cv_ref);
     assert_eq!(p.unit_name.as_deref(), unit_name);

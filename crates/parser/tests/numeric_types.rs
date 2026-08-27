@@ -2,6 +2,7 @@ mod common;
 
 use common::{assertions::*, helpers, helpers::*};
 use ionic::mzml::structs::*;
+use std::borrow::Cow;
 
 #[test]
 fn ion_roundtrip_preserves_rare_numeric_types() {
@@ -168,9 +169,9 @@ fn encoder_preserves_integer_ms_level_arrays() {
                                 array_length: Some(3),
                                 cv_params: vec![
                                     CvParam {
-                                        cv_ref: Some("MS".to_string()),
-                                        accession: Some("MS:1000786".to_string()),
-                                        name: "ms level array".to_string(),
+                                        cv_ref: Some(Cow::Borrowed("MS")),
+                                        accession: Some(Cow::Borrowed("MS:1000786")),
+                                        name: Cow::Borrowed("ms level array"),
                                         ..Default::default()
                                     },
                                     helpers::synthetic_ms_cv(

@@ -6,6 +6,8 @@ mod tests;
 
 pub(crate) use grouper::{GroupedSection, MetaGrouper, serialize_global_meta_with_counts};
 pub(crate) use schema::MzmlListItem;
+use std::borrow::Cow;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::bulk::compress as zstd_compress;
 
@@ -14,7 +16,7 @@ use crate::{
     ion::{
         IonResult,
         attr_meta::{
-            AccessionTail, CV_CODE_UNKNOWN, CV_REF_ATTR, attr_cv_param, cv_ref_code_from_str,
+            AccessionTail, CV_CODE_UNKNOWN, CV_REF_ATTR, attr_cv_param, cv_code_from_prefix,
             parse_accession_tail,
         },
         decoder::decode::MetadatumValue,
@@ -475,13 +477,13 @@ impl PackedMetaBuilder {
 
         let cv_ref = cv_ref_prefix_from_accession(cv_param.accession.as_deref())
             .or(cv_param.cv_ref.as_deref());
-        self.ref_codes.push(cv_ref_code_from_str(cv_ref));
+        self.ref_codes.push(cv_code_from_prefix(cv_ref));
         self.accession_numbers
             .push(parse_accession_tail_raw(cv_param.accession.as_deref()));
 
         let unit_ref = cv_ref_prefix_from_accession(cv_param.unit_accession.as_deref())
             .or(cv_param.unit_cv_ref.as_deref());
-        self.unit_ref_codes.push(cv_ref_code_from_str(unit_ref));
+        self.unit_ref_codes.push(cv_code_from_prefix(unit_ref));
         self.unit_accession_numbers
             .push(parse_accession_tail_raw(cv_param.unit_accession.as_deref()));
 
@@ -527,7 +529,7 @@ pub(crate) fn empty_cv_param() -> CvParam {
     CvParam {
         cv_ref: None,
         accession: None,
-        name: String::new(),
+        name: Cow::Borrowed(""),
         value: None,
         unit_cv_ref: None,
         unit_accession: None,
@@ -545,11 +547,11 @@ pub(crate) fn encode_user_param_as_cv(p: &UserParam) -> CvParam {
     CvParam {
         cv_ref: None,
         accession: None,
-        name: String::new(),
-        value: Some(encoded),
-        unit_cv_ref: p.unit_cv_ref.clone(),
-        unit_name: p.unit_name.clone(),
-        unit_accession: p.unit_accession.clone(),
+        name: Cow::Borrowed(""),
+        value: Some(Cow::Owned(encoded)),
+        unit_cv_ref: p.unit_cv_ref.clone().map(Cow::Owned),
+        unit_name: p.unit_name.clone().map(Cow::Owned),
+        unit_accession: p.unit_accession.clone().map(Cow::Owned),
     }
 }
 
@@ -586,7 +588,7 @@ pub(crate) fn array_type_accession_from_binary_data_array(bda: &BinaryDataArray)
 
 pub(crate) fn array_type_cv_code_from_binary_data_array(bda: &BinaryDataArray) -> u8 {
     array_type_cv_param(bda)
-        .map(|cv| cv_ref_code_from_str(cv.cv_ref.as_deref()))
+        .map(|cv| cv_code_from_prefix(cv.cv_ref.as_deref()))
         .unwrap_or(CV_CODE_UNKNOWN)
 }
 

@@ -11,6 +11,7 @@ use ionic::{
     mzml::structs::*,
 };
 use proptest::prelude::*;
+use std::borrow::Cow;
 
 #[test]
 fn roundtrip_f64_array() {
@@ -267,11 +268,11 @@ fn delta_mz_via_for_each_scan_is_bit_exact() {
         count: Some(1),
         scans: vec![Scan {
             cv_params: vec![CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some("MS:1000016".to_string()),
-                name: "scan start time".to_string(),
-                value: Some("1.0".to_string()),
-                unit_accession: Some("UO:0000031".to_string()),
+                cv_ref: Some(Cow::Borrowed("MS")),
+                accession: Some(Cow::Borrowed("MS:1000016")),
+                name: Cow::Borrowed("scan start time"),
+                value: Some(Cow::Borrowed("1.0")),
+                unit_accession: Some(Cow::Borrowed("UO:0000031")),
                 ..Default::default()
             }],
             ..Default::default()

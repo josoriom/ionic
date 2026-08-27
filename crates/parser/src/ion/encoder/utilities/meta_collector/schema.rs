@@ -25,6 +25,7 @@ use crate::{
         },
     },
 };
+use std::borrow::Cow;
 
 pub(crate) trait MzmlListItem: EmitAttributes {
     fn list_tag() -> TagId;
@@ -346,15 +347,7 @@ fn make_float_precision_cv_param(accession_tail: u32) -> CvParam {
     } else {
         "64-bit float"
     };
-    CvParam {
-        cv_ref: Some("MS".to_string()),
-        accession: Some(format_accession(accession_tail)),
-        name: name.to_string(),
-        value: None,
-        unit_cv_ref: None,
-        unit_name: None,
-        unit_accession: None,
-    }
+    CvParam::new("MS", format_accession(accession_tail), name)
 }
 
 fn emit_binary_data_array_cv_params(
@@ -732,13 +725,8 @@ fn append_software_list_meta(
                     pid,
                     swid,
                     CvParam {
-                        cv_ref: sp.cv_ref.clone(),
-                        accession: Some(sp.accession.clone()),
-                        name: sp.name.clone(),
-                        value: Some(String::new()),
-                        unit_cv_ref: None,
-                        unit_name: None,
-                        unit_accession: None,
+                        cv_ref: sp.cv_ref.clone().map(Cow::Owned),
+                        ..CvParam::new("", sp.accession.clone(), sp.name.clone()).with_value("")
                     },
                 );
             }

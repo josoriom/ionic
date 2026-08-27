@@ -6,7 +6,7 @@ use zstd::zstd_safe;
 
 use crate::ion::{
     IonError, IonResult,
-    attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_ref_code_from_str},
+    attr_meta::{AccessionTail, CV_CODE_UNKNOWN, cv_code_from_prefix},
     decoder::{
         decode::{Metadatum, MetadatumValue},
         utilities::decompression_limit::DecompressionLimit,
@@ -179,7 +179,7 @@ pub(crate) fn decompress_zstd_allow_aligned_padding(
 
 #[inline]
 pub(crate) fn is_cv_prefix(p: &str) -> bool {
-    cv_ref_code_from_str(Some(p)) != CV_CODE_UNKNOWN
+    cv_code_from_prefix(Some(p)) != CV_CODE_UNKNOWN
 }
 
 #[inline]
@@ -190,7 +190,7 @@ pub(crate) fn unit_cv_ref(unit_accession: Option<&str>) -> Option<String> {
 }
 
 #[inline]
-pub(crate) fn value_to_opt_string(v: &MetadatumValue) -> Option<String> {
+pub(crate) fn value_text(v: &MetadatumValue) -> Option<String> {
     match v {
         MetadatumValue::Number(x) => Some(x.to_string()),
         MetadatumValue::Text(s) => Some(s.clone()),

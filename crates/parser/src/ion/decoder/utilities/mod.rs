@@ -43,7 +43,6 @@ pub(crate) mod parse_cv_list;
 pub(crate) use parse_cv_list::parse_cv_list;
 pub(crate) mod block_reader;
 pub(crate) mod children_lookup;
-pub(crate) mod cv_table;
 pub(crate) mod decompression_limit;
 pub(crate) mod spectrum_source;
 pub(crate) mod window_directory;

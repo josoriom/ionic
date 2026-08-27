@@ -1,4 +1,5 @@
 use crate::mzml::structs::CvParam;
+use std::borrow::Cow;
 
 pub(crate) const CV_REF_ATTR: &str = "ATTR";
 
@@ -11,8 +12,8 @@ pub(crate) const CV_CODE_IMS: u8 = 5;
 pub(crate) const CV_CODE_UNKNOWN: u8 = 255;
 
 #[inline]
-pub(crate) fn cv_ref_code_from_str(cv_ref: Option<&str>) -> u8 {
-    match cv_ref {
+pub(crate) fn cv_code_from_prefix(prefix: Option<&str>) -> u8 {
+    match prefix {
         Some("MS") => CV_CODE_MS,
         Some("UO") => CV_CODE_UO,
         Some("NCIT") => CV_CODE_NCIT,
@@ -24,7 +25,7 @@ pub(crate) fn cv_ref_code_from_str(cv_ref: Option<&str>) -> u8 {
 }
 
 #[inline]
-pub(crate) fn cv_ref_prefix_from_code(code: u8) -> Option<&'static str> {
+pub(crate) fn cv_prefix_from_code(code: u8) -> Option<&'static str> {
     match code {
         CV_CODE_MS => Some("MS"),
         CV_CODE_UO => Some("UO"),
@@ -37,8 +38,24 @@ pub(crate) fn cv_ref_prefix_from_code(code: u8) -> Option<&'static str> {
 }
 
 #[inline]
+pub(crate) fn borrow_prefix(prefix: &str) -> Cow<'static, str> {
+    match cv_prefix_from_code(cv_code_from_prefix(Some(prefix))) {
+        Some(known) => Cow::Borrowed(known),
+        None => Cow::Owned(prefix.to_owned()),
+    }
+}
+
+#[inline]
+pub(crate) fn borrow_or_own(text: Cow<'_, str>, known: Option<&'static str>) -> Cow<'static, str> {
+    match known {
+        Some(known) if known == text => Cow::Borrowed(known),
+        _ => Cow::Owned(text.into_owned()),
+    }
+}
+
+#[inline]
 pub(crate) fn format_accession(cv_ref_code: u8, tail_raw: u32) -> Option<String> {
-    let pref = cv_ref_prefix_from_code(cv_ref_code)?;
+    let pref = cv_prefix_from_code(cv_ref_code)?;
     match pref {
         "MS" => Some(format!(
             "MS:{:07}",
@@ -147,10 +164,10 @@ pub(crate) const ACC_ATTR_MS_LEVEL: AccessionTail = AccessionTail(9_910_107);
 #[inline]
 pub(crate) fn attr_cv_param(tail: AccessionTail, value: &str) -> CvParam {
     CvParam {
-        cv_ref: Some(CV_REF_ATTR.to_string()),
-        accession: Some(format!("{}:{:07}", CV_REF_ATTR, tail.raw())),
-        name: String::new(),
-        value: Some(value.to_string()),
+        cv_ref: Some(Cow::Borrowed(CV_REF_ATTR)),
+        accession: Some(Cow::Owned(format!("{}:{:07}", CV_REF_ATTR, tail.raw()))),
+        name: Cow::Borrowed(""),
+        value: Some(Cow::Owned(value.to_string())),
         unit_cv_ref: None,
         unit_name: None,
         unit_accession: None,
@@ -160,6 +177,43 @@ pub(crate) fn attr_cv_param(tail: AccessionTail, value: &str) -> CvParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrow_prefix_borrows_known_prefixes() {
+        for prefix in ["MS", "UO", "NCIT", "PEFF", "IMS", CV_REF_ATTR] {
+            let text = borrow_prefix(&String::from(prefix));
+            assert!(matches!(text, Cow::Borrowed(_)), "{prefix} should borrow");
+            assert_eq!(text, prefix);
+        }
+    }
+
+    #[test]
+    fn borrow_prefix_owns_unknown_prefixes() {
+        let text = borrow_prefix("VENDOR");
+        assert!(matches!(text, Cow::Owned(_)));
+        assert_eq!(text, "VENDOR");
+    }
+
+    #[test]
+    fn borrow_or_own_borrows_when_the_text_matches() {
+        let text = borrow_or_own(Cow::Owned(String::from("ms level")), Some("ms level"));
+        assert!(matches!(text, Cow::Borrowed(_)));
+        assert_eq!(text, "ms level");
+    }
+
+    #[test]
+    fn borrow_or_own_owns_when_the_text_differs() {
+        let text = borrow_or_own(Cow::Borrowed("custom level"), Some("ms level"));
+        assert!(matches!(text, Cow::Owned(_)));
+        assert_eq!(text, "custom level");
+    }
+
+    #[test]
+    fn borrow_or_own_owns_when_nothing_is_known() {
+        let text = borrow_or_own(Cow::Borrowed("vendor name"), None);
+        assert!(matches!(text, Cow::Owned(_)));
+        assert_eq!(text, "vendor name");
+    }
 
     #[test]
     fn parse_accession_tail_roundtrip() {
@@ -186,8 +240,8 @@ mod tests {
             CV_CODE_PEFF,
             CV_CODE_ATTR,
         ] {
-            let prefix = cv_ref_prefix_from_code(code).unwrap();
-            assert_eq!(cv_ref_code_from_str(Some(prefix)), code);
+            let prefix = cv_prefix_from_code(code).unwrap();
+            assert_eq!(cv_code_from_prefix(Some(prefix)), code);
         }
     }
 }

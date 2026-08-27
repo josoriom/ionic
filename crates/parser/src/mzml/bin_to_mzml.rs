@@ -1318,12 +1318,7 @@ fn write_binary_data_array(
     if synthesize_no_compression {
         write_cv_param(
             writer,
-            &CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(ACC_COMPRESSION_NONE.to_string()),
-                name: "no compression".to_string(),
-                ..Default::default()
-            },
+            &CvParam::new("MS", ACC_COMPRESSION_NONE, "no compression"),
         )?;
     }
     write_user_params(writer, &bda.user_params)?;
@@ -1410,7 +1405,7 @@ fn write_cv_param(writer: &mut Writer<Vec<u8>>, cv: &CvParam) -> Result<(), BinT
     if let Some(v) = cv.accession.as_deref().and_then(|s| nonempty(Some(s))) {
         tag.push_attribute(("accession", v));
     }
-    tag.push_attribute(("name", cv.name.as_str()));
+    tag.push_attribute(("name", cv.name.as_ref()));
 
     if let Some(v) = cv.value.as_deref() {
         tag.push_attribute(("value", v));
@@ -1478,6 +1473,8 @@ fn write_user_params(
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
 
     fn render_cv_param(cv: &CvParam) -> String {
@@ -1489,9 +1486,9 @@ mod tests {
     #[test]
     fn valueless_cvparam_omits_value_attribute_7() {
         let valueless = CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000511".to_string()),
-            name: "ms level".to_string(),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000511")),
+            name: Cow::Borrowed("ms level"),
             value: None,
             ..Default::default()
         };
@@ -1502,7 +1499,7 @@ mod tests {
         );
 
         let with_value = CvParam {
-            value: Some("x".to_string()),
+            value: Some(Cow::Borrowed("x")),
             ..valueless
         };
         let xml = render_cv_param(&with_value);

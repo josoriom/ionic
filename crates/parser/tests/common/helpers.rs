@@ -2,6 +2,7 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ionic::mzml::{parse_mzml::parse_mzml, structs::*};
+use std::borrow::Cow;
 
 use super::binary_ext::BinaryDataExt;
 
@@ -14,10 +15,10 @@ pub const DEFAULT_CV_LIST_XML: &str = concat!(
 
 pub(crate) fn synthetic_ms_cv(accession: &str, value: Option<&str>) -> CvParam {
     CvParam {
-        cv_ref: Some("MS".to_string()),
-        accession: Some(accession.to_string()),
-        name: accession.to_string(),
-        value: value.map(ToString::to_string),
+        cv_ref: Some(Cow::Borrowed("MS")),
+        accession: Some(Cow::Owned(accession.to_string())),
+        name: Cow::Owned(accession.to_string()),
+        value: value.map(|v| Cow::Owned(v.to_string())),
         ..Default::default()
     }
 }
@@ -248,10 +249,10 @@ pub(crate) fn ensure_referenceable_param_group(mzml: &mut MzML, id: &str) {
         .push(ReferenceableParamGroup {
             id: id.to_string(),
             cv_params: vec![CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some("MS:1000511".to_string()),
-                name: "ms level".to_string(),
-                value: Some("1".to_string()),
+                cv_ref: Some(Cow::Borrowed("MS")),
+                accession: Some(Cow::Borrowed("MS:1000511")),
+                name: Cow::Borrowed("ms level"),
+                value: Some(Cow::Borrowed("1")),
                 unit_cv_ref: None,
                 unit_name: None,
                 unit_accession: None,

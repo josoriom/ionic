@@ -125,7 +125,7 @@ pub(crate) fn cv_param_signature(param: &CvParam) -> String {
     let canonical_name = if normalized_text(param.accession.as_deref()).is_some() {
         None
     } else {
-        normalized_text(Some(param.name.as_str()))
+        normalized_text(Some(param.name.as_ref()))
     };
     let canonical_unit_name = if normalized_text(param.unit_accession.as_deref()).is_some() {
         None
@@ -152,7 +152,7 @@ pub(crate) fn cv_param_signature(param: &CvParam) -> String {
 pub(crate) fn user_param_signature(param: &UserParam) -> String {
     format!(
         "user|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-        normalized_text(Some(param.name.as_str())),
+        normalized_text(Some(param.name.as_ref())),
         normalized_text(param.r#type.as_deref()),
         normalized_text(param.unit_accession.as_deref()),
         normalized_text(param.unit_cv_ref.as_deref()),
@@ -529,17 +529,20 @@ pub(crate) fn assert_binary_semantic_eq(left: &NumericArray, right: &NumericArra
         (NumericArray::F64(l), NumericArray::F64(r)) => {
             assert_eq!(l.len(), r.len(), "{context}: f64 len mismatch");
             for (i, (lv, rv)) in l.iter().zip(r.iter()).enumerate() {
-                rel_close_f64(*lv, *rv, EPS_REL_F64, &format!("{context} f64[{i}]"));
+                assert_eq!(
+                    lv.to_bits(),
+                    rv.to_bits(),
+                    "{context} f64[{i}]: {lv} vs {rv} (bit patterns differ)"
+                );
             }
         }
         (NumericArray::F32(l), NumericArray::F32(r)) => {
             assert_eq!(l.len(), r.len(), "{context}: f32 len mismatch");
             for (i, (lv, rv)) in l.iter().zip(r.iter()).enumerate() {
-                rel_close_f64(
-                    *lv as f64,
-                    *rv as f64,
-                    EPS_REL_F32,
-                    &format!("{context} f32[{i}]"),
+                assert_eq!(
+                    lv.to_bits(),
+                    rv.to_bits(),
+                    "{context} f32[{i}]: {lv} vs {rv} (bit patterns differ)"
                 );
             }
         }

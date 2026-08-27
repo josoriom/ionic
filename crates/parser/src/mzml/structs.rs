@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::accessions::{
@@ -72,13 +74,45 @@ pub struct IndexedmzML {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CvParam {
-    pub cv_ref: Option<String>,
-    pub accession: Option<String>,
-    pub name: String,
-    pub value: Option<String>,
-    pub unit_cv_ref: Option<String>,
-    pub unit_name: Option<String>,
-    pub unit_accession: Option<String>,
+    pub cv_ref: Option<Cow<'static, str>>,
+    pub accession: Option<Cow<'static, str>>,
+    pub name: Cow<'static, str>,
+    pub value: Option<Cow<'static, str>>,
+    pub unit_cv_ref: Option<Cow<'static, str>>,
+    pub unit_name: Option<Cow<'static, str>>,
+    pub unit_accession: Option<Cow<'static, str>>,
+}
+
+impl CvParam {
+    pub fn new(
+        cv_ref: impl Into<Cow<'static, str>>,
+        accession: impl Into<Cow<'static, str>>,
+        name: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        CvParam {
+            cv_ref: Some(cv_ref.into()),
+            accession: Some(accession.into()),
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_value(mut self, value: impl Into<Cow<'static, str>>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+
+    pub fn with_unit(
+        mut self,
+        cv_ref: impl Into<Cow<'static, str>>,
+        accession: impl Into<Cow<'static, str>>,
+        name: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        self.unit_cv_ref = Some(cv_ref.into());
+        self.unit_accession = Some(accession.into());
+        self.unit_name = Some(name.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -578,24 +612,9 @@ fn float64_array(accession_tail: u32, name: &str, values: Vec<f64>) -> BinaryDat
         array_length: Some(values.len()),
         numeric_type: Some(NumericType::Float64),
         cv_params: vec![
-            CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(format_accession(accession_tail)),
-                name: name.to_string(),
-                ..Default::default()
-            },
-            CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(format_accession(FLOAT_64BIT)),
-                name: "64-bit float".to_string(),
-                ..Default::default()
-            },
-            CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(ACC_COMPRESSION_NONE.to_string()),
-                name: "no compression".to_string(),
-                ..Default::default()
-            },
+            CvParam::new("MS", format_accession(accession_tail), name.to_string()),
+            CvParam::new("MS", format_accession(FLOAT_64BIT), "64-bit float"),
+            CvParam::new("MS", ACC_COMPRESSION_NONE, "no compression"),
         ],
         binary: Some(NumericArray::F64(values)),
         ..Default::default()

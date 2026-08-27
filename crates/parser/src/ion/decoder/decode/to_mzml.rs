@@ -457,14 +457,14 @@ fn dtype_to_numeric_type(dtype: u8) -> IonResult<NumericType> {
 }
 
 fn make_binary_array_stub(array_type: u32, array_cv_code: u8) -> BinaryDataArray {
-    let cv_ref = crate::ion::attr_meta::cv_ref_prefix_from_code(array_cv_code).unwrap_or("MS");
+    let cv_ref = crate::ion::attr_meta::cv_prefix_from_code(array_cv_code).unwrap_or("MS");
     let accession = crate::ion::attr_meta::format_accession(array_cv_code, array_type)
         .unwrap_or_else(|| format_accession(array_type));
     BinaryDataArray {
         cv_params: vec![CvParam {
-            cv_ref: Some(cv_ref.to_string()),
-            accession: Some(accession),
-            name: String::new(),
+            cv_ref: Some(Cow::Owned(cv_ref.to_string())),
+            accession: Some(Cow::Owned(accession)),
+            name: Cow::Borrowed(""),
             ..Default::default()
         }],
         ..BinaryDataArray::default()
@@ -483,7 +483,7 @@ fn sync_numeric_meta(binary_array: &mut BinaryDataArray, numeric_type: NumericTy
     };
     let param = CvParam {
         cv_ref: Some("MS".into()),
-        accession: Some(format_accession(target)),
+        accession: Some(Cow::Owned(format_accession(target))),
         name: match target {
             1_000_520 => "16-bit float",
             1_000_521 => "32-bit float",

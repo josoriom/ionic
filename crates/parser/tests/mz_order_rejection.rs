@@ -1,12 +1,13 @@
 mod common;
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use ionic::{
     BytesSource,
     ion::{
-        IonReader, IonWriter, MemoryReader, Range, ReadOptions, SectionStorage, TARGET_BLOCK_UNCOMPRESSED_BYTES,
-        WriteOptions,
+        IonReader, IonWriter, MemoryReader, Range, ReadOptions, SectionStorage,
+        TARGET_BLOCK_UNCOMPRESSED_BYTES, WriteOptions,
     },
     mzml::structs::{
         BinaryDataArray, BinaryDataArrayList, CvParam, MzML, NumericArray, Run, Spectrum,
@@ -27,9 +28,9 @@ fn write_config() -> WriteOptions {
 
 fn mz_cv_param() -> CvParam {
     CvParam {
-        cv_ref: Some("MS".to_string()),
-        accession: Some("MS:1000514".to_string()),
-        name: "m/z array".to_string(),
+        cv_ref: Some(Cow::Borrowed("MS")),
+        accession: Some(Cow::Borrowed("MS:1000514")),
+        name: Cow::Borrowed("m/z array"),
         value: None,
         unit_cv_ref: None,
         unit_accession: None,
@@ -39,9 +40,9 @@ fn mz_cv_param() -> CvParam {
 
 fn intensity_cv_param() -> CvParam {
     CvParam {
-        cv_ref: Some("MS".to_string()),
-        accession: Some("MS:1000515".to_string()),
-        name: "intensity array".to_string(),
+        cv_ref: Some(Cow::Borrowed("MS")),
+        accession: Some(Cow::Borrowed("MS:1000515")),
+        name: Cow::Borrowed("intensity array"),
         value: None,
         unit_cv_ref: None,
         unit_accession: None,

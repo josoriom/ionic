@@ -6,6 +6,7 @@ use crate::{
     },
     mzml::structs::{BinaryDataArray, CvParam, NumericArray},
 };
+use std::borrow::Cow;
 
 const BYTES: &[u8] = include_bytes!("../../../../data/ion/test.ion");
 
@@ -399,9 +400,9 @@ fn mixed_normal_and_oversized_spectra_preserve_order_and_data() {
     fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
         BinaryDataArray {
             cv_params: vec![CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(accession.to_string()),
-                name: name.to_string(),
+                cv_ref: Some(Cow::Borrowed("MS")),
+                accession: Some(Cow::Owned(accession.to_string())),
+                name: Cow::Owned(name.to_string()),
                 value: None,
                 unit_cv_ref: None,
                 unit_name: None,
@@ -549,9 +550,9 @@ fn oversized_array_roundtrips_with_compression_and_parallel() {
     fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
         BinaryDataArray {
             cv_params: vec![CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(accession.to_string()),
-                name: name.to_string(),
+                cv_ref: Some(Cow::Borrowed("MS")),
+                accession: Some(Cow::Owned(accession.to_string())),
+                name: Cow::Owned(name.to_string()),
                 value: None,
                 unit_cv_ref: None,
                 unit_name: None,
@@ -663,9 +664,9 @@ fn oversized_array_roundtrips_through_encode_decode() {
     fn make_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
         BinaryDataArray {
             cv_params: vec![CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(accession.to_string()),
-                name: name.to_string(),
+                cv_ref: Some(Cow::Borrowed("MS")),
+                accession: Some(Cow::Owned(accession.to_string())),
+                name: Cow::Owned(name.to_string()),
                 value: None,
                 unit_cv_ref: None,
                 unit_name: None,
@@ -760,9 +761,9 @@ fn oversized_array_roundtrips_through_encode_decode() {
 fn make_split_bda(accession: &str, name: &str, data: Vec<f64>) -> BinaryDataArray {
     BinaryDataArray {
         cv_params: vec![CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some(accession.to_string()),
-            name: name.to_string(),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Owned(accession.to_string())),
+            name: Cow::Owned(name.to_string()),
             value: None,
             unit_cv_ref: None,
             unit_name: None,
@@ -1125,8 +1126,7 @@ fn split_mz_array_roundtrips_with_disk_staged_bounds() {
     let mz: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.001).collect();
     let int: Vec<f64> = (0..n).map(|i| (i % 1000) as f64).collect();
 
-    let encoded =
-        encode_one_spectrum_windowed(mz.clone(), int.clone(), 10.0);
+    let encoded = encode_one_spectrum_windowed(mz.clone(), int.clone(), 10.0);
 
     let mut decoder = IonReader::open(&encoded, ReadOptions::default()).unwrap();
 

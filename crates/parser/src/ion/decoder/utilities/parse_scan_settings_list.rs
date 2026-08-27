@@ -309,12 +309,14 @@ fn parse_referenceable_param_group_refs(
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     fn make_cv_param(accession: &str) -> CvParam {
         CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some(accession.to_string()),
-            name: String::new(),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Owned(accession.to_string())),
+            name: Cow::Borrowed(""),
             value: None,
             unit_cv_ref: None,
             unit_name: None,

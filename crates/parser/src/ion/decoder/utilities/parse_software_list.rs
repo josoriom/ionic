@@ -1,3 +1,4 @@
+use crate::cv_table;
 use crate::{
     ion::{
         attr_meta::{ACC_ATTR_COUNT, ACC_ATTR_ID, ACC_ATTR_NAME, ACC_ATTR_REF, ACC_ATTR_VERSION},
@@ -5,7 +6,7 @@ use crate::{
         utilities::{
             children_lookup::{ChildrenLookup, MetadataPolicy, OwnerRows},
             common::get_attr_text,
-            cv_table, parse_cv_and_user_params,
+            parse_cv_and_user_params,
         },
     },
     mzml::{
@@ -141,15 +142,16 @@ fn parse_software_param(
     let (mut cv_params, mut user_params) = parse_cv_and_user_params(rows);
 
     if let Some(cv) = cv_params.pop() {
-        let accession = cv.accession.unwrap_or_default();
+        let accession = cv.accession.unwrap_or_default().into_owned();
         let cv_ref = cv
             .cv_ref
+            .map(|v| v.into_owned())
             .or_else(|| get_attr_text(rows, ACC_ATTR_REF).filter(|s| !s.is_empty()));
 
         return SoftwareParam {
             cv_ref,
             accession,
-            name: cv.name,
+            name: cv.name.into_owned(),
             version,
         };
     }
@@ -170,10 +172,9 @@ fn parse_software_param(
     let name = get_attr_text(rows, ACC_ATTR_NAME)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
-            cv_table::get(&accession)
-                .and_then(|v| v.as_str())
-                .unwrap_or(&accession)
-                .to_string()
+            cv_table::find_term(&accession)
+                .map(|term| term.name.to_string())
+                .unwrap_or_else(|| accession.clone())
         });
 
     SoftwareParam {

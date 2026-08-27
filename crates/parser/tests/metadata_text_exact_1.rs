@@ -5,6 +5,7 @@ use common::{
     helpers::{build_mzml, make_spectrum_f64},
 };
 use ionic::mzml::structs::CvParam;
+use std::borrow::Cow;
 
 #[test]
 fn dirty_decimal_cv_param_value_is_byte_exact_1() {
@@ -12,31 +13,31 @@ fn dirty_decimal_cv_param_value_is_byte_exact_1() {
 
     spectrum.cv_params = vec![
         CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000504".to_string()),
-            name: "base peak m/z".to_string(),
-            value: Some("1003.5599999999999".to_string()),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000504")),
+            name: Cow::Borrowed("base peak m/z"),
+            value: Some(Cow::Borrowed("1003.5599999999999")),
             ..Default::default()
         },
         CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000505".to_string()),
-            name: "base peak intensity".to_string(),
-            value: Some("142.38999999999999".to_string()),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000505")),
+            name: Cow::Borrowed("base peak intensity"),
+            value: Some(Cow::Borrowed("142.38999999999999")),
             ..Default::default()
         },
         CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000285".to_string()),
-            name: "total ion current".to_string(),
-            value: Some("5.8905000000000003".to_string()),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000285")),
+            name: Cow::Borrowed("total ion current"),
+            value: Some(Cow::Borrowed("5.8905000000000003")),
             ..Default::default()
         },
         CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000527".to_string()),
-            name: "highest observed m/z".to_string(),
-            value: Some("1003.56".to_string()),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000527")),
+            name: Cow::Borrowed("highest observed m/z"),
+            value: Some(Cow::Borrowed("1003.56")),
             ..Default::default()
         },
     ];

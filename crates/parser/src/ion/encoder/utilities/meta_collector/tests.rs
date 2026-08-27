@@ -63,9 +63,9 @@ fn meta_param_buffer_normalize_moves_name_to_value_for_attr_cv() {
     let mut buffer = MetaParamBuffer::new();
     buffer.rows.push(MetaParamRow {
         cv_param: CvParam {
-            cv_ref: Some(CV_REF_ATTR.to_string()),
-            accession: Some(format!("{}:9910001", CV_REF_ATTR)),
-            name: "my-id".to_string(),
+            cv_ref: Some(Cow::Borrowed(CV_REF_ATTR)),
+            accession: Some(Cow::Owned(format!("{}:9910001", CV_REF_ATTR))),
+            name: Cow::Borrowed("my-id"),
             value: None,
             unit_cv_ref: None,
             unit_name: None,
@@ -85,9 +85,9 @@ fn meta_param_buffer_normalize_skips_non_attr_cv() {
     let mut buffer = MetaParamBuffer::new();
     buffer.rows.push(MetaParamRow {
         cv_param: CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000514".to_string()),
-            name: "m/z array".to_string(),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000514")),
+            name: Cow::Borrowed("m/z array"),
             value: None,
             unit_cv_ref: None,
             unit_name: None,
@@ -150,9 +150,9 @@ fn array_type_accession_from_bda_returns_mz_array() {
     use crate::{accessions::MZ_ARRAY, mzml::structs::BinaryDataArray};
     let bda = BinaryDataArray {
         cv_params: vec![CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000514".to_string()),
-            name: "m/z array".to_string(),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000514")),
+            name: Cow::Borrowed("m/z array"),
             value: None,
             unit_cv_ref: None,
             unit_name: None,
@@ -185,7 +185,9 @@ fn collector_global_meta_on_empty_mzml_produces_run_buffer() {
 #[test]
 fn grouped_metadata_keeps_values_local_to_each_group() {
     use crate::ion::{
-        DecompressionLimit, decoder::decode::MetadatumValue, format::CODEC_NONE,
+        DecompressionLimit,
+        decoder::decode::MetadatumValue,
+        format::CODEC_NONE,
         meta_groups::MetaTotals,
         utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
@@ -233,10 +235,10 @@ fn grouped_metadata_keeps_values_local_to_each_group() {
 
 fn three_item_grouped() -> grouper::GroupedSection {
     let make_cv = |value: &str| CvParam {
-        cv_ref: Some("MS".to_string()),
-        accession: Some("MS:1000285".to_string()),
-        name: String::new(),
-        value: Some(value.to_string()),
+        cv_ref: Some(Cow::Borrowed("MS")),
+        accession: Some(Cow::Borrowed("MS:1000285")),
+        name: Cow::Borrowed(""),
+        value: Some(Cow::Owned(value.to_string())),
         unit_cv_ref: None,
         unit_name: None,
         unit_accession: None,
@@ -258,7 +260,9 @@ fn grouped_bytes(grouped: &grouper::GroupedSection) -> &[u8] {
 #[test]
 fn metadata_reader_rejects_wrong_uncompressed_total() {
     use crate::ion::{
-        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals,
+        DecompressionLimit,
+        format::CODEC_NONE,
+        meta_groups::MetaTotals,
         utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
 
@@ -286,7 +290,9 @@ fn metadata_reader_rejects_wrong_uncompressed_total() {
 #[test]
 fn metadata_reader_rejects_wrong_row_total() {
     use crate::ion::{
-        DecompressionLimit, format::CODEC_NONE, meta_groups::MetaTotals,
+        DecompressionLimit,
+        format::CODEC_NONE,
+        meta_groups::MetaTotals,
         utilities::{MetaGroupReader, meta_column_layout::MetaColumnLayout},
     };
 
@@ -389,9 +395,9 @@ fn group_local_node_ids_across_group_boundaries() {
     fn make_array(accession: &str, data: Vec<f64>) -> BinaryDataArray {
         BinaryDataArray {
             cv_params: vec![CvParam {
-                cv_ref: Some("MS".to_string()),
-                accession: Some(accession.to_string()),
-                name: String::new(),
+                cv_ref: Some(Cow::Borrowed("MS")),
+                accession: Some(Cow::Owned(accession.to_string())),
+                name: Cow::Borrowed(""),
                 ..Default::default()
             }],
             binary: Some(NumericArray::F64(data)),
@@ -525,10 +531,10 @@ fn product_own_cv_params_parent_to_product_list_not_to_the_product_itself() {
 
     let product = Product {
         cv_params: vec![CvParam {
-            cv_ref: Some("MS".to_string()),
-            accession: Some("MS:1000827".to_string()),
-            name: "selected reaction monitoring transition".to_string(),
-            value: Some("1.0".to_string()),
+            cv_ref: Some(Cow::Borrowed("MS")),
+            accession: Some(Cow::Borrowed("MS:1000827")),
+            name: Cow::Borrowed("selected reaction monitoring transition"),
+            value: Some(Cow::Borrowed("1.0")),
             ..Default::default()
         }],
         ..Default::default()

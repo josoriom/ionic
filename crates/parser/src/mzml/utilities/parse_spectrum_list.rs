@@ -169,15 +169,9 @@ fn normalize_ms_level(spectrum: &mut Spectrum) {
     if has_ms_level_param(spectrum) {
         return;
     }
-    spectrum.cv_params.push(CvParam {
-        cv_ref: Some("MS".to_owned()),
-        accession: Some(ACC_MS_LEVEL.to_owned()),
-        name: "ms level".to_owned(),
-        value: Some(level.to_string()),
-        unit_cv_ref: None,
-        unit_name: None,
-        unit_accession: None,
-    });
+    spectrum
+        .cv_params
+        .push(CvParam::new("MS", ACC_MS_LEVEL, "ms level").with_value(level.to_string()));
 }
 
 fn parse_spectrum_description<R: BufRead>(

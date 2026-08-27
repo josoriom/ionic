@@ -1,4 +1,5 @@
 pub(crate) mod accessions;
+pub(crate) mod cv_table;
 pub mod ion;
 pub mod mzml;
 pub mod utilities;
