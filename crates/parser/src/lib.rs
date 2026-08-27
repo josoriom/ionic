@@ -6,7 +6,7 @@ pub mod utilities;
 pub use ion::{
     ArrayAddress, ArrayKind, ByteRange, BytesSource, CallbackSource, ChromatogramSummary, DataXY,
     IonError, IonReader, IonResult, ItemKind, ItemSlice, Pixel, Query, Range, ReadBytes,
-    ReadOptions, Select, SourceBytes, SpectrumSummary, Window,
+    ReadOptions, Select, SourceBytes, SpectrumSummary, Window, coalesce_byte_ranges,
     decoder::decode::{Metadatum, MetadatumValue},
     encoder::{
         encode::{DEFAULT_MZ_WINDOW, WriteOptions},
