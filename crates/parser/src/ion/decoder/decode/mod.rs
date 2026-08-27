@@ -589,6 +589,30 @@ impl IonReader {
     }
 }
 
+pub fn coalesce_byte_ranges(ranges: &mut Vec<ByteRange>, gap: u64) {
+    ranges.retain(|range| range.length > 0);
+    ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+    let mut kept = 0;
+    for index in 0..ranges.len() {
+        let range = ranges[index];
+        if kept == 0 {
+            ranges[0] = range;
+            kept = 1;
+            continue;
+        }
+        let last = ranges[kept - 1];
+        let last_end = last.offset.saturating_add(last.length);
+        let range_end = range.offset.saturating_add(range.length);
+        if range.offset <= last_end.saturating_add(gap) {
+            ranges[kept - 1].length = range_end.max(last_end) - last.offset;
+            continue;
+        }
+        ranges[kept] = range;
+        kept += 1;
+    }
+    ranges.truncate(kept);
+}
+
 pub fn open_ranges(header_bytes: &[u8]) -> IonResult<Vec<ByteRange>> {
     if header_bytes.len() < 1024 {
         return Err("open_ranges: needs at least 1024 header bytes".into());

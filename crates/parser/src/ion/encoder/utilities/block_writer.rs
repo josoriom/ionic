@@ -5,6 +5,8 @@ use rayon::prelude::*;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use zstd::{bulk::Compressor as ZstdCompressor, zstd_safe::compress_bound};
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::ion::encoder::utilities::output::RawSpill;
 use crate::ion::{
     IonError, IonResult, byte_transpose::shuffle_with_tail, encoder::utilities::output::WriteBytes,
     packing::PackingId,
@@ -344,6 +346,7 @@ impl BlockStore {
 
 struct PendingBlock {
     block_id: u32,
+    window_index: u32,
     stride: Stride,
     data: Vec<u8>,
     compress_sequentially: bool,
@@ -351,41 +354,26 @@ struct PendingBlock {
 
 struct ReadyBlock {
     block_id: u32,
+    window_index: u32,
     bytes: Vec<u8>,
     raw_len: u64,
     checksum: u32,
 }
 
-fn merge_sorted_by_block_id(left: Vec<ReadyBlock>, right: Vec<ReadyBlock>) -> Vec<ReadyBlock> {
-    let mut out = Vec::with_capacity(left.len() + right.len());
-    let mut left_iter = left.into_iter();
-    let mut right_iter = right.into_iter();
-    let mut left_head = left_iter.next();
-    let mut right_head = right_iter.next();
-    loop {
-        match (&left_head, &right_head) {
-            (Some(l), Some(r)) => {
-                if l.block_id <= r.block_id {
-                    out.push(left_head.take().unwrap());
-                    left_head = left_iter.next();
-                } else {
-                    out.push(right_head.take().unwrap());
-                    right_head = right_iter.next();
-                }
-            }
-            (Some(_), None) => {
-                out.push(left_head.take().unwrap());
-                out.extend(left_iter);
-                return out;
-            }
-            (None, Some(_)) => {
-                out.push(right_head.take().unwrap());
-                out.extend(right_iter);
-                return out;
-            }
-            (None, None) => return out,
-        }
-    }
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+struct StagedKey {
+    window_index: u32,
+    block_id: u32,
+    staged_offset: u64,
+    staged_len: u64,
+    raw_len: u64,
+    checksum: u32,
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+struct Staging {
+    spill: RawSpill,
+    keys: Vec<StagedKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,6 +393,8 @@ pub(crate) struct BlockWriter<'output, C: BlockCompressor> {
     max_pending_bytes: usize,
     compressor: CompressionMode<C>,
     par_min_blocks: usize,
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    staging: Option<Staging>,
 }
 
 impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
@@ -424,7 +414,18 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
             max_pending_bytes: DEFAULT_MAX_PENDING_BYTES,
             compressor,
             par_min_blocks: 4,
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            staging: None,
         }
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    pub(crate) fn window_major(mut self) -> IonResult<Self> {
+        self.staging = Some(Staging {
+            spill: RawSpill::create()?,
+            keys: Vec::new(),
+        });
+        Ok(self)
     }
 
     pub(crate) fn force_sequential(mut self) -> Self {
@@ -524,6 +525,7 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
         let data_len = active_block.accumulated_data.len();
         self.pending.push(PendingBlock {
             block_id: active_block.block_id,
+            window_index: group.window_index,
             stride: active_block.stride,
             data: active_block.accumulated_data,
             compress_sequentially: active_block.compress_sequentially,
@@ -544,6 +546,7 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
         match mode {
             CompressionMode::Raw => Ok(ReadyBlock {
                 block_id: block.block_id,
+                window_index: block.window_index,
                 checksum: crc32fast::hash(&block.data),
                 raw_len,
                 bytes: block.data,
@@ -566,6 +569,7 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
                 compressor.compress(&data, &mut bytes)?;
                 Ok(ReadyBlock {
                     block_id: block.block_id,
+                    window_index: block.window_index,
                     checksum: crc32fast::hash(&bytes),
                     raw_len,
                     bytes,
@@ -594,6 +598,7 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
                 .map(|block| {
                     Ok(ReadyBlock {
                         block_id: block.block_id,
+                        window_index: block.window_index,
                         checksum: crc32fast::hash(&block.data),
                         raw_len: block.data.len() as u64,
                         bytes: block.data,
@@ -649,7 +654,25 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let shared_ready = self.finish_seq(shared)?;
 
-        let ready = merge_sorted_by_block_id(sequential_ready, shared_ready);
+        let mut ready = sequential_ready;
+        ready.extend(shared_ready);
+        ready.sort_unstable_by_key(|block| (block.window_index, block.block_id));
+
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        if let Some(staging) = self.staging.as_mut() {
+            for block in ready {
+                let staged_offset = staging.spill.append(&block.bytes)?;
+                staging.keys.push(StagedKey {
+                    window_index: block.window_index,
+                    block_id: block.block_id,
+                    staged_offset,
+                    staged_len: block.bytes.len() as u64,
+                    raw_len: block.raw_len,
+                    checksum: block.checksum,
+                });
+            }
+            return Ok(());
+        }
 
         for block in ready {
             self.output.write(&block.bytes)?;
@@ -668,11 +691,41 @@ impl<'output, C: BlockCompressor + Send + Sync> BlockWriter<'output, C> {
         Ok(())
     }
 
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    fn write_staged_blocks_in_window_order(&mut self) -> IonResult<()> {
+        let Some(mut staging) = self.staging.take() else {
+            return Ok(());
+        };
+        staging
+            .keys
+            .sort_unstable_by_key(|key| (key.window_index, key.block_id));
+
+        let mut buffer = Vec::new();
+        for key in staging.keys {
+            buffer.resize(key.staged_len as usize, 0);
+            staging.spill.read_at(key.staged_offset, &mut buffer)?;
+            self.output.write(&buffer)?;
+            self.store.seal(
+                key.block_id,
+                BlockDirEntry {
+                    payload_offset: self.payload_bytes,
+                    payload_size: key.staged_len,
+                    uncompressed_len_bytes: key.raw_len,
+                    checksum: key.checksum,
+                },
+            )?;
+            self.payload_bytes += key.staged_len;
+        }
+        Ok(())
+    }
+
     pub(crate) fn finish(mut self) -> IonResult<ContainerSummary> {
         for group in self.store.open_blocks.open_groups_in_id_order() {
             self.seal_open_block_for_group(group)?;
         }
         self.flush_pending()?;
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        self.write_staged_blocks_in_window_order()?;
 
         let block_count = self.store.block_count();
         let mut directory_bytes =
@@ -1274,38 +1327,260 @@ mod tests {
         assert!(output.0.is_empty());
     }
 
-    fn ready_block(block_id: u32) -> ReadyBlock {
-        ReadyBlock {
-            block_id,
-            bytes: vec![block_id as u8],
-            raw_len: 1,
-            checksum: 0,
+    fn blocks_in_payload_order(
+        raw: &[u8],
+        block_count: usize,
+        window_of: &std::collections::HashMap<u32, u32>,
+    ) -> Vec<(u32, u32)> {
+        let directory_start = raw.len() - block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
+        let mut by_offset: Vec<(u64, u32)> = (0..block_count as u32)
+            .map(|block_id| {
+                let at = directory_start + block_id as usize * BLOCK_DIRECTORY_ENTRY_SIZE;
+                let offset = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap());
+                (offset, block_id)
+            })
+            .collect();
+        by_offset.sort_unstable();
+        by_offset
+            .into_iter()
+            .map(|(_, block_id)| (window_of[&block_id], block_id))
+            .collect()
+    }
+
+    #[test]
+    fn flush_orders_blocks_by_window_then_id() {
+        let rounds = 8u32;
+        let window_count = 3u32;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            8,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder.set_max_pending_bytes(usize::MAX);
+
+        let mut window_of = std::collections::HashMap::new();
+        for round in 0..rounds {
+            for window in 0..window_count {
+                let (block_id, _) = builder
+                    .add_item_to_window(1000514, window, 8, 8, |buf| {
+                        buf.extend_from_slice(&[round as u8; 8]);
+                        Ok(())
+                    })
+                    .unwrap();
+                window_of.insert(block_id, window);
+            }
+        }
+        let block_count = builder.finish().unwrap().block_count as usize;
+        let payload_order = blocks_in_payload_order(&output.0, block_count, &window_of);
+
+        let mut sorted = payload_order.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            payload_order, sorted,
+            "one batch must be laid out in window then block id order"
+        );
+
+        let block_ids: Vec<u32> = payload_order.iter().map(|(_, id)| *id).collect();
+        let mut ascending_ids = block_ids.clone();
+        ascending_ids.sort_unstable();
+        assert_ne!(
+            block_ids, ascending_ids,
+            "the window sort must actually reorder blocks away from seal order"
+        );
+    }
+
+    #[test]
+    fn multi_batch_flush_orders_each_batch() {
+        let rounds = 8u32;
+        let window_count = 3u32;
+        let blocks_per_batch = 6usize;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            8,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        );
+        builder.set_max_pending_bytes(blocks_per_batch * 8);
+
+        let mut window_of = std::collections::HashMap::new();
+        for round in 0..rounds {
+            for window in 0..window_count {
+                let (block_id, _) = builder
+                    .add_item_to_window(1000514, window, 8, 8, |buf| {
+                        buf.extend_from_slice(&[round as u8; 8]);
+                        Ok(())
+                    })
+                    .unwrap();
+                window_of.insert(block_id, window);
+            }
+        }
+        let block_count = builder.finish().unwrap().block_count as usize;
+        let payload_order = blocks_in_payload_order(&output.0, block_count, &window_of);
+
+        let batches: Vec<&[(u32, u32)]> = payload_order.chunks(blocks_per_batch).collect();
+        assert!(batches.len() > 1, "the run must span several flushes");
+
+        for batch in batches {
+            let mut sorted = batch.to_vec();
+            sorted.sort_unstable();
+            assert_eq!(
+                batch,
+                sorted.as_slice(),
+                "every batch must be laid out in window then block id order"
+            );
+
+            let mut seen_windows: Vec<u32> = batch.iter().map(|(window, _)| *window).collect();
+            seen_windows.dedup();
+            let unique_windows = seen_windows.len();
+            seen_windows.sort_unstable();
+            seen_windows.dedup();
+            assert_eq!(
+                unique_windows,
+                seen_windows.len(),
+                "each window must occupy one contiguous run inside its batch"
+            );
         }
     }
 
     #[test]
-    fn merge_sorted_by_block_id_interleaves_correctly() {
-        let left = vec![ready_block(0), ready_block(3), ready_block(5)];
-        let right = vec![ready_block(1), ready_block(2), ready_block(4)];
-        let merged = merge_sorted_by_block_id(left, right);
-        let ids: Vec<u32> = merged.iter().map(|b| b.block_id).collect();
-        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5]);
+    fn window_major_roundtrip_matches_streaming() {
+        let rounds = 8u32;
+        let window_count = 3u32;
+
+        let encode = |window_major: bool| -> (Vec<u8>, usize, std::collections::HashMap<u32, u32>) {
+            let mut output = VecOutput(Vec::new());
+            let builder = BlockWriter::new(
+                &mut output,
+                8,
+                CompressionMode::<PassthroughCompressor>::Raw,
+                PackingId::Raw,
+            );
+            let mut builder = if window_major {
+                builder.window_major().unwrap()
+            } else {
+                builder
+            };
+            builder.set_max_pending_bytes(48);
+
+            let mut window_of = std::collections::HashMap::new();
+            for round in 0..rounds {
+                for window in 0..window_count {
+                    let content = [(round * window_count + window) as u8; 8];
+                    let (block_id, _) = builder
+                        .add_item_to_window(1000514, window, 8, 8, |buf| {
+                            buf.extend_from_slice(&content);
+                            Ok(())
+                        })
+                        .unwrap();
+                    window_of.insert(block_id, window);
+                }
+            }
+            let block_count = builder.finish().unwrap().block_count as usize;
+            (output.0, block_count, window_of)
+        };
+
+        let (streaming_raw, streaming_count, streaming_windows) = encode(false);
+        let (window_major_raw, window_major_count, window_major_windows) = encode(true);
+        assert_eq!(streaming_count, window_major_count);
+
+        let block_bytes = |raw: &[u8], block_count: usize, block_id: u32| -> Vec<u8> {
+            let directory_start = raw.len() - block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
+            let at = directory_start + block_id as usize * BLOCK_DIRECTORY_ENTRY_SIZE;
+            let offset = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap()) as usize;
+            let size = u64::from_le_bytes(raw[at + 8..at + 16].try_into().unwrap()) as usize;
+            raw[offset..offset + size].to_vec()
+        };
+
+        for block_id in 0..streaming_count as u32 {
+            assert_eq!(
+                block_bytes(&streaming_raw, streaming_count, block_id),
+                block_bytes(&window_major_raw, window_major_count, block_id),
+                "block {block_id} must carry the same bytes under both layouts"
+            );
+        }
+
+        let streaming_order =
+            blocks_in_payload_order(&streaming_raw, streaming_count, &streaming_windows);
+        let window_major_order =
+            blocks_in_payload_order(&window_major_raw, window_major_count, &window_major_windows);
+        assert_ne!(
+            streaming_order, window_major_order,
+            "window major must physically reorder blocks the batch sort leaves scattered"
+        );
+
+        let mut window_runs: Vec<u32> = window_major_order
+            .iter()
+            .map(|(window, _)| *window)
+            .collect();
+        window_runs.dedup();
+        assert_eq!(window_runs.len(), window_count as usize);
     }
 
     #[test]
-    fn merge_sorted_by_block_id_handles_empty_inputs() {
-        let only_left = vec![ready_block(0), ready_block(1)];
-        let merged = merge_sorted_by_block_id(only_left, Vec::new());
-        let ids: Vec<u32> = merged.iter().map(|b| b.block_id).collect();
-        assert_eq!(ids, vec![0, 1]);
+    fn window_major_assembles_contiguous_window_runs() {
+        let rounds = 8u32;
+        let window_count = 3u32;
+        let mut output = VecOutput(Vec::new());
+        let mut builder = BlockWriter::new(
+            &mut output,
+            8,
+            CompressionMode::<PassthroughCompressor>::Raw,
+            PackingId::Raw,
+        )
+        .window_major()
+        .unwrap();
+        builder.set_max_pending_bytes(48);
 
-        let only_right = vec![ready_block(0), ready_block(1)];
-        let merged = merge_sorted_by_block_id(Vec::new(), only_right);
-        let ids: Vec<u32> = merged.iter().map(|b| b.block_id).collect();
-        assert_eq!(ids, vec![0, 1]);
+        let mut window_of = std::collections::HashMap::new();
+        let mut content_of = std::collections::HashMap::new();
+        for round in 0..rounds {
+            for window in 0..window_count {
+                let content = [(round * window_count + window) as u8; 8];
+                let (block_id, _) = builder
+                    .add_item_to_window(1000514, window, 8, 8, |buf| {
+                        buf.extend_from_slice(&content);
+                        Ok(())
+                    })
+                    .unwrap();
+                window_of.insert(block_id, window);
+                content_of.insert(block_id, content);
+            }
+        }
+        let block_count = builder.finish().unwrap().block_count as usize;
+        assert_eq!(block_count, (rounds * window_count) as usize);
 
-        let merged = merge_sorted_by_block_id(Vec::new(), Vec::new());
-        assert!(merged.is_empty());
+        let raw = output.0;
+        let payload_order = blocks_in_payload_order(&raw, block_count, &window_of);
+
+        let mut sorted = payload_order.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            payload_order, sorted,
+            "the whole container must be laid out in window then block id order"
+        );
+
+        let mut window_runs: Vec<u32> = payload_order.iter().map(|(window, _)| *window).collect();
+        window_runs.dedup();
+        assert_eq!(
+            window_runs.len(),
+            window_count as usize,
+            "each window must be one contiguous run across the whole container"
+        );
+
+        let directory_start = raw.len() - block_count * BLOCK_DIRECTORY_ENTRY_SIZE;
+        for block_id in 0..block_count as u32 {
+            let at = directory_start + block_id as usize * BLOCK_DIRECTORY_ENTRY_SIZE;
+            let offset = u64::from_le_bytes(raw[at..at + 8].try_into().unwrap()) as usize;
+            let size = u64::from_le_bytes(raw[at + 8..at + 16].try_into().unwrap()) as usize;
+            assert_eq!(
+                &raw[offset..offset + size],
+                &content_of[&block_id],
+                "block {block_id} must keep its own bytes after staging"
+            );
+        }
     }
 
     #[test]

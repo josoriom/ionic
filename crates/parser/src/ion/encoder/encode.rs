@@ -27,7 +27,7 @@ use crate::{
     mzml::structs::{BinaryDataArray, Chromatogram, CvParam, NumericArray, NumericType, Spectrum},
 };
 pub const TARGET_BLOCK_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
-pub const DEFAULT_MZ_WINDOW: f64 = 100.0;
+pub const DEFAULT_MZ_WINDOW: f64 = 20.0;
 pub(crate) const SPEC_SUMMARY_SIZE: usize = 80;
 pub(crate) const CHROM_SUMMARY_SIZE: usize = 80;
 

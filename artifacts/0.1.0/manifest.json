@@ -5,38 +5,38 @@
     "min_supported": 0,
     "max_supported": 0
   },
-  "git_commit": "8a50a50068b9c13fcefb3109a3f1de8167744e35",
+  "git_commit": "9dd2665d81da347f43b0a6f1dba5f31b9ff637fd",
   "profile": "release",
   "binaries": [
     {
       "target_triple": "aarch64-apple-darwin",
       "file": "ionic",
-      "size_bytes": 5664160,
-      "sha256": "06e11c709a1b2fdd2f70b43d735273463a67161e7fef7ceba258e5e5f3fb2d8b"
+      "size_bytes": 5918592,
+      "sha256": "8a84f118cba8ba5cb86250edbe60d448730fa22b351745499a01d10e0a325e6d"
     },
     {
       "target_triple": "aarch64-unknown-linux-gnu",
       "file": "ionic",
-      "size_bytes": 6679304,
-      "sha256": "014a8b077cdab3a43df993d432d4e9d74b1544a595967cf3dc102475697c0fbd"
+      "size_bytes": 6914600,
+      "sha256": "4238e2a28d95ecdf39ac069ccf8b76c77d54d54a4597dc5283fe171aa405b036"
     },
     {
       "target_triple": "x86_64-apple-darwin",
       "file": "ionic",
-      "size_bytes": 6156312,
-      "sha256": "65e2a040f3088c687209af3b727e3f85ab8f065c949b85d7268485188906fc31"
+      "size_bytes": 6353744,
+      "sha256": "0aa7691f7541fadf7213b12720929b8637e088ab878c2ed3d2b16ec1c4680301"
     },
     {
       "target_triple": "x86_64-pc-windows-gnu",
       "file": "ionic.exe",
-      "size_bytes": 9429875,
-      "sha256": "01c9cbf1a710db7c7225b8f52b33945684e48026ced95056164c8936f28302a9"
+      "size_bytes": 9808961,
+      "sha256": "b34ef92188567e14d6ca0df409659e562dd13369649d1811cbb85148d5ff595c"
     },
     {
       "target_triple": "x86_64-unknown-linux-gnu",
       "file": "ionic",
-      "size_bytes": 7138544,
-      "sha256": "9a75729f9efba56e5a9a3431d48300df44c2f64b1bf0dad7352b9f01af996e74"
+      "size_bytes": 7299864,
+      "sha256": "41f666792dd8214f59a9d6b73aec5a35f41f9ea5016affd4515cf80a7d6301b2"
     }
   ]
 }

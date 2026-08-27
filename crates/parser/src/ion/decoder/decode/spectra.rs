@@ -185,6 +185,34 @@ impl IonReader {
         Some(parse_spec_summary(b))
     }
 
+    pub(crate) fn spectrum_rt(&self, index: usize) -> f64 {
+        let start = index * SPEC_SUMMARY_SIZE;
+        let Some(bytes) = self.spec_summary_buf.get(start..start + 8) else {
+            return f64::NAN;
+        };
+        let mut rt = [0u8; 8];
+        rt.copy_from_slice(bytes);
+        f64::from_le_bytes(rt)
+    }
+
+    pub(crate) fn spec_rt_is_finite_ascending(&self) -> bool {
+        if let Some(known) = self.spec_rt_finite_ascending.get() {
+            return known;
+        }
+        let mut previous = f64::NEG_INFINITY;
+        let mut ascending = true;
+        for index in 0..self.header.spectrum_count as usize {
+            let rt = self.spectrum_rt(index);
+            if !rt.is_finite() || rt < previous {
+                ascending = false;
+                break;
+            }
+            previous = rt;
+        }
+        self.spec_rt_finite_ascending.set(Some(ascending));
+        ascending
+    }
+
     pub fn spectrum_summaries(&self) -> IonResult<Vec<SpectrumSummary>> {
         let count = usize::try_from(self.header.spectrum_count)
             .map_err(|_| IonError::from("spec summary: out of bounds"))?;
