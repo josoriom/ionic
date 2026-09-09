@@ -4,6 +4,12 @@ resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
+license = "MIT"
+authors = [
+    "Javier Osorio M <javier.osorio.mosquera@gmail.com>",
+    "Julien Wist <julien.wist@correounivalle.edu.co>",
+    "Jorge Osorio M <joheosmo@gmail.com>"
+]
 
 [workspace.dependencies]
 base64 = "0.22.1"

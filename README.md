@@ -1,14 +1,47 @@
 # Ionic
 
-[![CI](https://github.com/josoriom/ionic/actions/workflows/rust-tests.yml/badge.svg)](https://github.com/josoriom/ionic/actions/workflows/rust-tests.yml)
+<img src="assets/ion-file-glyph.svg" alt="ionic" width="110" align="right">
 
-[CLI](crates/cli/README.MD)
+[![CI](https://github.com/phenological/ionic/actions/workflows/rust-tests.yml/badge.svg)](https://github.com/phenological/ionic/actions/workflows/rust-tests.yml)
 
-## Install
+**A streamable binary file format for mass-spectrometry profiling and imaging data, and
+the Rust library and CLI that read and write it.**
+
+Ionic converts losslessly to and from mzML, depends on nothing but standard byte
+operations, and compiles to WebAssembly, so the same reader runs in a server, a notebook
+or a browser tab.
+
+### Install
 
 ```bash
-cargo add ionic --git https://github.com/josoriom/ionic --branch main
+cargo add ionic --git https://github.com/phenological/ionic --branch main
 ```
+
+## Why
+
+Metabolic phenotyping has reached a scale at which the volume of data, not the
+sophistication of the model, limits what can be learned from it. Population-scale
+mass-spectrometry cohorts are the substrate for machine learning, which must iterate over
+the entire corpus, so the size and speed at which data can be read set the ceiling on what
+is feasible. At the same time, untargeted studies nominate thousands of features whose
+underlying peaks are almost never inspected, because with conventional formats that means
+retrieving gigabytes and loading a heavyweight tool per feature.
+
+The community exchange format for mass-spectrometry data (mzML), used in proteomics,
+metabolic profiling and imaging, is text-based and thus too large for long-term storage,
+and has to be read in full before any spectrum can be reached. More compact binary
+alternatives such as mzMLb solve the size problem but are built on general-purpose storage
+libraries such as HDF5, which tie a file to a particular software stack and cannot
+reasonably be compiled to a lightweight target such as WebAssembly.
+
+Ionic stores the same information as native numeric types in independently compressed
+Zstandard blocks, addressed through small fixed-width directories. A reader searches an
+index, finds where a spectrum lives, requests that byte range, and leaves the rest of the
+file untouched and compressed. Over HTTP, that is a range request; on disk, it is a seek.
+
+## [CLI →](crates/cli/README.MD)
+
+A command-line tool for converting mzML files to Ionic. See the [CLI](crates/cli/README.MD) for installation and commands.
 
 ## Usage
 
@@ -85,4 +118,44 @@ pub struct WriteOptions {
 }
 ```
 
-- [Specs](spec/README.MD)
+## How the format works 
+
+A fixed 1024-byte header stores the byte offset of every section. A reader uses these offsets to go directly to the index, then decompresses only the blocks a query needs. [spec/README.MD](spec/README.MD) specifies the design; [spec/v0.md](spec/v0.md) gives the exact byte layout.
+
+## Portability
+
+The library depends only on standard byte operations: no HDF5, no storage engine, nothing
+to install alongside a file. On `wasm32-unknown-unknown` the build swaps `zstd` for the
+pure-Rust `ruzstd` and drops `rayon` and `memmap2`, so the same reader compiles into a
+browser bundle. That is what [ion-beam](https://github.com/phenological/ion-beam) runs on.
+
+## Related projects
+
+- **[ion-beam](https://github.com/phenological/ion-beam)**: a browser viewer for `.ion`
+  files that downloads only the bytes it needs, with an inspector showing exactly which
+  regions of the file were fetched. [Try it live](https://phenological.github.io/ion-beam/).
+- **[Quant·ion](https://github.com/phenological/quantion)**: the Rust processing toolkit
+  (peak picking, baselines, noise, untargeted feature detection) with Python, R and
+  JavaScript wrappers.
+- **[ion-files](https://github.com/phenological/ion-files)**: a small public collection of
+  demo `.ion` files.
+
+## Citing
+
+If you use Ionic, Quant·ion or ion-beam, please cite:
+
+> Reading only what you need: a dependency-free, streamable format and cross-language toolkit for scalable LC-MS feature detection. Preprint, 2026. DOI: [10.XXXXX/XXXXXX](https://doi.org/10.XXXXX/XXXXXX)
+
+```bibtex
+@article{ionic2026,
+  title   = {Reading only what you need: a dependency-free, streamable format and cross-language toolkit for scalable LC-MS feature detection},
+  author  = {TBD},
+  year    = {2026},
+  journal = {TBD},
+  doi     = {10.XXXXX/XXXXXX}
+}
+```
+
+## License
+
+[MIT](./LICENSE)
