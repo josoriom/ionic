@@ -39,6 +39,10 @@ Zstandard blocks, addressed through small fixed-width directories. A reader sear
 index, finds where a spectrum lives, requests that byte range, and leaves the rest of the
 file untouched and compressed. Over HTTP, that is a range request; on disk, it is a seek.
 
+## [CLI →](crates/cli/README.MD)
+
+A command-line tool for converting mzML files to Ionic. See the [CLI](crates/cli/README.MD) for installation and commands.
+
 ## Usage
 
 ### Convert .mzML to .ion
