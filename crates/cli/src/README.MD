@@ -2,7 +2,7 @@
 
 This CLI has **two subcommands**:
 
-- `convert` — batch convert folders (recursive)
+- `convert` — convert files, one at a time or a whole folder tree
 - `cat` — print JSON metadata for a single file (`.mzML` or `.ion`)
 
 Examples below use:
@@ -53,33 +53,37 @@ ionic cat --chrom-full 1 crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 
 ## 2) `ionic convert`
 
-Batch converts files under a folder **recursively**, preserving the relative folder structure under `--output-path`.
+Converts a single file, or every matching file under a folder **recursively**, preserving
+the relative folder structure under `--output-path`.
 
 ### Common flags
 
-- `-i, --input-path <DIR>`
-  - Directory to scan recursively (required)
+- `-i, --input-path <PATH>`
+  - File or directory to convert (required). A directory is scanned recursively.
 
 - `-o, --output-path <DIR>`
-  - Output directory root (subfolders are created) (required)
+  - Output directory root (subfolders are created). Required for every mode except
+    `--update`, where omitting it re-encodes each file in place.
 
 - `--level <0..22>`
   - zstd compression level for the data blocks. `0` disables compression.
+    Default: `22`.
 
 - `--mz-window <DA>`
   - Width, in Da (m/z units), of the windowed layout. A spectrum's m/z and intensity
     arrays are cut at every window boundary, and the same window across all spectra is
     routed to shared blocks, so an extracted-ion read opens only the blocks overlapping
     the queried m/z range. Smaller windows give finer random-access granularity; larger
-    windows compress a little better.
+    windows compress a little better. Default: `250`.
 
 - `--block-size <MB>`
   - Target uncompressed size of a data block before zstd. Larger blocks share more
     context (slightly better ratio on dense data) but make the read cache coarser.
+    Default: `8`.
 
 - `--storage <memory|disk>`
   - Where section buffers are staged during encoding. `disk` bounds memory for large
-    files; `memory` is faster for small ones.
+    files; `memory` is faster for small ones. Default: `disk`.
 
 - `--force-f32`
   - Store the f64 data arrays (m/z, intensity, time) as 32-bit floats — smaller output,
@@ -88,6 +92,7 @@ Batch converts files under a folder **recursively**, preserving the relative fol
 - `--overwrite`
   - If set, overwrites output files even if they already exist.
   - If not set, an output is skipped only if it already exists and looks complete.
+  - `--update` without `--output-path` implies this, since it rewrites its own input.
 
 - `--cores <N>`
   - Default: `0` (use all available cores)
@@ -114,6 +119,16 @@ You may pass **at most one** of the following. If you don't pass any, the defaul
     it into an `MzML` model, then `bin_to_mzml(&mzml)` to render mzML XML, and writes
     the resulting bytes to the output file.
 
+- `--update`
+  - Re-encodes `.ion` → `.ion`, applying the current encoder settings (`--level`,
+    `--mz-window`, `--block-size`, `--storage`, `--force-f32`) to a file that already
+    exists, without going back to the mzML source. Use it to re-window a collection for
+    tighter random access, or to re-compress at a different level.
+  - Each file keeps its name. With `--output-path`, the re-encoded copies land under that
+    root; without it, each file is replaced in place. Writes go to a temporary file that
+    is moved over the target only on success, so an interrupted run leaves the original
+    intact.
+
 ### Filtering flags (optional)
 
 You may pass **at most one** of the following:
@@ -133,7 +148,7 @@ You may pass **at most one** of the following:
 
 Defaults:
 
-- `--level 22`, `--mz-window 250`, `--block-size 8`
+- `--level 22`, `--mz-window 250`, `--block-size 8`, `--storage disk`
 
 Run (defaults):
 
@@ -153,6 +168,12 @@ Custom compression level and m/z window:
 ionic convert --mzml-to-ion -i crates/parser/data/mzml -o crates/parser/data/ion --level 22 --mz-window 100
 ```
 
+A single file:
+
+```bash
+ionic convert -i crates/parser/data/mzml/tiny.msdata.mzML0.99.9.mzML -o crates/parser/data/ion
+```
+
 ---
 
 ### 2.2) Convert `.ion` → `.mzML`
@@ -161,6 +182,22 @@ ionic convert --mzml-to-ion -i crates/parser/data/mzml -o crates/parser/data/ion
 
 ```bash
 ionic convert --ion-to-mzml --input-path crates/parser/data/ion --output-path crates/parser/data/mzml_out
+```
+
+---
+
+### 2.3) Re-encode `.ion` → `.ion`
+
+Rewrite a folder in place with a narrower m/z window:
+
+```bash
+ionic convert --update -i crates/parser/data/ion --mz-window 50
+```
+
+Write the re-encoded copies somewhere else instead:
+
+```bash
+ionic convert --update -i crates/parser/data/ion -o crates/parser/data/ion_rewindowed --mz-window 50
 ```
 
 ---
