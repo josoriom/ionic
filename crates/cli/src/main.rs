@@ -15,11 +15,12 @@ use clap::{
     builder::styling::{AnsiColor, Color, Style, Styles},
 };
 use ionic::{
+    ConvertKind, ConvertOptions,
     ion::{
         DEFAULT_MZ_WINDOW, FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage,
         WriteOptions,
     },
-    mzml::{MzmlReader, bin_to_mzml::bin_to_mzml, parse_mzml::parse_mzml, structs::*},
+    mzml::{parse_mzml::parse_mzml, structs::*},
 };
 use mimalloc::MiMalloc;
 use rayon::{ThreadPoolBuilder, prelude::*};
@@ -488,18 +489,13 @@ fn write_mzml_as_ion(
 ) -> Result<(), String> {
     sweep_orphans(output_path)?;
     let temp_output = TempOutput::new(output_path)?;
-    let mut input_reader = MzmlReader::open(input_path).map_err(|error| error.to_string())?;
-    {
-        let mut output_file =
-            FileWriter::open_path(temp_output.path()).map_err(|error| error.to_string())?;
-        let mut ion_writer =
-            IonWriter::create(&mut output_file, config).map_err(|error| error.to_string())?;
-        ion_writer
-            .write_stream(&mut input_reader)
-            .map_err(|error| error.to_string())?;
-        drop(ion_writer);
-        output_file.flush().map_err(|error| error.to_string())?;
-    }
+    let options = ConvertOptions {
+        output: Some(temp_output.path().to_path_buf()),
+        kind: ConvertKind::MzmlToIon,
+        write: config,
+        ..Default::default()
+    };
+    ionic::convert(input_path, options).map_err(|error| error.to_string())?;
     temp_output.move_to(output_path)
 }
 
@@ -1043,21 +1039,18 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                     )
                 },
                 |in_path, out_path| {
-                    let mut ion = IonReader::open_file(
-                        in_path,
-                        ReadOptions {
+                    let options = ConvertOptions {
+                        output: Some(out_path.to_path_buf()),
+                        kind: ConvertKind::IonToMzml,
+                        read: ReadOptions {
                             parallel: matches!(encoding, Encoding::WithinFileParallel),
                             ..ReadOptions::default()
                         },
-                    )
-                    .map_err(|e| format!("IonReader::open_file failed: {e}"))?;
-
-                    let mzml = ion.to_mzml().map_err(|e| format!("to_mzml failed: {e}"))?;
-
-                    let xml = bin_to_mzml(&mzml).map_err(|e| format!("bin_to_mzml failed: {e}"))?;
-                    drop(mzml);
-
-                    fs::write(out_path, &xml).map_err(|e| format!("write failed: {e}"))
+                        ..Default::default()
+                    };
+                    ionic::convert(in_path, options)
+                        .map(|_| ())
+                        .map_err(|e| format!("convert failed: {e}"))
                 },
             );
         };
