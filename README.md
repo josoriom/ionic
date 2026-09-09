@@ -45,16 +45,28 @@ A command-line tool for converting mzML files to Ionic. See the [CLI](crates/cli
 
 ## Usage
 
-### Convert .mzML to .ion
+### Convert
+
+`ionic::convert` takes a path or a byte buffer. With `output` set it writes the file and returns `None`. With `output` empty it returns the result as `Some(bytes)`. `kind` defaults to `ConvertKind::Auto`, which reads the direction from the `.mzML` or `.ion` extension, and from the file signature for a buffer or a file without one of those extensions.
 
 ```rust
-ionic::mzml_to_ion(Path::new("run.mzML"), Path::new("run.ion"))?;
-```
+use ionic::{ConvertKind, ConvertOptions, WriteOptions};
 
-### Convert .ion to .mzML
+ionic::convert(Path::new("run.mzML"), ConvertOptions { output: Some("run.ion".into()), ..Default::default() })?;
+ionic::convert(Path::new("run.ion"), ConvertOptions { output: Some("run.mzML".into()), ..Default::default() })?;
 
-```rust
-ionic::ion_to_mzml(Path::new("run.ion"), Path::new("run.mzML"))?;
+let ion_bytes = ionic::convert(Path::new("run.mzML"), ConvertOptions::default())?.unwrap();
+let mzml_bytes = ionic::convert(&ion_bytes, ConvertOptions::default())?.unwrap();
+
+ionic::convert(
+    &mzml_bytes,
+    ConvertOptions {
+        output: Some("run.ion".into()),
+        kind: ConvertKind::MzmlToIon,
+        write: WriteOptions { compression_level: 0, ..Default::default() },
+        ..Default::default()
+    },
+)?;
 ```
 
 ### Read an .ion file
@@ -113,7 +125,7 @@ pub struct WriteOptions {
     pub force_f32: bool,                 // narrow f64 arrays to f32 (lossy); default false
     pub block_size: usize,               // target uncompressed block bytes; default 1 MiB
     pub parallel: bool,                  // default true
-    pub section_storage: SectionStorage, // Memory or Disk; default Memory
+    pub section_storage: SectionStorage, // Memory or Disk; default Disk
     pub mz_window: f64,                  // m/z window width for range-read indexing; default 100.0
 }
 ```
