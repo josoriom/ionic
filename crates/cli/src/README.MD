@@ -63,7 +63,7 @@ the relative folder structure under `--output-path`.
 
 - `-o, --output-path <DIR>`
   - Output directory root (subfolders are created). Required for every mode except
-    `--update`, where omitting it re-encodes each file in place.
+    `--update`, where omitting it updates each file in place.
 
 - `--level <0..22>`
   - zstd compression level for the data blocks. `0` disables compression.
@@ -92,7 +92,7 @@ the relative folder structure under `--output-path`.
 - `--overwrite`
   - If set, overwrites output files even if they already exist.
   - If not set, an output is skipped only if it already exists and looks complete.
-  - `--update` without `--output-path` implies this, since it rewrites its own input.
+  - `--update` without `--output-path` implies this, since it patches its own input.
 
 - `--cores <N>`
   - Default: `0` (use all available cores)
@@ -120,14 +120,19 @@ You may pass **at most one** of the following. If you don't pass any, the defaul
     the resulting bytes to the output file.
 
 - `--update`
-  - Re-encodes `.ion` → `.ion`, applying the current encoder settings (`--level`,
-    `--mz-window`, `--block-size`, `--storage`, `--force-f32`) to a file that already
-    exists, without going back to the mzML source. Use it to re-window a collection for
-    tighter random access, or to re-compress at a different level.
-  - Each file keeps its name. With `--output-path`, the re-encoded copies land under that
-    root; without it, each file is replaced in place. Writes go to a temporary file that
-    is moved over the target only on success, so an interrupted run leaves the original
-    intact.
+  - Updates `.ion` files to the current format version. Only the 2-byte version field
+    in the header and the header crc32 are rewritten; no section is decoded or
+    re-encoded, so it is instant even on very large files. A file already at the
+    current version is reported as skipped. A file with an unsupported version, a bad
+    signature, or a header crc32 that does not verify is reported as an error and left
+    untouched.
+  - The encoder flags (`--level`, `--mz-window`, `--block-size`, `--storage`,
+    `--force-f32`) are rejected together with `--update`. To change how a file is
+    encoded, convert it again from its mzML source.
+  - Each file keeps its name. Without `--output-path`, the header is patched in place
+    with a single write. With `--output-path`, the file is copied under that root and the
+    copy is updated; the copy goes to a temporary file that is moved over the target only
+    on success.
 
 ### Filtering flags (optional)
 
@@ -186,18 +191,18 @@ ionic convert --ion-to-mzml --input-path crates/parser/data/ion --output-path cr
 
 ---
 
-### 2.3) Re-encode `.ion` → `.ion`
+### 2.3) Update `.ion` files to the current format version
 
-Rewrite a folder in place with a narrower m/z window:
+Patch every file under a folder in place:
 
 ```bash
-ionic convert --update -i crates/parser/data/ion --mz-window 50
+ionic convert --update -i crates/parser/data/ion
 ```
 
-Write the re-encoded copies somewhere else instead:
+Write updated copies somewhere else and leave the originals alone:
 
 ```bash
-ionic convert --update -i crates/parser/data/ion -o crates/parser/data/ion_rewindowed --mz-window 50
+ionic convert --update -i crates/parser/data/ion -o crates/parser/data/ion_v1
 ```
 
 ---

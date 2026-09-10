@@ -1,6 +1,6 @@
 use std::{
-    fs,
-    io::{IsTerminal, Write, stderr, stdout},
+    fs::{self, File, OpenOptions},
+    io::{IsTerminal, Read, Seek, SeekFrom, Write, stderr, stdout},
     path::{Path, PathBuf},
     sync::{
         Mutex, OnceLock,
@@ -17,8 +17,8 @@ use clap::{
 use ionic::{
     ConvertKind, ConvertOptions,
     ion::{
-        DEFAULT_MZ_WINDOW, FileWriter, IonReader, IonWriter, ReadOptions, SectionStorage,
-        WriteOptions,
+        CURRENT_VERSION, DEFAULT_MZ_WINDOW, HEADER_SIZE, IonReader, ReadOptions, SectionStorage,
+        WriteOptions, get_version_from_header, update_header_version,
     },
     mzml::{parse_mzml::parse_mzml, structs::*},
 };
@@ -76,7 +76,7 @@ const AFTER_HELP: &str = "
 \x1b[1;32mUSAGE:\x1b[0m
   \x1b[96mionic convert\x1b[0m [--mzml-to-ion | --ion-to-mzml | --update]
                -i, --input-path FILE|DIR
-               -o, --output-path DIR   (optional with --update: rewrites in place)
+               -o, --output-path DIR   (optional with --update: updates files in place)
 
   \x1b[96mionic cat\x1b[0m [--check] PATH
 
@@ -87,7 +87,7 @@ const AFTER_HELP: &str = "
 \x1b[1;32mEXAMPLES:\x1b[0m
   \x1b[96mionic convert\x1b[0m -i crates/parser/data/mzml -o crates/parser/data/ion
   \x1b[96mionic convert\x1b[0m --ion-to-mzml -i crates/parser/data/ion -o crates/parser/data/mzml_out
-  \x1b[96mionic convert\x1b[0m --update -i crates/parser/data/ion --mz-window 50
+  \x1b[96mionic convert\x1b[0m --update -i crates/parser/data/ion
   \x1b[96mionic cat\x1b[0m crates/parser/data/ion/tiny.msdata.mzML0.99.9.ion
 ";
 
@@ -142,12 +142,13 @@ struct ConvertArgs {
     #[arg(
         short = 'o',
         long = "output-path",
-        help = "Folder to write results into (with --update, omit to re-encode files in place)"
+        help = "Folder to write results into (with --update, omit to update files in place)"
     )]
     output_path: Option<PathBuf>,
 
     #[arg(
         long = "level",
+        conflicts_with = "update",
         default_value_t = 22,
         value_parser = clap::value_parser!(u8).range(0..=22),
         help = "Compression level 0–22 (0 = off)"
@@ -156,6 +157,7 @@ struct ConvertArgs {
 
     #[arg(
         long = "block-size",
+        conflicts_with = "update",
         default_value_t = 8.0,
         value_name = "MB",
         help = "Block size in MB before compression"
@@ -200,6 +202,7 @@ struct ConvertArgs {
 
     #[arg(
         long = "storage",
+        conflicts_with = "update",
         value_enum,
         value_name = "MODE",
         default_value_t = SectionStorageArg::Disk,
@@ -211,13 +214,14 @@ struct ConvertArgs {
 
     #[arg(
         long = "mz-window",
+        conflicts_with = "update",
         default_value_t = DEFAULT_MZ_WINDOW,
         value_name = "DA",
         help = "m/z split width in Da (smaller = read less)"
     )]
     mz_window: f64,
 
-    #[arg(long = "force-f32", default_value_t = false, action = ArgAction::SetTrue, help = "Store f64 arrays as 32-bit floats (smaller, lossy)")]
+    #[arg(long = "force-f32", conflicts_with = "update", default_value_t = false, action = ArgAction::SetTrue, help = "Store f64 arrays as 32-bit floats (smaller, lossy)")]
     force_f32: bool,
 
     #[command(flatten)]
@@ -235,7 +239,7 @@ struct ConvertWhich {
 
     #[arg(
         long = "update",
-        help = "Re-encode .ion files to the current format version"
+        help = "Update .ion files to the current format version (header only)"
     )]
     update: bool,
 }
@@ -499,36 +503,55 @@ fn write_mzml_as_ion(
     temp_output.move_to(output_path)
 }
 
-fn write_ion_as_updated_ion(
-    input_path: &Path,
-    output_path: &Path,
-    config: WriteOptions,
-    parallel: bool,
-) -> Result<(), String> {
+enum Outcome {
+    Written,
+    Skipped,
+}
+
+fn update_version_in_file(path: &Path) -> Result<Outcome, String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("open failed: {error}"))?;
+    let mut header = [0u8; HEADER_SIZE];
+    file.read_exact(&mut header)
+        .map_err(|error| format!("read header failed: {error}"))?;
+    let changed = update_header_version(&mut header).map_err(|error| error.to_string())?;
+    if !changed {
+        return Ok(Outcome::Skipped);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seek failed: {error}"))?;
+    file.write_all(&header)
+        .map_err(|error| format!("write header failed: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("sync failed: {error}"))?;
+    Ok(Outcome::Written)
+}
+
+fn update_ion_file_version(input_path: &Path, output_path: &Path) -> Result<Outcome, String> {
+    if input_path == output_path {
+        return update_version_in_file(input_path);
+    }
     sweep_orphans(output_path)?;
     let temp_output = TempOutput::new(output_path)?;
-    let mut ion_reader = IonReader::open_file(
-        input_path,
-        ReadOptions {
-            parallel,
-            ..ReadOptions::default()
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    let model = ion_reader.to_mzml().map_err(|error| error.to_string())?;
-    drop(ion_reader);
-    {
-        let mut output_file =
-            FileWriter::open_path(temp_output.path()).map_err(|error| error.to_string())?;
-        let mut ion_writer =
-            IonWriter::create(&mut output_file, config).map_err(|error| error.to_string())?;
-        ion_writer
-            .write_mzml(&model)
-            .map_err(|error| error.to_string())?;
-        drop(ion_writer);
-        output_file.flush().map_err(|error| error.to_string())?;
+    fs::copy(input_path, temp_output.path()).map_err(|error| format!("copy failed: {error}"))?;
+    update_version_in_file(temp_output.path())?;
+    temp_output.move_to(output_path)?;
+    Ok(Outcome::Written)
+}
+
+fn ion_file_has_current_version(path: &Path) -> bool {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let mut header = [0u8; HEADER_SIZE];
+    if file.read_exact(&mut header).is_err() {
+        return false;
     }
-    temp_output.move_to(output_path)
+    get_version_from_header(&header) == Some(CURRENT_VERSION)
 }
 
 #[derive(Debug, Clone)]
@@ -790,7 +813,7 @@ impl<'a> ConversionJob<'a> {
         in_path: &Path,
         derive_out_name: impl Fn(&Path) -> Option<String>,
         output_is_valid: impl Fn(&Path, &Path, u64) -> bool,
-        perform: impl FnOnce(&Path, &Path) -> Result<(), String>,
+        perform: impl FnOnce(&Path, &Path) -> Result<Outcome, String>,
     ) {
         let rel = match in_path.strip_prefix(self.input_root) {
             Ok(v) => v,
@@ -833,9 +856,16 @@ impl<'a> ConversionJob<'a> {
         let t0 = Instant::now();
         let in_mb = megabytes_of(in_path);
 
-        if let Err(message) = perform(in_path, &out_path) {
-            self.report_error(&out_path, message);
-            return;
+        match perform(in_path, &out_path) {
+            Ok(Outcome::Written) => {}
+            Ok(Outcome::Skipped) => {
+                self.report_skipped_unnamed(in_path);
+                return;
+            }
+            Err(message) => {
+                self.report_error(&out_path, message);
+                return;
+            }
         }
 
         let out_mb = megabytes_of(&out_path);
@@ -990,6 +1020,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                 |_in_path, out_path, _file_len| ion_file_is_valid(out_path),
                 |in_path, out_path| {
                     write_mzml_as_ion(in_path, out_path, config)
+                        .map(|_| Outcome::Written)
                         .map_err(|e| format!("encode failed: {e}"))
                 },
             );
@@ -1049,7 +1080,7 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
                         ..Default::default()
                     };
                     ionic::convert(in_path, options)
-                        .map(|_| ())
+                        .map(|_| Outcome::Written)
                         .map_err(|e| format!("convert failed: {e}"))
                 },
             );
@@ -1086,28 +1117,16 @@ fn convert(cmd: ConvertArgs) -> Result<(), String> {
             total: files.len(),
         };
 
-        let config = WriteOptions {
-            compression_level: cmd.compression_level,
-            force_f32: cmd.force_f32,
-            block_size,
-            parallel: matches!(encoding, Encoding::WithinFileParallel),
-            section_storage: cmd.section_storage.storage(),
-            mz_window: cmd.mz_window,
-        };
-
         let update_ion_file = |in_path: &PathBuf| {
             job.run(
                 in_path,
                 out_name_for_ion_file_as_updated_ion,
-                |_in_path, out_path, _file_len| ion_file_is_valid(out_path),
+                |_in_path, out_path, _file_len| {
+                    ion_file_is_valid(out_path) && ion_file_has_current_version(out_path)
+                },
                 |in_path, out_path| {
-                    write_ion_as_updated_ion(
-                        in_path,
-                        out_path,
-                        config,
-                        matches!(encoding, Encoding::WithinFileParallel),
-                    )
-                    .map_err(|e| format!("update failed: {e}"))
+                    update_ion_file_version(in_path, out_path)
+                        .map_err(|e| format!("update failed: {e}"))
                 },
             );
         };

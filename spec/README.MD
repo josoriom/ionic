@@ -2,7 +2,7 @@
 
 IONIC stores one mass-spectrometry run in one binary file: spectra, chromatograms, and their metadata. It is built to open fast and to read very large files without loading them whole.
 
-This page explains the idea. For the exact byte layout, read the spec for the current version: [`v0.md`](v0.md). Every version keeps its own file in `spec/`; this link always points to the latest one.
+This page explains the idea. For the exact byte layout, read the spec for the current version: [`v1.md`](v1.md). Version 0 was the pre-release of the same layout and has no separate file; `v1.md` notes the one difference.
 
 ## One file, found through the header
 
@@ -31,7 +31,7 @@ Reading one whole item goes `A1 → A2 → A3`:
 
 Reading one m/z range across many items goes `A0 → A1 → A3` instead: enter the window directory, take the entries for the windows that touch the range, read `A1[spectrum_index]` for retention time, and follow the A3 rows those entries name.
 
-A spectrum's arrays are cut into ordered **segments by m/z window**. Segments in the same window are routed to shared blocks across spectra, so an extracted-ion read opens only the blocks whose window overlaps the requested m/z range. **A0** holds, per window, the spectra that store data there and the A3 rows of their m/z and intensity segments, so a reader decodes only the windows that touch the range and skips the rest. The m/z window read is a convenience wrapper over a generic accession-based window read. Small arrays are left whole. The exact bytes are in [`v0.md`](v0.md).
+A spectrum's arrays are cut into ordered **segments by m/z window**. Segments in the same window are routed to shared blocks across spectra, so an extracted-ion read opens only the blocks whose window overlaps the requested m/z range. **A0** holds, per window, the spectra that store data there and the A3 rows of their m/z and intensity segments, so a reader decodes only the windows that touch the range and skips the rest. The m/z window read is a convenience wrapper over a generic accession-based window read. Small arrays are left whole. The exact bytes are in [`v1.md`](v1.md).
 
 Because finite retention times are stored ascending (the writer rejects a spectrum whose rt drops below the previous one, the same way it rejects unsorted m/z), a window's entry list is also rt-ascending, and a retention-time range is found by binary search. A run in which some spectra have no retention time (SRM, for instance) turns that path off and the reader scans the window's entries instead.
 
@@ -39,13 +39,13 @@ Because finite retention times are stored ascending (the writer rejects a spectr
 
 Instead of keeping each parameter as its own small object, IONIC lays every field down its own column (one long array per field) and stores the columns side by side. Columns hold one kind of value, so they pack and compress far better than mixed objects, and a reader can load only the columns it needs.
 
-Every CV parameter becomes one **row**. All rows share the same columns: find the rows for an item, read across those columns, and you have everything the item carries. The exact column names, types, and order are in [`v0.md`](v0.md). C holds these columns for spectra, D for chromatograms, E for global metadata.
+Every CV parameter becomes one **row**. All rows share the same columns: find the rows for an item, read across those columns, and you have everything the item carries. The exact column names, types, and order are in [`v1.md`](v1.md). C holds these columns for spectra, D for chromatograms, E for global metadata.
 
 C and D are split into fixed groups of items, each group compressed on its own with its own value pools, so reading one item's metadata decompresses one group rather than the whole section. E is a single section: it does not grow with the number of items.
 
 ## A1/B1 are only a cache
 
-Every value in A1/B1 also lives in C/D under its accession, so A1/B1 can be rebuilt from C/D at any time. They exist only to make filtering fast, which is why they are the one part of version 0 allowed to grow: each record has a reserved tail that may gain new optional fields. Readers ignore tail slots they do not know, and writers zero any tail bytes they do not set. Once a slot is given an offset it keeps that offset, type, unit, and meaning forever. The rules are in [`v0.md`](v0.md).
+Every value in A1/B1 also lives in C/D under its accession, so A1/B1 can be rebuilt from C/D at any time. They exist only to make filtering fast, which is why they are the one part of version 1 allowed to grow: each record has a reserved tail that may gain new optional fields. Readers ignore tail slots they do not know, and writers zero any tail bytes they do not set. Once a slot is given an offset it keeps that offset, type, unit, and meaning forever. The rules are in [`v1.md`](v1.md).
 
 Everything else is fixed. Changing any other layout, or the header's reserved area, is a real format change: a new `format_version` and a new spec file.
 

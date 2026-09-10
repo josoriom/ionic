@@ -132,7 +132,7 @@ pub struct WriteOptions {
 
 ## How the format works 
 
-A fixed 1024-byte header stores the byte offset of every section. A reader uses these offsets to go directly to the index, then decompresses only the blocks a query needs. [spec/README.MD](spec/README.MD) specifies the design; [spec/v0.md](spec/v0.md) gives the exact byte layout.
+A fixed 1024-byte header stores the byte offset of every section. A reader uses these offsets to go directly to the index, then decompresses only the blocks a query needs. [spec/README.MD](spec/README.MD) specifies the design; [spec/v1.md](spec/v1.md) gives the exact byte layout.
 
 ## Portability
 

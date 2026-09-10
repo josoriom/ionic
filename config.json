@@ -2,9 +2,9 @@
   {
     "package": "0.1.0",
     "format": {
-      "current": 0,
+      "current": 1,
       "min_supported": 0,
-      "max_supported": 0
+      "max_supported": 1
     }
   }
 ]

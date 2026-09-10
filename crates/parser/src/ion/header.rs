@@ -2,7 +2,9 @@ use crate::ion::{
     IonResult,
     decoder::decode::INDEX_ENTRY_BYTES,
     encoder::encode::{CHROM_SUMMARY_SIZE, SPEC_SUMMARY_SIZE},
-    format::{CODEC_ZSTD, FILE_SIGNATURE, HEADER_SIZE, allow_compression, allow_version},
+    format::{
+        CODEC_ZSTD, CURRENT_VERSION, FILE_SIGNATURE, HEADER_SIZE, allow_compression, allow_version,
+    },
 };
 
 const BLOCK_DIRECTORY_ENTRY_SIZE_U64: u64 = 32;
@@ -709,6 +711,36 @@ pub fn get_version_from_header(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes(buf))
 }
 
+pub fn update_header_version(header: &mut [u8]) -> IonResult<bool> {
+    if header.len() < HEADER_SIZE {
+        return Err(format!(
+            "header: need {HEADER_SIZE} bytes to update the format version, got {}",
+            header.len()
+        )
+        .into());
+    }
+    if header[0..8] != FILE_SIGNATURE {
+        return Err("header: bad file signature".into());
+    }
+    let stored_crc = read_u32_at(header, HEADER_CRC32);
+    let computed_crc = crc32fast::hash(&header[0..HEADER_CRC32]);
+    if stored_crc != computed_crc {
+        return Err(format!(
+            "header: header_crc32 mismatch (stored={stored_crc:#010x}, computed={computed_crc:#010x})"
+        )
+        .into());
+    }
+    let version = get_version_from_header(header).unwrap();
+    if version == CURRENT_VERSION {
+        return Ok(false);
+    }
+    allow_version(version)?;
+    write_u16_at(header, HEADER_FORMAT_VERSION_OFFSET, CURRENT_VERSION);
+    let new_crc = crc32fast::hash(&header[0..HEADER_CRC32]);
+    write_u32_at(header, HEADER_CRC32, new_crc);
+    Ok(true)
+}
+
 #[inline]
 pub fn get_total_file_size_from_header(bytes: &[u8]) -> Option<u64> {
     let end = HEADER_TOTAL_FILE_SIZE + 8;
@@ -968,7 +1000,10 @@ fn write_u64_at(buf: &mut [u8], offset: usize, value: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ion::format::CURRENT_VERSION;
+    use crate::ion::{
+        IonError,
+        format::{MAX_SUPPORTED_VERSION, MIN_SUPPORTED_VERSION},
+    };
 
     fn valid_header_bytes() -> [u8; HEADER_SIZE] {
         let mut h = [0u8; HEADER_SIZE];
@@ -1445,5 +1480,66 @@ mod tests {
             failures.iter().any(|f| f.contains("spec_meta_count")),
             "spec_meta_count over the uncompressed-size limit must fail: {failures:?}"
         );
+    }
+
+    fn header_bytes_at_version(version: u16) -> [u8; HEADER_SIZE] {
+        let mut buf = header_bytes_with(|_| {});
+        write_u16_at(&mut buf, HEADER_FORMAT_VERSION_OFFSET, version);
+        let crc = crc32fast::hash(&buf[0..HEADER_CRC32]);
+        write_u32_at(&mut buf, HEADER_CRC32, crc);
+        buf
+    }
+
+    #[test]
+    fn update_rewrites_older_supported_version_to_current() {
+        let mut buf = header_bytes_at_version(MIN_SUPPORTED_VERSION);
+        assert_eq!(update_header_version(&mut buf), Ok(true));
+        assert_eq!(get_version_from_header(&buf), Some(CURRENT_VERSION));
+        assert_eq!(
+            read_u32_at(&buf, HEADER_CRC32),
+            crc32fast::hash(&buf[0..HEADER_CRC32])
+        );
+        assert!(Header::parse(&buf).is_ok());
+    }
+
+    #[test]
+    fn update_leaves_current_version_untouched() {
+        let mut buf = header_bytes_at_version(CURRENT_VERSION);
+        let before = buf;
+        assert_eq!(update_header_version(&mut buf), Ok(false));
+        assert_eq!(buf, before);
+    }
+
+    #[test]
+    fn update_rejects_unsupported_version() {
+        let mut buf = header_bytes_at_version(MAX_SUPPORTED_VERSION + 1);
+        let before = buf;
+        assert_eq!(
+            update_header_version(&mut buf),
+            Err(IonError::UnsupportedFormatVersion(
+                MAX_SUPPORTED_VERSION + 1
+            ))
+        );
+        assert_eq!(buf, before);
+    }
+
+    #[test]
+    fn update_rejects_corrupt_header_crc() {
+        let mut buf = header_bytes_at_version(MIN_SUPPORTED_VERSION);
+        buf[HEADER_CRC32] ^= 0xff;
+        let before = buf;
+        let error = update_header_version(&mut buf).unwrap_err();
+        assert!(error.contains("header_crc32 mismatch"), "{error}");
+        assert_eq!(buf, before);
+    }
+
+    #[test]
+    fn update_rejects_bad_signature_and_short_buffer() {
+        let mut buf = header_bytes_at_version(MIN_SUPPORTED_VERSION);
+        buf[0] = b'X';
+        assert!(update_header_version(&mut buf).is_err());
+
+        let mut short = [0u8; HEADER_SIZE - 1];
+        assert!(update_header_version(&mut short).is_err());
     }
 }
