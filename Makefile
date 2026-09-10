@@ -1,4 +1,4 @@
-.PHONY: sync check show build test release
+.PHONY: sync check show build test
 
 sync:
 	cargo run -p xtask --quiet -- sync
@@ -14,8 +14,3 @@ build:
 
 test:
 	cargo test --workspace
-
-release: check
-	@version=$$(cargo run -p xtask --quiet -- package-version) && \
-	$(MAKE) -C crates/cli all PACKAGE_VERSION=$$version
-	cargo run -p xtask --quiet -- manifest
