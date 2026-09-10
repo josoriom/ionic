@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, for example v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: ionic
+
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: ionic
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: ionic
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: ionic
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: ionic.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache-key: release-${{ matrix.target }}
+          rustflags: ""
+
+      - name: Check the tag matches config.json
+        shell: bash
+        run: |
+          version="$(cargo run -p xtask --quiet -- package-version)"
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "tag $RELEASE_TAG does not match config.json package $version"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build -p cli --release --locked --target ${{ matrix.target }}
+
+      - name: Name the asset after its target
+        shell: bash
+        run: |
+          mkdir -p upload
+          asset="ionic-${{ matrix.target }}"
+          case "${{ matrix.binary }}" in *.exe) asset="$asset.exe";; esac
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "upload/$asset"
+
+      - name: Keep the asset for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ionic-${{ matrix.target }}
+          path: upload/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Collect the assets
+        uses: actions/download-artifact@v4
+        with:
+          path: upload
+          merge-multiple: true
+
+      - name: Write checksums
+        run: cd upload && sha256sum ionic-* > SHA256SUMS.txt
+
+      - name: Create or update the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: upload/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
