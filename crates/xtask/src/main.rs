@@ -1,13 +1,10 @@
 use std::{
-    env,
-    fmt::Write as _,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
-    process::{Command, ExitCode},
+    process::ExitCode,
 };
 
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::Deserialize;
 
 fn main() -> ExitCode {
     let command = env::args().nth(1).unwrap_or_default();
@@ -16,9 +13,8 @@ fn main() -> ExitCode {
         "check" => run_check(),
         "show" => run_show(),
         "package-version" => run_package_version(),
-        "manifest" => run_manifest(),
         other => Err(format!(
-            "unknown command '{other}', expected: sync | check | show | package-version | manifest"
+            "unknown command '{other}', expected: sync | check | show | package-version"
         )),
     };
     match outcome {
@@ -39,7 +35,7 @@ struct Release {
     allow_max_above_current: bool,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FormatVersions {
     current: u16,
@@ -276,114 +272,6 @@ fn run_package_version() -> Result<(), String> {
     let root = repo_root();
     println!("{}", current_release(&root)?.package);
     Ok(())
-}
-
-#[derive(Serialize)]
-struct Manifest {
-    package_version: String,
-    format: FormatVersions,
-    git_commit: Option<String>,
-    profile: String,
-    binaries: Vec<BinaryEntry>,
-}
-
-#[derive(Serialize)]
-struct BinaryEntry {
-    target_triple: String,
-    file: String,
-    size_bytes: u64,
-    sha256: String,
-}
-
-fn run_manifest() -> Result<(), String> {
-    let root = repo_root();
-    let release = current_release(&root)?;
-    let release_dir = root.join("artifacts").join(&release.package);
-    if !release_dir.is_dir() {
-        return Err(format!("no artifacts found at {}", release_dir.display()));
-    }
-    let binaries = collect_binaries(&release_dir)?;
-    if binaries.is_empty() {
-        return Err(format!("no binaries found under {}", release_dir.display()));
-    }
-    let manifest = Manifest {
-        package_version: release.package,
-        format: release.format,
-        git_commit: git_commit(&root),
-        profile: "release".to_string(),
-        binaries,
-    };
-    let text = serde_json::to_string_pretty(&manifest)
-        .map_err(|error| format!("cannot build manifest json: {error}"))?;
-    let path = release_dir.join("manifest.json");
-    write_atomically(&path, format!("{text}\n").as_bytes())?;
-    println!("wrote {}", path.display());
-    Ok(())
-}
-
-fn collect_binaries(release_dir: &Path) -> Result<Vec<BinaryEntry>, String> {
-    let mut entries = Vec::new();
-    for triple_dir in sorted_children(release_dir, |path| path.is_dir())? {
-        let target_triple = file_name(&triple_dir);
-        for file in sorted_children(&triple_dir, |path| path.is_file())? {
-            let bytes = fs::read(&file)
-                .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
-            entries.push(BinaryEntry {
-                target_triple: target_triple.clone(),
-                file: file_name(&file),
-                size_bytes: bytes.len() as u64,
-                sha256: sha256_hex(&bytes),
-            });
-        }
-    }
-    Ok(entries)
-}
-
-fn sorted_children(dir: &Path, keep: fn(&Path) -> bool) -> Result<Vec<PathBuf>, String> {
-    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
-        .map_err(|error| format!("cannot read {}: {error}", dir.display()))?
-        .filter_map(|entry| entry.ok().map(|found| found.path()))
-        .filter(|path| keep(path))
-        .collect();
-    paths.sort();
-    Ok(paths)
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
-}
-
-fn git_commit(root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("rev-parse")
-        .arg("HEAD")
-        .current_dir(root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let commit = String::from_utf8(output.stdout).ok()?;
-    let trimmed = commit.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
