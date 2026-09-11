@@ -3,6 +3,7 @@
 <img src="assets/ion-file-glyph.svg" alt="ionic" width="110" align="right">
 
 [![CI](https://github.com/phenological/ionic/actions/workflows/rust-tests.yml/badge.svg)](https://github.com/phenological/ionic/actions/workflows/rust-tests.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22700673.svg)](https://doi.org/10.5281/zenodo.22700673)
 
 **A streamable binary file format for mass-spectrometry profiling and imaging data, and
 the Rust library and CLI that read and write it.**
